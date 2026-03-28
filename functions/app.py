@@ -18,9 +18,11 @@ def get_model():
             from ultralytics import YOLO
             
             possible_paths = [
-                'functions/exam_layout.pt',
-                './functions/exam_layout.pt',
-                os.path.join(os.getcwd(), 'functions/exam_layout.pt'),
+                'exam_layout.pt',
+                './exam_layout.pt',
+                os.path.join(os.getcwd(), 'exam_layout.pt'),
+                '../exam_layout.pt',
+                '/opt/render/project/src/functions/exam_layout.pt',
             ]
             
             for path in possible_paths:
@@ -211,18 +213,12 @@ def analyze_pdf():
 
 @app.route('/health', methods=['GET'])
 def health():
-    # List files for debugging
-    files = []
-    for root, dirs, files_list in os.walk('.'):
-        for f in files_list:
-            if f.endswith('.pt'):
-                files.append(os.path.join(root, f))
+    # Try to load model on demand
+    get_model()
     
     return jsonify({
         "status": "healthy", 
         "model_loaded": model is not None,
-        "cwd": os.getcwd(),
-        "model_files": files,
     }), 200
 
 if __name__ == '__main__':
