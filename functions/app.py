@@ -9,35 +9,31 @@ from PIL import Image
 app = Flask(__name__)
 
 model = None
+model_path = None
 
 def get_model():
-    global model
+    global model, model_path
     if model is None:
         try:
             from ultralytics import YOLO
             
-            # Try multiple paths
             possible_paths = [
-                'exam_layout.pt',
-                './exam_layout.pt',
-                os.path.join(os.getcwd(), 'exam_layout.pt'),
-                '/app/exam_layout.pt',
-                os.path.join(os.path.dirname(__file__), 'exam_layout.pt'),
+                'functions/exam_layout.pt',
+                './functions/exam_layout.pt',
+                os.path.join(os.getcwd(), 'functions/exam_layout.pt'),
             ]
             
-            model_path = None
             for path in possible_paths:
                 if os.path.exists(path):
                     model_path = path
-                    print(f"Found model at: {path}")
                     break
             
             if model_path:
+                print(f"Loading model from: {model_path}")
                 model = YOLO(model_path)
-                print(f"Model loaded successfully from {model_path}")
+                print("Model loaded successfully")
             else:
-                print(f"Model not found. Searched paths: {possible_paths}")
-                model = None
+                print("Model file not found")
         except Exception as e:
             print(f"Error loading model: {e}")
             model = None
@@ -215,13 +211,10 @@ def analyze_pdf():
 
 @app.route('/health', methods=['GET'])
 def health():
-    # Check for model files
-    files = os.listdir('.') if os.path.exists('.') else []
     return jsonify({
         "status": "healthy", 
         "model_loaded": model is not None,
         "cwd": os.getcwd(),
-        "files": files[:20]
     }), 200
 
 if __name__ == '__main__':
