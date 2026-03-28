@@ -1,0 +1,19 @@
+*
+!functions
+!assets
+!.gitignore
+assets/*
+!assets/models/
+assets/models/*
+!assets/models/exam_layout.pt
+
+# Dependencies
+functions/__pycache__/
+functions/*.pyc
+
+# Build
+build/
+.dart_tool/
+.idea/
+.pub/
+pubspec.lock
