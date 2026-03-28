@@ -211,10 +211,18 @@ def analyze_pdf():
 
 @app.route('/health', methods=['GET'])
 def health():
+    # List files for debugging
+    files = []
+    for root, dirs, files_list in os.walk('.'):
+        for f in files_list:
+            if f.endswith('.pt'):
+                files.append(os.path.join(root, f))
+    
     return jsonify({
         "status": "healthy", 
         "model_loaded": model is not None,
         "cwd": os.getcwd(),
+        "model_files": files,
     }), 200
 
 if __name__ == '__main__':
