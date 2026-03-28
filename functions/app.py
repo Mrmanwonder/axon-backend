@@ -21,7 +21,6 @@ def get_model():
                 'exam_layout.pt',
                 './exam_layout.pt',
                 os.path.join(os.getcwd(), 'exam_layout.pt'),
-                '../exam_layout.pt',
                 '/opt/render/project/src/functions/exam_layout.pt',
             ]
             
@@ -40,6 +39,11 @@ def get_model():
             print(f"Error loading model: {e}")
             model = None
     return model
+
+# Load model at startup
+print("Starting app - loading model...")
+get_model()
+print(f"Startup complete. Model loaded: {model is not None}")
 
 @app.route('/detectLayout', methods=['POST'])
 def detect_layout():
