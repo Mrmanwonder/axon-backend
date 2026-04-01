@@ -6,6 +6,7 @@ assets/*
 !assets/models/
 assets/models/*
 !assets/models/exam_layout.pt
+!functions/Procfile
 
 # Dependencies
 functions/__pycache__/
