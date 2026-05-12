@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
+import uvicorn
+
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -18,8 +20,6 @@ from services.grading_service import HandwritingGradingGateway
 from services.planner_service import DailyPlannerService
 from services.study_pulse_service import StudyPulseService
 
-
-initialize_firebase()
 
 app = FastAPI(
     title="Axon Backend",
@@ -693,3 +693,8 @@ async def sync_exam_dates(
         "source_type": "OFFICIAL_DATESHEET_SCRAPER",
         **result,
     }
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("app:app", host="0.0.0.0", port=port)

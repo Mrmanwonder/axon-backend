@@ -12,13 +12,17 @@ from starlette.middleware.base import BaseHTTPMiddleware
 def initialize_firebase() -> None:
     if firebase_admin._apps:
         return
-    
-    cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-    if cred_path and os.path.exists(cred_path):
-        cred = credentials.Certificate(cred_path)
-        firebase_admin.initialize_app(cred)
-    else:
-        firebase_admin.initialize_app()
+
+    try:
+        cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+        if cred_path and os.path.exists(cred_path):
+            cred = credentials.Certificate(cred_path)
+            firebase_admin.initialize_app(cred)
+        else:
+            firebase_admin.initialize_app()
+        print("Firebase Admin initialized successfully")
+    except Exception as e:
+        print(f"Firebase Admin initialization skipped: {e}")
 
 
 class FirebaseAuthMiddleware(BaseHTTPMiddleware):
