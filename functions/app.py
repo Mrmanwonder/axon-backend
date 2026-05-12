@@ -19,6 +19,7 @@ from services.exam_dates_service import OfficialExamDatesService
 from services.grading_service import HandwritingGradingGateway
 from services.planner_service import DailyPlannerService
 from services.study_pulse_service import StudyPulseService
+from services.university_catalog_service import UniversityCatalogService
 
 
 app = FastAPI(
@@ -26,7 +27,6 @@ app = FastAPI(
     version="2.1.0",
     description="ASGI backend for Axon document analysis, grading, and trust-safe sync.",
 )
-app.add_middleware = lambda *a, **kw: None  # disable old-style middleware
 app.middleware("http")(firebase_auth_middleware)
 initialize_firebase()
 
@@ -41,6 +41,7 @@ _grading_gateway = None
 _planner_service = None
 _study_pulse_service = None
 _exam_dates_service = None
+_uni_catalog_service = None
 
 
 def utc_now() -> str:
@@ -165,6 +166,23 @@ def get_exam_dates_service() -> OfficialExamDatesService:
     return _exam_dates_service
 
 
+def get_uni_catalog_service() -> UniversityCatalogService:
+    global _uni_catalog_service
+    if _uni_catalog_service is None:
+        planner_model = None
+        if _gemini_api_key:
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=_gemini_api_key)
+                planner_model = genai.GenerativeModel("gemini-1.5-flash")
+            except Exception:
+                planner_model = None
+        _uni_catalog_service = UniversityCatalogService(
+            get_firestore(), model=planner_model
+        )
+    return _uni_catalog_service
+
+
 class DetectLayoutRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -279,6 +297,30 @@ class SyncExamDatesRequest(BaseModel):
     series: str | None = None
     administrative_zone: str | None = None
     persist: bool = True
+
+
+class UniversitySearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = ""
+    country: str = ""
+    name: str = ""
+    limit: int = Field(default=50, le=200)
+
+
+class UniversityProgramsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    university_name: str
+    country: str = ""
+    domain: str = ""
+
+
+class NormalizeDegreeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    degree_name: str
+    country: str = ""
 
 
 def parse_detections(results):
@@ -694,6 +736,64 @@ async def sync_exam_dates(
         "owner_uid": user["uid"],
         "source_type": "OFFICIAL_DATESHEET_SCRAPER",
         **result,
+    }
+
+
+@app.post("/universities/search")
+async def search_universities(
+    payload: UniversitySearchRequest,
+    user: dict[str, Any] = Depends(current_user),
+):
+    service = get_uni_catalog_service()
+    results = await asyncio.to_thread(
+        service.search_universities,
+        query=payload.query,
+        country=payload.country,
+        name=payload.name,
+        limit=payload.limit,
+    )
+    return {
+        "results": results,
+        "total": len(results),
+        "source_type": "UNIVERSITY_CATALOG",
+    }
+
+
+@app.post("/universities/programs")
+async def get_university_programs(
+    payload: UniversityProgramsRequest,
+    user: dict[str, Any] = Depends(current_user),
+):
+    service = get_uni_catalog_service()
+    programs = await asyncio.to_thread(
+        service.get_university_programs,
+        university_name=payload.university_name,
+        country=payload.country,
+        domain=payload.domain,
+    )
+    return {
+        "university": payload.university_name,
+        "programs": programs,
+        "total": len(programs),
+        "source_type": "UNIVERSITY_PROGRAMS",
+    }
+
+
+@app.post("/universities/normalize-degree")
+async def normalize_degree(
+    payload: NormalizeDegreeRequest,
+    user: dict[str, Any] = Depends(current_user),
+):
+    service = get_uni_catalog_service()
+    result = await asyncio.to_thread(
+        service.normalize_degree,
+        degree_name=payload.degree_name,
+        country=payload.country,
+    )
+    return {
+        "original": payload.degree_name,
+        "normalized": result,
+        "source_type": "DEGREE_NORMALIZER",
     }
 
 
