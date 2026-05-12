@@ -1,5 +1,8 @@
 *
 !functions
+!functions/services/university_catalog_service.py
+!functions/seed_universities.py
+!functions/seed_university_datasets.py
 !assets
 !.gitignore
 assets/*
@@ -18,6 +21,7 @@ assets/models/*
 !functions/render.yaml
 !functions/seed_universities.py
 !functions/seed_university_datasets.py
+!functions/services/university_catalog_service.py
 
 # Dependencies
 functions/__pycache__/
