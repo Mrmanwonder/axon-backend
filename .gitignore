@@ -16,6 +16,8 @@ assets/models/*
 !functions/tests/
 !functions/tests/*
 !functions/render.yaml
+!functions/seed_universities.py
+!functions/seed_university_datasets.py
 
 # Dependencies
 functions/__pycache__/
