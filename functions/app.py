@@ -14,7 +14,7 @@ import uvicorn
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from middleware.auth import firebase_auth_middleware, current_user, initialize_firebase
+from middleware.auth import current_user, initialize_firebase
 from services.exam_dates_service import OfficialExamDatesService
 from services.grading_service import HandwritingGradingGateway
 from services.planner_service import DailyPlannerService
@@ -27,7 +27,6 @@ app = FastAPI(
     version="2.1.0",
     description="ASGI backend for Axon document analysis, grading, and trust-safe sync.",
 )
-app.middleware("http")(firebase_auth_middleware)
 initialize_firebase()
 
 model = None
