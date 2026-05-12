@@ -7,6 +7,14 @@ assets/*
 assets/models/*
 !assets/models/exam_layout.pt
 !functions/Procfile
+!functions/services/
+!functions/services/*
+!functions/middleware/
+!functions/middleware/*
+!functions/data/
+!functions/data/*
+!functions/tests/
+!functions/tests/*
 
 # Dependencies
 functions/__pycache__/

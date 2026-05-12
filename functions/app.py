@@ -34,6 +34,7 @@ _firestore_client = None
 _job_cache: dict[str, dict[str, Any]] = {}
 _firestore_database_id = os.environ.get("FIRESTORE_DATABASE_ID", "axon")
 _gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
+_daily_planner_model_name = os.environ.get("DAILY_PLANNER_MODEL", "gemini-1.5-flash")
 _grading_gateway = None
 _planner_service = None
 _study_pulse_service = None
@@ -126,7 +127,16 @@ def get_grading_gateway() -> HandwritingGradingGateway:
 def get_planner_service() -> DailyPlannerService:
     global _planner_service
     if _planner_service is None:
-        _planner_service = DailyPlannerService(get_firestore())
+        planner_model = None
+        if _gemini_api_key:
+            try:
+                import google.generativeai as genai
+
+                genai.configure(api_key=_gemini_api_key)
+                planner_model = genai.GenerativeModel(_daily_planner_model_name)
+            except Exception:
+                planner_model = None
+        _planner_service = DailyPlannerService(get_firestore(), planner_model=planner_model)
     return _planner_service
 
 
@@ -246,6 +256,9 @@ class GenerateDailyPlanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     user_id: str | None = None
+    focus_areas: str | None = Field(default=None, max_length=800)
+    client_date: str | None = Field(default=None, max_length=32)
+    force: bool = False
 
 
 class StudyPulseRequest(BaseModel):
@@ -583,13 +596,58 @@ async def generate_daily_plan(
         raise HTTPException(status_code=403, detail="Forbidden")
 
     planner = get_planner_service()
-    tasks = await asyncio.to_thread(planner.generate_and_persist_daily_plan, owner_uid)
+    tasks = await asyncio.to_thread(
+        planner.generate_and_persist_daily_plan,
+        owner_uid,
+        focus_areas=payload.focus_areas,
+        plan_date=payload.client_date,
+        force=payload.force,
+    )
     return {
         "owner_uid": owner_uid,
         "task_count": len(tasks),
         "tasks": tasks,
-        "source_type": "DETERMINISTIC_DAILY_PLAN",
+        "source_type": "MODEL_BACKED_DAILY_PLAN",
     }
+
+
+@app.post("/planner/daily-build")
+async def run_daily_build(
+    payload: GenerateDailyPlanRequest,
+    user: dict[str, Any] = Depends(current_user),
+):
+    owner_uid = payload.user_id or user["uid"]
+    if owner_uid != user["uid"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    planner = get_planner_service()
+    result = await asyncio.to_thread(planner.run_daily_build, owner_uid)
+    return {"owner_uid": owner_uid, **result}
+
+
+class RescheduleMissedBlockRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str | None = None
+    task_id: str
+
+
+@app.post("/planner/reschedule-missed-block")
+async def reschedule_missed_block(
+    payload: RescheduleMissedBlockRequest,
+    user: dict[str, Any] = Depends(current_user),
+):
+    owner_uid = payload.user_id or user["uid"]
+    if owner_uid != user["uid"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    planner = get_planner_service()
+    result = await asyncio.to_thread(
+        planner.reschedule_missed_block,
+        owner_uid,
+        payload.task_id,
+    )
+    return {"owner_uid": owner_uid, **result}
 
 
 @app.post("/analyze-study-pulse")
