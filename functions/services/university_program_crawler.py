@@ -565,7 +565,53 @@ class UniversityProgramCrawler:
     # ── Helpers ──────────────────────────────────────────────────────
 
     def _cip_to_name(self, cip_code: str) -> str:
-        """Map CIP (Classification of Instructional Programs) codes to names."""
+        """Map CIP codes or Scorecard category names to program names."""
+        # Scorecard category name mapping (string keys)
+        category_map = {
+            "agriculture": "Agriculture",
+            "architecture": "Architecture",
+            "area_ethnic_cultural_gender": "Area & Cultural Studies",
+            "biological": "Biology",
+            "business": "Business",
+            "communication": "Communications",
+            "communications_technology": "Communications Technology",
+            "computer": "Computer Science",
+            "construction": "Construction Trades",
+            "education": "Education",
+            "engineering": "Engineering",
+            "engineering_technology": "Engineering Technology",
+            "english": "English",
+            "ethnic_cultural_gender": "Cultural & Gender Studies",
+            "family_consumer_science": "Family & Consumer Science",
+            "foreign_language": "Foreign Languages",
+            "health": "Health Sciences",
+            "history": "History",
+            "language": "Languages",
+            "legal": "Legal Studies",
+            "liberal_arts": "Liberal Arts",
+            "library": "Library Science",
+            "mathematics": "Mathematics",
+            "mechanics": "Mechanics & Repair",
+            "military": "Military Science",
+            "multidiscipline": "Interdisciplinary Studies",
+            "parks_recreation_fitness": "Sports & Fitness",
+            "personal_services": "Personal Services",
+            "philosophy_religious": "Philosophy & Religious Studies",
+            "physical_science": "Physical Sciences",
+            "precision_production": "Precision Production",
+            "psychology": "Psychology",
+            "public_administration_social_service": "Public Administration",
+            "science_technology": "Science & Technology",
+            "security_law_enforcement": "Security & Law Enforcement",
+            "social_science": "Social Sciences",
+            "theology_religious_vocation": "Theology",
+            "transportation": "Transportation",
+            "visual_performing_arts": "Visual & Performing Arts",
+        }
+        if cip_code in category_map:
+            return category_map[cip_code]
+
+        # Numeric CIP code mapping (original)
         mapping = {
             "11": "Computer Science",
             "11.01": "Computer Science",
