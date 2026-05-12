@@ -10,6 +10,7 @@ assets/*
 assets/models/*
 !assets/models/exam_layout.pt
 !functions/Procfile
+!functions/gunicorn.conf.py
 !functions/services/
 !functions/services/*
 !functions/middleware/
