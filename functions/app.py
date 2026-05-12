@@ -20,6 +20,7 @@ from services.grading_service import HandwritingGradingGateway
 from services.planner_service import DailyPlannerService
 from services.study_pulse_service import StudyPulseService
 from services.university_catalog_service import UniversityCatalogService
+from services.university_program_crawler import UniversityProgramCrawler
 
 
 app = FastAPI(
@@ -180,6 +181,10 @@ def get_uni_catalog_service() -> UniversityCatalogService:
             get_firestore(), model=planner_model
         )
     return _uni_catalog_service
+
+
+def get_program_crawler() -> UniversityProgramCrawler:
+    return UniversityProgramCrawler(get_firestore())
 
 
 class DetectLayoutRequest(BaseModel):
@@ -763,9 +768,9 @@ async def get_university_programs(
     payload: UniversityProgramsRequest,
     user: dict[str, Any] = Depends(current_user),
 ):
-    service = get_uni_catalog_service()
+    service = get_program_crawler()
     programs = await asyncio.to_thread(
-        service.get_university_programs,
+        service.get_programs,
         university_name=payload.university_name,
         country=payload.country,
         domain=payload.domain,
