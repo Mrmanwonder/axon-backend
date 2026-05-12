@@ -15,6 +15,7 @@ assets/models/*
 !functions/data/*
 !functions/tests/
 !functions/tests/*
+!functions/render.yaml
 
 # Dependencies
 functions/__pycache__/
