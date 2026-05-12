@@ -252,6 +252,7 @@ class DailyPlannerService:
             ranked_deadlines.append((exam_at, data))
         ranked_deadlines.sort(key=lambda item: item[0])
         if not ranked_deadlines:
+            print(f"[PlannerService] No deadlines for user {user_id}, skipping plan generation")
             return []
 
         exam_at, deadline = ranked_deadlines[0]

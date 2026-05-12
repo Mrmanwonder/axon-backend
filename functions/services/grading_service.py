@@ -473,7 +473,12 @@ Strict Rules:
             embedding = result.get("embedding") if isinstance(result, dict) else None
             if isinstance(embedding, list) and embedding:
                 return [float(value) for value in embedding]
-        except Exception:
+        except Exception as exc:
+            exc_name = type(exc).__name__
+            if "quota" in str(exc).lower() or "rate_limit" in str(exc).lower() or "429" in str(exc):
+                print(f"[GradingService] Gemini quota exceeded for embedding: {exc}")
+            else:
+                print(f"[GradingService] Embedding failed ({exc_name}): {exc}")
             return None
         return None
 
