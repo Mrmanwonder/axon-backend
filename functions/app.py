@@ -11,7 +11,10 @@ from urllib.parse import urlparse
 
 import uvicorn
 
+import time
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from middleware.auth import current_user, initialize_firebase
@@ -28,12 +31,83 @@ app = FastAPI(
     version="2.1.0",
     description="ASGI backend for Axon document analysis, grading, and trust-safe sync.",
 )
+
+# Security: CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://axon.edu", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["*"],
+)
+
+# Security: rate limiting
+@app.middleware("http")
+async def rate_limit_middleware(request, call_next):
+    import collections
+
+    client_ip = request.client.host if request.client else "unknown"
+    key = f"rl:{client_ip}:{int(time.time() // 60)}"
+    now = time.time()
+
+    # Simple in-memory rate limit: 60 requests per minute per IP
+    if not hasattr(rate_limit_middleware, "_counts"):
+        rate_limit_middleware._counts = collections.defaultdict(list)
+
+    rate_limit_middleware._counts[key] = [
+        t for t in rate_limit_middleware._counts[key] if now - t < 60
+    ]
+    if len(rate_limit_middleware._counts[key]) >= 60:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limit exceeded"},
+        )
+    rate_limit_middleware._counts[key].append(now)
+
+    return await call_next(request)
+
+
 initialize_firebase()
 
 model = None
 model_path = None
 _firestore_client = None
+
+# Bounded job cache with TTL (max 1000 entries, 1 hour TTL)
 _job_cache: dict[str, dict[str, Any]] = {}
+_job_cache_ttl: dict[str, float] = {}
+_JOB_CACHE_MAX_SIZE = 1000
+_JOB_CACHE_TTL_SECONDS = 3600
+
+def _cleanup_job_cache():
+    """Remove expired entries from job cache."""
+    global _job_cache, _job_cache_ttl
+    now = time.time()
+    expired = [k for k, v in _job_cache_ttl.items() if now - v > _JOB_CACHE_TTL_SECONDS]
+    for k in expired:
+        _job_cache.pop(k, None)
+        _job_cache_ttl.pop(k, None)
+
+    # Evict oldest if over size limit
+    while len(_job_cache) > _JOB_CACHE_MAX_SIZE:
+        oldest = min(_job_cache_ttl, key=_job_cache_ttl.get)
+        _job_cache.pop(oldest, None)
+        _job_cache_ttl.pop(oldest, None)
+
+
+def save_job(job_id: str, payload: dict[str, Any]) -> None:
+    _cleanup_job_cache()
+    _job_cache[job_id] = payload
+    _job_cache_ttl[job_id] = time.time()
+
+
+def update_job(job_id: str, **fields: Any) -> None:
+    _cleanup_job_cache()
+    if job_id in _job_cache:
+        _job_cache[job_id].update(fields)
+        _job_cache_ttl[job_id] = time.time()
+
+
 _firestore_database_id = os.environ.get("FIRESTORE_DATABASE_ID", "axon")
 _gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
 _daily_planner_model_name = os.environ.get("DAILY_PLANNER_MODEL", "gemini-1.5-flash")
@@ -79,11 +153,14 @@ def syllabus_maps_collection():
 
 
 def save_job(job_id: str, payload: dict[str, Any]) -> None:
+    _cleanup_job_cache()
     _job_cache[job_id] = payload
+    _job_cache_ttl[job_id] = time.time()
     jobs_collection().document(job_id).set(payload, merge=True)
 
 
 def update_job(job_id: str, **fields: Any) -> None:
+    _cleanup_job_cache()
     payload = {**_job_cache.get(job_id, {}), **fields, "updated_at": utc_now()}
     save_job(job_id, payload)
 

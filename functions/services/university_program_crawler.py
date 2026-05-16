@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -12,6 +13,53 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+
+# SSRF protection: blocked IP ranges (private/internal networks)
+_BLOCKED_IP_RANGES = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # Link-local
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),  # Carrier-grade NAT
+    ipaddress.ip_network("192.0.0.0/24"),
+    ipaddress.ip_network("192.0.2.0/24"),  # Test net
+    ipaddress.ip_network("198.51.100.0/24"),  # Test net
+    ipaddress.ip_network("203.0.113.0/24"),  # Test net
+    ipaddress.ip_network("fc00::/7"),  # IPv6 private
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
+]
+
+
+def _is_safe_url(url: str) -> bool:
+    """Validate URL is safe for fetching (SSRF protection)."""
+    try:
+        parsed = urlparse(url)
+        # Only allow http/https
+        if parsed.scheme not in ("http", "https"):
+            return False
+        # Resolve and check IP
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        # Try to resolve hostname to IP
+        try:
+            # This may block on DNS - acceptable tradeoff
+            ips = socket.getaddrinfo(hostname, None, socket.AF_INET)
+            for family, socktype, proto, canonname, sockaddr in ips:
+                ip = ipaddress.ip_address(sockaddr[0])
+                for network in _BLOCKED_IP_RANGES:
+                    if ip in network:
+                        return False
+        except socket.gaierror:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+import socket
 
 
 class UniversityProgramCrawler:
@@ -183,8 +231,17 @@ class UniversityProgramCrawler:
         protocol = "https://"
         base_url = f"{protocol}{domain}"
 
+        # SSRF protection: verify base URL is safe
+        if not _is_safe_url(base_url):
+            print(f"[Crawler] Blocked unsafe base URL: {base_url}")
+            return None
+
         for path in self.CATALOG_PATHS:
             url = urljoin(base_url, path)
+            # SSRF protection: validate each URL
+            if not _is_safe_url(url):
+                print(f"[Crawler] Blocked unsafe URL: {url}")
+                continue
             print(f"[Crawler] Trying: {url}")
             try:
                 resp = requests.get(url, timeout=8, headers=self._headers())
