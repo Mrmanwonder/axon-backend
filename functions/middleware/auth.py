@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -13,8 +14,12 @@ def initialize_firebase() -> None:
         return
 
     try:
+        service_account_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "")
         cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-        if cred_path and os.path.exists(cred_path):
+        if service_account_json:
+            cred = credentials.Certificate(json.loads(service_account_json))
+            firebase_admin.initialize_app(cred)
+        elif cred_path and os.path.exists(cred_path):
             cred = credentials.Certificate(cred_path)
             firebase_admin.initialize_app(cred)
         else:
