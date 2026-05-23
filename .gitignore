@@ -1,10 +1,18 @@
+# Secrets - never track these
+.env
+.env.local
+functions/firebase-admin.json
+
 *
 !functions
-!functions/services/university_catalog_service.py
 !functions/seed_universities.py
 !functions/seed_university_datasets.py
 !assets
 !.gitignore
+!Procfile
+!requirements.txt
+!runtime.txt
+!railway.json
 assets/*
 !assets/models/
 assets/models/*

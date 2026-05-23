@@ -30,18 +30,10 @@ class CurriculumCatalogService:
             for alias in board.get("aliases", []):
                 if self._normalize(str(alias)) == normalized:
                     return board
-        if "ocr" in normalized:
-            return self.find_board("ocr_a_level")
-        if "edexcel" in normalized and "igcse" in normalized:
-            return self.find_board("edexcel_igcse")
-        if "edexcel" in normalized:
-            return self.find_board("edexcel_a_level")
         if "o level" in normalized or "olevel" in normalized:
             return self.find_board("caie_o_level")
         if "a level" in normalized or "as level" in normalized:
             return self.find_board("caie_a_level")
-        if "ib" in normalized or "baccalaureate" in normalized:
-            return self.find_board("ib_dp")
         if "igcse" in normalized or "cambridge" in normalized:
             return self.find_board("caie_igcse")
         return None

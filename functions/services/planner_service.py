@@ -162,15 +162,56 @@ class DailyPlannerService:
 
         task = snapshot.to_dict() or {}
         now = datetime.now(timezone.utc)
-        start = datetime.combine(now.date(), time(hour=20), tzinfo=timezone.utc)
+
+        # Check for existing tasks at 8 PM and 9 PM to avoid overlaps
+        target_hours = [20, 21]  # 8 PM, then 9 PM if occupied
+        assigned_hour = None
+
+        for hour in target_hours:
+            slot_conflict = False
+            slot_start = datetime.combine(now.date(), time(hour=hour), tzinfo=timezone.utc)
+            slot_end = slot_start + timedelta(minutes=45)
+
+            for other in plan_ref.where("date", "==", now.date().isoformat()).stream():
+                if other.id == task_id:
+                    continue
+                other_payload = other.to_dict() or {}
+                other_start_str = other_payload.get("start_time")
+                other_end_str = other_payload.get("end_time")
+
+                if other_start_str and other_end_str:
+                    try:
+                        other_start = datetime.fromisoformat(other_start_str.replace("Z", "+00:00"))
+                        other_end = datetime.fromisoformat(other_end_str.replace("Z", "+00:00"))
+                        # Check for overlap (simple interval overlap check)
+                        if slot_start < other_end and slot_end > other_start:
+                            slot_conflict = True
+                            break
+                    except (ValueError, TypeError):
+                        continue
+
+            if not slot_conflict:
+                assigned_hour = hour
+                break
+
+        if assigned_hour is None:
+            return {
+                "status": "conflict",
+                "task_id": task_id,
+                "message": "No available slot found for rescheduling this evening.",
+            }
+
+        start = datetime.combine(now.date(), time(hour=assigned_hour), tzinfo=timezone.utc)
         end = start + timedelta(minutes=45)
+        time_label = "8 PM" if assigned_hour == 20 else "9 PM"
+
         task_ref.set(
             {
                 "status": "rescheduled",
                 "start_time": start.isoformat(),
                 "end_time": end.isoformat(),
                 "reason": (
-                    f"{task.get('reason', '')} Life happened: shifted this block to 8 PM tonight "
+                    f"{task.get('reason', '')} Life happened: shifted this block to {time_label} tonight "
                     "and trimmed review work to compensate."
                 ).strip(),
                 "scheduled_window": "late_evening_recovery",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 import tempfile
 import uuid
@@ -14,7 +15,7 @@ import uvicorn
 import time
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from middleware.auth import current_user, initialize_firebase
@@ -24,6 +25,7 @@ from services.planner_service import DailyPlannerService
 from services.study_pulse_service import StudyPulseService
 from services.university_catalog_service import UniversityCatalogService
 from services.university_program_crawler import UniversityProgramCrawler
+from services.ai_proxy_service import AiProxyService
 
 
 app = FastAPI(
@@ -116,6 +118,7 @@ _planner_service = None
 _study_pulse_service = None
 _exam_dates_service = None
 _uni_catalog_service = None
+_ai_proxy_service = None
 
 
 def utc_now() -> str:
@@ -264,6 +267,13 @@ def get_program_crawler() -> UniversityProgramCrawler:
     return UniversityProgramCrawler(get_firestore())
 
 
+def get_ai_proxy_service() -> AiProxyService:
+    global _ai_proxy_service
+    if _ai_proxy_service is None:
+        _ai_proxy_service = AiProxyService()
+    return _ai_proxy_service
+
+
 class DetectLayoutRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -402,6 +412,15 @@ class NormalizeDegreeRequest(BaseModel):
 
     degree_name: str
     country: str = ""
+
+
+class AiChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    messages: list[dict[str, str]] = Field(min_length=1, max_length=100)
+    stream: bool = False
+    max_tokens: int | None = Field(default=None, ge=1, le=16384)
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
 
 
 def parse_detections(results):
@@ -876,6 +895,54 @@ async def normalize_degree(
         "normalized": result,
         "source_type": "DEGREE_NORMALIZER",
     }
+
+
+@app.post("/api/ai/chat")
+async def ai_chat(
+    payload: AiChatRequest,
+    user: dict[str, Any] = Depends(current_user),
+):
+    service = get_ai_proxy_service()
+
+    if payload.stream:
+        async def event_stream():
+            async for chunk in service.chat_stream(
+                messages=payload.messages,
+                user_id=user["uid"],
+                max_tokens=payload.max_tokens,
+                temperature=payload.temperature,
+            ):
+                yield chunk
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    result = await service.chat(
+        messages=payload.messages,
+        user_id=user["uid"],
+        stream=False,
+        max_tokens=payload.max_tokens,
+        temperature=payload.temperature,
+    )
+
+    if result and "error" in result:
+        status_code = 429 if result["error"] == "rate_limited" else 503
+        raise HTTPException(status_code=status_code, detail=result["message"])
+
+    return result
+
+
+@app.get("/api/ai/status")
+async def ai_status(user: dict[str, Any] = Depends(current_user)):
+    service = get_ai_proxy_service()
+    return service.get_status()
 
 
 if __name__ == "__main__":

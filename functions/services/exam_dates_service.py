@@ -91,9 +91,6 @@ class ScrapedExamEvent:
 
 class OfficialExamDatesService:
     CAMBRIDGE_TIMETABLES_URL = "https://www.cambridgeinternational.org/timetables"
-    IB_DP_SCHEDULE_URL = (
-        "https://www.ibo.org/programmes/diploma-programme/assessment-and-exams/exam-schedule/"
-    )
 
     def __init__(self, db) -> None:
         self._db = db
@@ -113,40 +110,52 @@ class OfficialExamDatesService:
         target_series = (series or self._default_series()).lower()
         target_zone = _normalize_zone(administrative_zone)
 
-        events = self.fetch_official_exam_dates(
-            board=board,
-            subjects=subjects,
-            year=target_year,
-            series=target_series,
-            administrative_zone=target_zone,
-        )
+        print(f"[ExamDates] sync_user_deadlines: user={user_id}, board={board}, subjects={subjects}, year={target_year}, series={target_series}, zone={target_zone}")
+
+        try:
+            events = self.fetch_official_exam_dates(
+                board=board,
+                subjects=subjects,
+                year=target_year,
+                series=target_series,
+                administrative_zone=target_zone,
+            )
+        except Exception as e:
+            print(f"[ExamDates] Exception during fetch_official_exam_dates: {e}")
+            events = []
+
+        print(f"[ExamDates] Fetched {len(events)} events")
 
         persisted = 0
-        if persist:
-            deadlines_ref = (
-                self._db.collection("users_private").document(user_id).collection("deadlines")
-            )
-            for event in events:
-                payload = event.to_deadline_doc(
-                    administrative_zone=target_zone,
-                    series=target_series,
-                    year=target_year,
+        if persist and events:
+            try:
+                deadlines_ref = (
+                    self._db.collection("users_private").document(user_id).collection("deadlines")
                 )
-                doc_id = hashlib.sha1(
-                    json.dumps(
-                        [
-                            user_id,
-                            payload["board"],
-                            payload["subject"],
-                            payload["paper"],
-                            payload["exam_date"],
-                            payload.get("administrative_zone") or "",
-                        ],
-                        sort_keys=True,
-                    ).encode("utf-8")
-                ).hexdigest()
-                deadlines_ref.document(doc_id).set(payload, merge=True)
-                persisted += 1
+                for event in events:
+                    payload = event.to_deadline_doc(
+                        administrative_zone=target_zone,
+                        series=target_series,
+                        year=target_year,
+                    )
+                    doc_id = hashlib.sha1(
+                        json.dumps(
+                            [
+                                user_id,
+                                payload["board"],
+                                payload["subject"],
+                                payload["paper"],
+                                payload["exam_date"],
+                                payload.get("administrative_zone") or "",
+                            ],
+                            sort_keys=True,
+                        ).encode("utf-8")
+                    ).hexdigest()
+                    deadlines_ref.document(doc_id).set(payload, merge=True)
+                    persisted += 1
+                print(f"[ExamDates] Persisted {persisted} deadlines to Firestore")
+            except Exception as e:
+                print(f"[ExamDates] Failed to persist deadlines: {e}")
 
         return {
             "board": self._canonical_board(board),
@@ -176,7 +185,14 @@ class OfficialExamDatesService:
         if not clean_subjects:
             return []
 
-        if canonical_board in {"IGCSE", "A_LEVEL"}:
+        # Parse canonical board into board_id + level
+        parts = canonical_board.split("_", 1)
+        board_id = parts[0] if len(parts) > 0 else canonical_board
+        level = parts[1] if len(parts) > 1 else "igcse"
+
+        # Cambridge International (CIE) — IGCSE, AS Level, A Level
+        # Scrapes from cambridgeinternational.org/timetables
+        if board_id == "caie":
             return self._scrape_cambridge_dates(
                 board=canonical_board,
                 subjects=clean_subjects,
@@ -184,30 +200,55 @@ class OfficialExamDatesService:
                 series=series,
                 administrative_zone=administrative_zone,
             )
-        if canonical_board == "IB":
-            return self._scrape_ib_dates(
-                board=canonical_board,
-                subjects=clean_subjects,
-                year=year,
-                series=series,
-            )
+
+        print(f"[ExamDates] Unrecognized board: '{canonical_board}' (original: '{board}')")
         return []
 
     def _default_series(self) -> str:
         month = datetime.now(timezone.utc).month
-        if month <= 6:
+        # Cambridge: March (India only), May/June, October/November
+        if month <= 2:
+            return "march"
+        if month <= 7:
             return "may"
         return "november"
 
     def _canonical_board(self, board: str) -> str:
+        """
+        Two-step board resolution:
+          1. Extract exam board: only CAIE (Cambridge International)
+          2. Extract level: igcse, as_level, a_level
+
+        Returns a combined canonical identifier like 'caie_igcse', 'caie_a_level', etc.
+        """
         normalized = _normalize(board)
-        if "ib" == normalized or "international baccalaureate" in normalized:
-            return "IB"
-        if "ocr" in normalized or "edexcel" in normalized:
-            return "UNSUPPORTED"
+
+        # Step 1: Identify the exam board — only CAIE
+        board_id = None
+        if "caie" in normalized or "cambridge" in normalized or "cie" in normalized:
+            board_id = "caie"
+
+        # Step 2: Identify the qualification level
+        if "as level" in normalized and "a level" not in normalized:
+            level = "as_level"
+        elif "a level" in normalized or "alevel" in normalized or "ial" in normalized or "international advanced" in normalized:
+            level = "a_level"
+        elif "igcse" in normalized or "international gcse" in normalized:
+            level = "igcse"
+        elif "o level" in normalized or "olevel" in normalized:
+            level = "igcse"
+        elif "gcse" in normalized:
+            level = "igcse"
+        else:
+            level = "igcse"  # Default
+
+        if board_id:
+            return f"{board_id}_{level}"
+
+        # Fallback — all unrecognized input defaults to CAIE
         if "a level" in normalized or "as level" in normalized:
-            return "A_LEVEL"
-        return "IGCSE"
+            return "caie_a_level"
+        return "caie_igcse"
 
     def _scrape_cambridge_dates(
         self,
@@ -218,8 +259,12 @@ class OfficialExamDatesService:
         series: str,
         administrative_zone: str | None,
     ) -> list[ScrapedExamEvent]:
-        response = requests.get(self.CAMBRIDGE_TIMETABLES_URL, timeout=30)
-        response.raise_for_status()
+        try:
+            response = requests.get(self.CAMBRIDGE_TIMETABLES_URL, timeout=30)
+            response.raise_for_status()
+        except requests.RequestException as e:
+            print(f"[ExamDates] Failed to fetch Cambridge timetables page: {e}")
+            return []
 
         soup = BeautifulSoup(response.text, "html.parser")
         pdf_links: list[tuple[str, str]] = []
@@ -237,6 +282,9 @@ class OfficialExamDatesService:
             elif series.startswith("nov"):
                 if "november" not in normalized_text:
                     continue
+            elif series.startswith("mar"):
+                if "march" not in normalized_text:
+                    continue
             if administrative_zone == "uk":
                 if "uk" not in normalized_text:
                     continue
@@ -244,68 +292,33 @@ class OfficialExamDatesService:
                 continue
             pdf_links.append((text, urljoin(self.CAMBRIDGE_TIMETABLES_URL, href)))
 
-        events: list[ScrapedExamEvent] = []
-        seen: set[tuple[str, str, str]] = set()
-        for title, pdf_url in pdf_links:
-            pdf_response = requests.get(pdf_url, timeout=40)
-            pdf_response.raise_for_status()
-            text = _extract_pdf_text(pdf_response.content)
-            events.extend(
-                self._parse_timetable_text(
-                    board=board,
-                    subjects=subjects,
-                    text=text,
-                    source_url=pdf_url,
-                    source_title=title,
-                    year=year,
-                    seen=seen,
-                )
-            )
-        return events
-
-    def _scrape_ib_dates(
-        self,
-        *,
-        board: str,
-        subjects: list[str],
-        year: int,
-        series: str,
-    ) -> list[ScrapedExamEvent]:
-        response = requests.get(self.IB_DP_SCHEDULE_URL, timeout=30)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        target_series = "may" if series.startswith("may") else "november"
-        pdf_links: list[tuple[str, str]] = []
-        for link in soup.find_all("a", href=True):
-            href = link["href"]
-            text = " ".join(link.get_text(" ", strip=True).split())
-            normalized_text = _normalize(text)
-            if ".pdf" not in href.lower():
-                continue
-            if str(year) not in text:
-                continue
-            if target_series not in normalized_text:
-                continue
-            pdf_links.append((text, urljoin(self.IB_DP_SCHEDULE_URL, href)))
+        if not pdf_links:
+            print(f"[ExamDates] No Cambridge PDF links found for year={year}, series={series}, zone={administrative_zone}")
 
         events: list[ScrapedExamEvent] = []
         seen: set[tuple[str, str, str]] = set()
         for title, pdf_url in pdf_links:
-            pdf_response = requests.get(pdf_url, timeout=40)
-            pdf_response.raise_for_status()
-            text = _extract_pdf_text(pdf_response.content)
-            events.extend(
-                self._parse_timetable_text(
-                    board=board,
-                    subjects=subjects,
-                    text=text,
-                    source_url=pdf_url,
-                    source_title=title,
-                    year=year,
-                    seen=seen,
+            try:
+                pdf_response = requests.get(pdf_url, timeout=40)
+                pdf_response.raise_for_status()
+                text = _extract_pdf_text(pdf_response.content)
+                events.extend(
+                    self._parse_timetable_text(
+                        board=board,
+                        subjects=subjects,
+                        text=text,
+                        source_url=pdf_url,
+                        source_title=title,
+                        year=year,
+                        seen=seen,
+                    )
                 )
-            )
+            except requests.RequestException as e:
+                print(f"[ExamDates] Failed to download PDF {pdf_url}: {e}")
+                continue
+            except Exception as e:
+                print(f"[ExamDates] Failed to parse PDF {pdf_url}: {e}")
+                continue
         return events
 
     def _parse_timetable_text(
