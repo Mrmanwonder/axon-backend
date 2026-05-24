@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from services.planner_service import DailyPlannerService
+from functions.services.planner_service import DailyPlannerService
 
 
 class _FakeDocSnapshot:

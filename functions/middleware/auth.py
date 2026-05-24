@@ -23,7 +23,24 @@ def initialize_firebase() -> None:
             cred = credentials.Certificate(cred_path)
             firebase_admin.initialize_app(cred)
         else:
-            firebase_admin.initialize_app()
+            # Auto-discover firebase-admin.json in project directory
+            local_paths = [
+                os.path.join(os.getcwd(), "firebase-admin.json"),
+                os.path.join(os.path.dirname(__file__), "..", "firebase-admin.json"),
+            ]
+            found = None
+            for p in local_paths:
+                normalized = os.path.normpath(p)
+                if os.path.exists(normalized):
+                    found = normalized
+                    break
+            if found:
+                cred = credentials.Certificate(found)
+                firebase_admin.initialize_app(cred)
+                print(f"Firebase Admin initialized from {found}")
+            else:
+                firebase_admin.initialize_app()
+                print("Firebase Admin initialized with default credentials")
         print("Firebase Admin initialized successfully")
     except Exception as e:
         print(f"Firebase Admin initialization skipped: {e}")
