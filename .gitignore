@@ -29,6 +29,12 @@ assets/*
 !functions/seed_university_datasets.py
 !functions/services/university_catalog_service.py
 
+# Flutter app
+!lib/
+!lib/**
+!pubspec.yaml
+!analysis_options.yaml
+
 # Dependencies
 functions/__pycache__/
 functions/*.pyc
@@ -38,4 +44,3 @@ build/
 .dart_tool/
 .idea/
 .pub/
-pubspec.lock
