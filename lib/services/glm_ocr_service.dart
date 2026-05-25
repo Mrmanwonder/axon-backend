@@ -25,21 +25,17 @@ class GLMOcrService {
 
   Future<String> extractTextFromPdf(String pdfPath) async {
     if (_modelPath == null) await initialize();
+    if (pdfPath.contains('\'') || pdfPath.contains('"') || pdfPath.contains(';') || pdfPath.contains('|') || pdfPath.contains('`') || pdfPath.contains(r'$')) return '';
 
     try {
       final result = await Process.run(
         'python',
         [
           '-c',
-          '''
-import fitz
-doc = fitz.open(r"$pdfPath")
-text = "\\n".join([page.get_text() for page in doc])
-print(text[:50000])
-doc.close()
-''',
+          'import fitz, sys; doc = fitz.open(sys.argv[1]); text = "\\n".join([page.get_text() for page in doc]); print(text[:50000]); doc.close()',
+          pdfPath,
         ],
-        runInShell: true,
+        runInShell: Platform.isWindows,
       );
 
       if (result.exitCode == 0 && result.stdout.toString().isNotEmpty) {

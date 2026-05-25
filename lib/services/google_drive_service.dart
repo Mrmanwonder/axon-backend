@@ -3,8 +3,8 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 class GoogleDriveService {
@@ -14,6 +14,7 @@ class GoogleDriveService {
 
   static const String _folderIdKey = 'google_drive_folder_id';
   static const String _tokenKey = 'google_drive_token';
+  static const _secureStorage = FlutterSecureStorage();
 
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: [
@@ -34,8 +35,7 @@ class GoogleDriveService {
         final auth = await account.authentication;
         _accessToken = auth.accessToken;
 
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString(_tokenKey, _accessToken!);
+        await _secureStorage.write(key: _tokenKey, value: _accessToken!);
 
         return true;
       }
@@ -46,9 +46,8 @@ class GoogleDriveService {
   }
 
   Future<void> initFromStoredToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    final storedToken = prefs.getString(_tokenKey);
-    if (storedToken != null) {
+    final storedToken = await _secureStorage.read(key: _tokenKey);
+    if (storedToken != null && storedToken.isNotEmpty) {
       _accessToken = storedToken;
     }
   }

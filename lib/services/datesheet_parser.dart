@@ -236,19 +236,24 @@ class DatesheetParser {
 
     // Method 2: Try Python script directly
     try {
+      final safePath = pdfFile.path;
+      if (RegExp(r'[;\'"|`$]').hasMatch(safePath)) {
+        debugPrint('Python GLM OCR skipped: unsafe characters in path');
+        return '';
+      }
       final result = await Process.run(
         'python',
         [
           'rerun_datesheets_glm_ocr.py',
           '--single',
-          pdfFile.path,
+          safePath,
         ],
         workingDirectory: Directory.current.path,
-        runInShell: true,
+        runInShell: Platform.isWindows,
       );
       if (result.exitCode == 0 && result.stdout.toString().isNotEmpty) {
         debugPrint(
-            'Python GLM OCR extraction successful for ${pdfFile.path.split('/').last}');
+            'Python GLM OCR extraction successful for ${safePath.split('/').last}');
         return result.stdout.toString();
       }
     } catch (e) {
@@ -257,8 +262,13 @@ class DatesheetParser {
 
     // Method 3: Try using pdftotext command if available
     try {
+      final safePath = pdfFile.path;
+      if (RegExp(r'[;\'"|`$]').hasMatch(safePath)) {
+        debugPrint('pdftotext skipped: unsafe characters in path');
+        return '';
+      }
       final result =
-          await Process.run('pdftotext', [pdfFile.path, '-'], runInShell: true);
+          await Process.run('pdftotext', [safePath, '-'], runInShell: Platform.isWindows);
       if (result.exitCode == 0 && result.stdout.toString().isNotEmpty) {
         return result.stdout.toString();
       }

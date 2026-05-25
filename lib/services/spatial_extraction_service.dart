@@ -15,7 +15,7 @@ class SpatialExtractionService {
         _endpoint = endpoint ??
             const String.fromEnvironment(
               'DEEPSEEK_VL2_ENDPOINT',
-              defaultValue: 'http://10.0.2.2:8000/deepseek-vl2/extract',
+              defaultValue: '',
             );
 
   static const String deepSeekExamPrompt =

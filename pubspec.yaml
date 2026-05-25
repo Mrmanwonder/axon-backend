@@ -118,7 +118,6 @@ flutter:
     - assets/data/study_notes.json
     - assets/data/PYQs_rows.csv
     - assets/data/Datesheet_rows.csv
-    - .env
   shaders:
     - assets/shaders/plasma.frag
     - shaders/particle_morph.frag

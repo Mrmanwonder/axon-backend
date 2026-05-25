@@ -66,6 +66,8 @@ class DocumentVisionRuntime {
       return null;
     }
 
+    if (RegExp(r'[;\'"|`$]').hasMatch(filePath)) return null;
+
     final commands = Platform.isWindows
         ? const [
             ['py', '-3'],

@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -246,9 +247,12 @@ class NotionService {
 
   // ── Init & Auth ────────────────────────────────────────────────────────────
 
+  static const _secureStorage = FlutterSecureStorage();
+  static const _tokenKey = 'notion_integration_token';
+
   Future<bool> initialize() async {
     _prefs ??= await SharedPreferences.getInstance();
-    _integrationToken = _prefs!.getString('notion_integration_token');
+    _integrationToken = await _secureStorage.read(key: _tokenKey);
     _databaseId = _prefs!.getString('notion_database_id');
     _isConnected = _integrationToken != null && _databaseId != null;
     await _loadLocalEvents();
@@ -259,7 +263,7 @@ class NotionService {
     _prefs ??= await SharedPreferences.getInstance();
     _integrationToken = integrationToken;
     _databaseId = databaseId;
-    await _prefs!.setString('notion_integration_token', integrationToken);
+    await _secureStorage.write(key: _tokenKey, value: integrationToken);
     await _prefs!.setString('notion_database_id', databaseId);
     _isConnected = await validateConnection();
     return _isConnected;
@@ -270,8 +274,8 @@ class NotionService {
     _integrationToken = null;
     _databaseId = null;
     _isConnected = false;
+    await _secureStorage.delete(key: _tokenKey);
     _prefs ??= await SharedPreferences.getInstance();
-    await _prefs!.remove('notion_integration_token');
     await _prefs!.remove('notion_database_id');
     await _prefs!.remove('notion_local_events');
     await _prefs!.remove('notion_last_sync');

@@ -818,7 +818,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     try {
       debugPrint('AuthNotifier: Starting Google Sign-In...');
       final googleUser = await _googleSignIn.signIn();
-      debugPrint('AuthNotifier: Google user result: $googleUser');
+      debugPrint('AuthNotifier: Google user result: ${googleUser?.id}');
 
       if (googleUser == null) {
         state = state.copyWith(
@@ -828,7 +828,6 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
       debugPrint('AuthNotifier: Getting Google auth...');
       final googleAuth = await googleUser.authentication;
-      debugPrint('AuthNotifier: Got auth tokens');
 
       final credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,
@@ -838,7 +837,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
       final cred = await auth.signInWithCredential(credential);
       final user = cred.user!;
-      debugPrint('AuthNotifier: Firebase user: ${user.uid}');
+      debugPrint('AuthNotifier: Firebase user sign-in success');
       _loadProfileInBackground(user.uid);
       final prefs = await SharedPreferences.getInstance();
       final cachedBoard = prefs.getString('userBoard') ?? '';

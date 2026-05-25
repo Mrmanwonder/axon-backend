@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 enum ApiErrorType {
   network,
@@ -46,7 +45,6 @@ class ApiClient {
     required String baseUrl,
     Dio? dio,
     FirebaseAuth? auth,
-    SharedPreferences? prefs,
   })  : _dio = dio ??
             Dio(BaseOptions(
               baseUrl: baseUrl,
@@ -62,7 +60,7 @@ class ApiClient {
             )),
         _auth = auth ?? FirebaseAuth.instance {
     _dio.interceptors.addAll([
-      _AuthInterceptor(_auth, prefs),
+      _AuthInterceptor(_auth, null),
       _RetryInterceptor(),
       _LoggingInterceptor(),
     ]);
@@ -304,9 +302,8 @@ class _StreamDoneException implements Exception {}
 
 class _AuthInterceptor extends Interceptor {
   final FirebaseAuth _auth;
-  final SharedPreferences? _prefs;
 
-  _AuthInterceptor(this._auth, this._prefs);
+  _AuthInterceptor(this._auth, _);
 
   @override
   void onRequest(
@@ -320,7 +317,6 @@ class _AuthInterceptor extends Interceptor {
           final token = await user.getIdToken();
           if (token != null && token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';
-            _prefs?.setString('cached_auth_token', token);
           }
         }
       } catch (_) {}
@@ -330,9 +326,6 @@ class _AuthInterceptor extends Interceptor {
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
-    if (err.response?.statusCode == 401) {
-      _prefs?.remove('cached_auth_token');
-    }
     handler.next(err);
   }
 }
