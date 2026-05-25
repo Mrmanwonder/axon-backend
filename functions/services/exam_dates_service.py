@@ -115,43 +115,43 @@ class OfficialExamDatesService:
         deadlines_ref = (
             self._db.collection("users_private").document(user_id).collection("deadlines")
         )
-        existing_snapshots = list(deadlines_ref.stream())
+        sync_meta_ref = (
+            self._db.collection("users_private").document(user_id).collection("_sync_meta").document("exam_dates")
+        )
 
         sync_key = hashlib.sha1(
             json.dumps([user_id, board, sorted(subjects), target_year, target_series, target_zone], sort_keys=True).encode("utf-8")
         ).hexdigest()
 
-        existing_sync_key: str | None = None
-        existing_subjects: set[str] = set()
-        for snap in existing_snapshots:
-            data = snap.to_dict() or {}
-            existing_subjects.add(str(data.get("subject", "")))
-            key = data.get("_sync_key")
-            if key is not None:
-                existing_sync_key = key
+        sync_meta = sync_meta_ref.get()
+        if sync_meta.exists:
+            meta = sync_meta.to_dict() or {}
+            if meta.get("sync_key") == sync_key:
+                print(f"[ExamDates] Sync meta matches (key={sync_key[:12]}...), skipping scrape")
+                existing_snapshots = list(deadlines_ref.stream())
+                existing_subjects = {str((s.to_dict() or {}).get("subject", "")) for s in existing_snapshots}
+                stale = existing_subjects - set(subjects)
+                if stale:
+                    for snap in existing_snapshots:
+                        data = snap.to_dict() or {}
+                        if str(data.get("subject", "")) in stale:
+                            try:
+                                snap.reference.delete()
+                            except AttributeError:
+                                deadlines_ref.document(snap.id).delete()
+                    print(f"[ExamDates] Removed {len(stale)} stale subjects: {stale}")
+                return {
+                    "board": self._canonical_board(board),
+                    "subjects": subjects,
+                    "year": target_year,
+                    "series": target_series,
+                    "administrative_zone": target_zone,
+                    "persisted_count": 0,
+                    "cached": True,
+                    "events": [],
+                }
 
-        if existing_sync_key == sync_key:
-            print(f"[ExamDates] Data already up-to-date for key {sync_key[:12]}..., skipping scrape")
-            stale = existing_subjects - set(subjects)
-            if stale:
-                for snap in existing_snapshots:
-                    data = snap.to_dict() or {}
-                    if str(data.get("subject", "")) in stale:
-                        try:
-                            snap.reference.delete()
-                        except AttributeError:
-                            deadlines_ref.document(snap.id).delete()
-                print(f"[ExamDates] Removed {len(stale)} stale subjects: {stale}")
-            return {
-                "board": self._canonical_board(board),
-                "subjects": subjects,
-                "year": target_year,
-                "series": target_series,
-                "administrative_zone": target_zone,
-                "persisted_count": 0,
-                "cached": True,
-                "events": [],
-            }
+        existing_snapshots = list(deadlines_ref.stream())
 
         try:
             events = self.fetch_official_exam_dates(
@@ -184,7 +184,6 @@ class OfficialExamDatesService:
                         series=target_series,
                         year=target_year,
                     )
-                    payload["_sync_key"] = sync_key
                     doc_id = hashlib.sha1(
                         json.dumps(
                             [
@@ -200,6 +199,13 @@ class OfficialExamDatesService:
                     ).hexdigest()
                     deadlines_ref.document(doc_id).set(payload, merge=True)
                     persisted += 1
+
+                sync_meta_ref.set({
+                    "sync_key": sync_key,
+                    "subject_count": len(subjects),
+                    "event_count": len(events),
+                    "synced_at": _utc_now(),
+                })
                 print(f"[ExamDates] Persisted {persisted} deadlines to Firestore (replaced {len(existing_snapshots)} old)")
             except Exception as e:
                 print(f"[ExamDates] Failed to persist deadlines: {e}")
