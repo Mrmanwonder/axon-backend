@@ -4,11 +4,12 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:web_socket_channel/io.dart';
+
+import 'secure_credentials_service.dart';
 
 class DeepgramTranscript {
   final String text;
@@ -240,26 +241,28 @@ class DeepgramService {
   Future<String> _resolveApiKey() async {
     if (_isUsableApiKey(_apiKey)) return _apiKey!;
 
-    final fromEnv = dotenv.env['DEEPGRAM_API_KEY']?.trim();
-    if (_isUsableApiKey(fromEnv)) {
-      _apiKey = fromEnv;
-      return _apiKey!;
-    }
-
+    // Fetch from backend via SecureCredentialsService
     try {
-      final result = await _utilsChannel.invokeMethod<String>(
-        'getDeepgramApiKey',
-      );
+      final creds = SecureCredentialsService();
+      final allCreds = await creds.getAllCredentials();
+      final key = allCreds.effectiveDeepgramKey?.trim();
+      if (_isUsableApiKey(key)) {
+        _apiKey = key;
+        return _apiKey!;
+      }
+    } catch (_) {}
+
+    // Fallback: Native platform channel for key stored during build
+    try {
+      const channel = MethodChannel('com.axon.app/utils');
+      final result = await channel.invokeMethod<String>('getDeepgramApiKey');
       if (_isUsableApiKey(result)) {
         _apiKey = result!.trim();
         return _apiKey!;
       }
-    } catch (_) {
-      // Native key lookup is optional; .env is the primary path in dev.
-    }
+    } catch (_) {}
 
     _apiKey = '';
-    debugPrint('Deepgram: No API key configured - transcription will return empty results');
     return '';
   }
 

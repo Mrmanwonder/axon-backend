@@ -1,39 +1,36 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'board_exam_service.dart';
 
 class SerperSearchService {
   SerperSearchService._();
 
   static final SerperSearchService instance = SerperSearchService._();
 
-  // Serper API key - loaded from .env
-  String get _apiKey => dotenv.env['SERPER_API_KEY'] ?? '';
-  static const String _baseUrl = 'https://google.serper.dev/search';
-
   final http.Client _client = http.Client();
 
-  Future<List<SerperSearchResult>> searchPastPapers(String query,
-      {int limit = 10}) async {
+  String get _backendUrl => BoardExamService.backendUrl;
+
+  Future<List<SerperSearchResult>> _proxySearch(
+      Map<String, dynamic> body) async {
     try {
+      final token = await FirebaseAuth.instance.currentUser?.getIdToken();
+      if (token == null) return [];
+
       final response = await _client.post(
-        Uri.parse(_baseUrl),
+        Uri.parse('$_backendUrl/api/search'),
         headers: {
-          'X-API-KEY': _apiKey,
+          'Authorization': 'Bearer $token',
           'Content-Type': 'application/json',
         },
-        body: jsonEncode({
-          'q': '$query past papers pdf',
-          'num': limit,
-          'filetype': 'pdf',
-        }),
+        body: jsonEncode(body),
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final organic = data['organic'] as List? ?? [];
-
         return organic
             .map((item) => SerperSearchResult(
                   title: item['title'] ?? '',
@@ -45,45 +42,25 @@ class SerperSearchService {
             .toList();
       }
 
-      debugPrint('Serper search failed: ${response.statusCode}');
+      debugPrint('Serper proxy failed: ${response.statusCode}');
       return [];
     } catch (e) {
-      debugPrint('Serper search error: $e');
+      debugPrint('Serper proxy error: $e');
       return [];
     }
   }
 
+  Future<List<SerperSearchResult>> searchPastPapers(String query,
+      {int limit = 10}) async {
+    return _proxySearch({
+      'q': '$query past papers pdf',
+      'num': limit,
+      'filetype': 'pdf',
+    });
+  }
+
   Future<List<SerperSearchResult>> searchByUrl(String url) async {
-    try {
-      final response = await _client.post(
-        Uri.parse('https://google.serper.dev/search'),
-        headers: {
-          'X-API-KEY': _apiKey,
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'q': 'site:$url',
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final organic = data['organic'] as List? ?? [];
-
-        return organic
-            .map((item) => SerperSearchResult(
-                  title: item['title'] ?? '',
-                  link: item['link'] ?? '',
-                  snippet: item['snippet'] ?? '',
-                  date: item['date'] ?? '',
-                ))
-            .toList();
-      }
-      return [];
-    } catch (e) {
-      debugPrint('Serper search error: $e');
-      return [];
-    }
+    return _proxySearch({'q': 'site:$url'});
   }
 }
 

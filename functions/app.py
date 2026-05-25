@@ -858,6 +858,50 @@ async def ai_status(user: dict[str, Any] = Depends(current_user)):
     return service.get_status()
 
 
+_CREDENTIAL_KEYS = [
+    "SERPER_API_KEY",
+    "CLOUDINARY_CLOUD_NAME",
+    "CLOUDINARY_UPLOAD_PRESET",
+    "GROK_API_KEY",
+    "VERCEL_API_KEY",
+    "OPENROUTER_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "DEEPGRAM_API_KEY",
+    "GOOGLE_PRIVATE_KEY",
+]
+
+
+@app.post("/api/credentials")
+async def get_credentials(user: dict[str, Any] = Depends(current_user)):
+    result = {}
+    for key in _CREDENTIAL_KEYS:
+        val = os.environ.get(key, "")
+        if key == "GOOGLE_PRIVATE_KEY":
+            val = val.replace("\\n", "\n")
+        result[key.lower()] = val
+    return result
+
+
+@app.post("/api/search")
+async def proxy_search(
+    payload: dict[str, Any],
+    user: dict[str, Any] = Depends(current_user),
+):
+    api_key = os.environ.get("SERPER_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=502, detail="Serper API key not configured")
+    import httpx
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(
+            "https://google.serper.dev/search",
+            headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+            json=payload,
+        )
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Serper error: {resp.text[:300]}")
+    return resp.json()
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("app:app", host="0.0.0.0", port=port)

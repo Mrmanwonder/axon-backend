@@ -12,10 +12,21 @@ import 'firestore_service.dart';
 import 'leaderboard_service.dart';
 import 'image_compression_service.dart';
 import 'enhanced_security_service.dart';
+import 'secure_credentials_service.dart';
 
 class CloudinaryService {
-  static const String _cloudName = 'dyoim3wmt';
-  static const String _uploadPreset = 'axon_presets';
+  late final String _cloudName;
+  late final String _uploadPreset;
+  bool _initialized = false;
+
+  Future<void> _ensureConfig() async {
+    if (_initialized) return;
+    final creds = SecureCredentialsService();
+    final all = await creds.getAllCredentials();
+    _cloudName = all.effectiveCloudinaryCloud ?? 'dyoim3wmt';
+    _uploadPreset = all.effectiveCloudinaryPreset ?? 'axon_presets';
+    _initialized = true;
+  }
 
   final ImageCompressionService _imageCompression = ImageCompressionService();
   final EnhancedSecurityService _security = EnhancedSecurityService();
@@ -43,6 +54,7 @@ class CloudinaryService {
   }
 
   Future<String?> uploadImage(File file) async {
+    await _ensureConfig();
     int attempts = 0;
     while (attempts < 2) {
       try {
@@ -98,6 +110,7 @@ class CloudinaryService {
   }
 
   Future<Map<String, String>?> uploadStudyArtifact(File file) async {
+    await _ensureConfig();
     int attempts = 0;
     while (attempts < 2) {
       try {
