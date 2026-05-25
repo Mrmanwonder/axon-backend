@@ -576,6 +576,11 @@ async def run_layout_detection_on_bytes(image_bytes: bytes) -> list[dict[str, An
 
 @app.get("/health")
 async def health():
+    # Eagerly load model on first health check so status is accurate
+    try:
+        get_model()
+    except Exception:
+        pass
     return {
         "status": "healthy",
         "firebase_admin_ready": True,
