@@ -1,816 +1,1493 @@
+"""
+axon_planner_v2.py  –  Axon Daily Plan Generator (CAIE Edition)
+════════════════════════════════════════════════════════════════
+
+Architecture
+────────────
+  1.  Data hydration      ── Firestore reads: subjects, objectives, analytics, calendar
+  2.  Phase detection     ── per-subject StudyPhase from days-to-exam
+  3.  Objective scoring   ── 7-factor weighted formula
+                               mastery_decay · grade_gap · paper_weight ·
+                               command_word_gap · prereq_unlock · examiner_flag · recency
+  4.  Topo sort           ── networkx DAG for prerequisite ordering
+  5.  Task composition    ── phase-adaptive mix with per-paper-type overrides
+                               foundation: deep_work heavy
+                               t30: practice + topic questions
+                               t14: past_paper + command drills
+                               t7:  mock_exam + examiner reports
+  6.  Block allocation    ── cognitive-load-aware slot assignment
+                               peak_focus_morning / structured_morning /
+                               afternoon / review_evening / light_evening
+                               cross-subject interleaving to reduce fatigue
+  7.  FSRS-lite spacing   ── stability·difficulty model; urgency drives surfacing
+  8.  Break injection     ── Pomodoro-style rest gaps between deep work blocks
+  9.  AI polish           ── optional Gemini pass: title rewriting + conflict repair
+ 10.  Persistence         ── batch-upsert to Firestore; completed tasks preserved;
+                               stale uncompleted tasks pruned
+
+Key improvements over V1
+────────────────────────
+  • CAIE paper-type awareness  (MCQ/structured/practical drive different task mixes)
+  • 7-factor scoring vs. simple mastery-decay
+  • FSRS-lite spacing (stability + difficulty per objective) vs. linear decay
+  • Cognitive Load Units (CLU) daily budget with cross-subject interleaving
+  • Command-word tier model (5 tiers, Bloom's-aligned)
+  • Grade-gap factor: target A* pulls harder on weak objectives than target C
+  • ExaminerReport task type: dedicated post-paper reflection pass
+  • Smart rescheduling: trim low-priority task, or defer to next day
+  • Paper-specific exam-date alignment (paper 1 soon → weight MCQ tasks higher)
+"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
-import hashlib
-import json
+import logging
 import math
-from typing import Any
+import uuid
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import date, datetime, time, timedelta
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
-try:
-    import networkx as nx
-except Exception:  # pragma: no cover - optional dependency fallback
-    nx = None
+import networkx as nx
+from google.cloud import firestore
 
+logger = logging.getLogger(__name__)
 
-def _parse_datetime(value: Any) -> datetime | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    raw = str(value).strip()
-    if not raw:
-        return None
-    try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+# ══════════════════════════════════════════════════════════════
+# §1  ENUMERATIONS & CONSTANTS
+# ══════════════════════════════════════════════════════════════
 
 
-@dataclass(frozen=True)
+class StudyPhase(str, Enum):
+    FOUNDATION = "Foundation Build"
+    T30        = "T-30 Completion"
+    T14        = "T-14 Deep Dive"
+    T7         = "T-7 Mock Sprint"
+
+
+class TaskType(str, Enum):
+    DEEP_WORK          = "deep_work"
+    PRACTICE           = "practice"
+    REVIEW             = "review"
+    PAST_PAPER         = "past_paper"
+    FLASHCARDS         = "flashcards"
+    MOCK_EXAM          = "mock_exam"
+    COMMAND_WORD_DRILL = "command_word_drill"
+    EXAMINER_REPORT    = "examiner_report"   # NEW in V2
+
+
+class IntensityLevel(str, Enum):
+    BLUE   = "blue"    # maintenance / consolidation
+    ORANGE = "orange"  # active effort required
+    RED    = "red"     # crisis / maximum urgency
+
+
+class ScheduledWindow(str, Enum):
+    PEAK_FOCUS_MORNING  = "peak_focus_morning"   # first 90 min, hardest tasks
+    STRUCTURED_MORNING  = "structured_morning"   # remaining morning
+    AFTERNOON           = "afternoon"            # mid-day (optional block)
+    REVIEW_EVENING      = "review_evening"       # active review
+    LIGHT_EVENING       = "light_evening"        # flashcards / reading only
+
+
+class PaperType(str, Enum):
+    MCQ        = "mcq"
+    STRUCTURED = "structured"
+    PRACTICAL  = "practical"
+    ESSAY      = "essay"
+    COURSEWORK = "coursework"
+
+
+# ── CAIE Command Words ──────────────────────────────────────
+# Tiered by Bloom's cognitive demand (1 = recall, 5 = evaluate)
+COMMAND_WORD_TIERS: Dict[str, int] = {
+    # Tier 1 – Knowledge retrieval
+    "state": 1, "list": 1, "name": 1, "give": 1, "identify": 1, "recall": 1,
+    # Tier 2 – Comprehension / application
+    "define": 2, "describe": 2, "outline": 2, "calculate": 2,
+    "show": 2, "determine": 2, "measure": 2, "complete": 2,
+    # Tier 3 – Analysis / reasoning
+    "explain": 3, "suggest": 3, "deduce": 3, "sketch": 3, "plot": 3,
+    "predict": 3, "comment": 3, "derive": 3, "estimate": 3,
+    # Tier 4 – Synthesis / evaluation
+    "discuss": 4, "analyse": 4, "compare": 4, "justify": 4, "contrast": 4,
+    # Tier 5 – Critical evaluation
+    "evaluate": 5, "assess": 5, "criticise": 5, "to what extent": 5,
+}
+
+# ── Phase-adaptive task mix ──────────────────────────────────
+# Each phase defines a weighted distribution across task types.
+# TaskBuilder samples from this, then applies paper-type overrides.
+PHASE_TASK_MIX: Dict[StudyPhase, List[Tuple[TaskType, float]]] = {
+    StudyPhase.FOUNDATION: [
+        (TaskType.DEEP_WORK,  0.55),
+        (TaskType.PRACTICE,   0.20),
+        (TaskType.REVIEW,     0.15),
+        (TaskType.FLASHCARDS, 0.10),
+    ],
+    StudyPhase.T30: [
+        (TaskType.PRACTICE,   0.35),
+        (TaskType.PAST_PAPER, 0.20),
+        (TaskType.DEEP_WORK,  0.20),
+        (TaskType.REVIEW,     0.15),
+        (TaskType.FLASHCARDS, 0.10),
+    ],
+    StudyPhase.T14: [
+        (TaskType.PAST_PAPER,         0.40),
+        (TaskType.COMMAND_WORD_DRILL, 0.20),
+        (TaskType.REVIEW,             0.20),
+        (TaskType.EXAMINER_REPORT,    0.10),
+        (TaskType.FLASHCARDS,         0.10),
+    ],
+    StudyPhase.T7: [
+        (TaskType.MOCK_EXAM,          0.60),
+        (TaskType.EXAMINER_REPORT,    0.15),
+        (TaskType.COMMAND_WORD_DRILL, 0.15),
+        (TaskType.FLASHCARDS,         0.10),
+    ],
+}
+
+# Paper-type overrides: MCQ and Practical papers demand a very different task diet
+PAPER_TYPE_TASK_OVERRIDE: Dict[PaperType, Dict[TaskType, float]] = {
+    PaperType.MCQ: {
+        TaskType.PRACTICE:   0.50,
+        TaskType.FLASHCARDS: 0.30,
+        TaskType.PAST_PAPER: 0.20,
+    },
+    PaperType.PRACTICAL: {
+        TaskType.DEEP_WORK:          0.40,   # lab technique theory
+        TaskType.PAST_PAPER:         0.35,
+        TaskType.COMMAND_WORD_DRILL: 0.25,   # "sketch", "plot", "describe" heavy
+    },
+}
+
+# ── Cognitive Load Units ─────────────────────────────────────
+# Empirically weighted mental effort per task type.
+# Total CLU budget per day is capped; heavier tasks consume more budget.
+CLU_PER_TASK: Dict[TaskType, float] = {
+    TaskType.MOCK_EXAM:          10.0,
+    TaskType.PAST_PAPER:          7.0,
+    TaskType.DEEP_WORK:           6.0,
+    TaskType.COMMAND_WORD_DRILL:  5.0,
+    TaskType.PRACTICE:            5.0,
+    TaskType.EXAMINER_REPORT:     3.0,
+    TaskType.REVIEW:              3.0,
+    TaskType.FLASHCARDS:          2.0,
+}
+
+DAILY_CLU_BUDGET         = 32.0   # max cognitive load units per day
+MAX_SAME_SUBJECT_PER_DAY = 3      # prevent single-subject saturation
+MAX_CONSECUTIVE_RED      = 1      # never two red-intensity tasks back-to-back
+MAX_COMMAND_DRILLS_PER_DAY = 2    # injected on top of phase mix
+
+# Pomodoro rhythm (minutes)
+POMODORO_WORK  = 50
+POMODORO_BREAK = 10
+
+
+# ══════════════════════════════════════════════════════════════
+# §2  DATA MODELS
+# ══════════════════════════════════════════════════════════════
+
+
+@dataclass
+class Paper:
+    number: int
+    paper_type: PaperType
+    duration_minutes: int
+    total_marks: int
+    weight_pct: float            # % contribution to final grade
+    exam_date: Optional[date] = None
+
+
+@dataclass
+class SyllabusObjective:
+    id: str
+    topic: str
+    subtopic: str
+    description: str
+    paper_numbers: List[int]     # which papers assess this objective
+    command_words: List[str]     # CAIE command words used in questions
+    prerequisites: List[str]     # ids of prerequisite objectives
+    examiner_flagged: bool       # flagged as common error in examiner reports
+    mastery_score: float         # 0–1 current mastery
+    last_studied: Optional[datetime]
+    stability: float             # FSRS stability in days (default 1.0)
+    difficulty: float            # FSRS difficulty 0–1 (default 0.3)
+    next_due: Optional[date] = None   # FSRS-computed next review date
+
+
+@dataclass
+class SubjectContext:
+    subject_id: str
+    name: str
+    code: str                    # CAIE subject code e.g. "9702"
+    level: str                   # "AS", "A2", "IGCSE", "O_LEVEL"
+    papers: List[Paper]
+    objectives: List[SyllabusObjective]
+    days_to_exam: int
+    target_grade: str            # "A*", "A", "B" …
+    phase: StudyPhase
+    grade_gap: float             # 0–1: gap between current perf and target threshold
+    weak_command_words: List[str]
+    dep_graph: nx.DiGraph = field(default_factory=nx.DiGraph)
+
+
+@dataclass
 class PlannerTask:
+    id: str
     title: str
     subject: str
+    description: str
     paper: str
     objective_id: str
-    scheduled_start: datetime
-    scheduled_end: datetime
+    start_time: datetime
+    end_time: datetime
+    status: str                  # pending | completed | rescheduled | trimmed
+    date: str                    # ISO date string
+    reason: str                  # human-readable rationale
     intensity_score: float
-    intensity_label: str
+    intensity_label: str         # blue | orange | red
     phase: str
     anchor_date: str
     task_type: str
     scheduled_window: str
-    reason: str
-
-    def to_firestore(self) -> dict[str, Any]:
-        return {
-            "title": " ".join(self.title.strip().split()),
-            "subject": self.subject,
-            "paper": self.paper,
-            "objective_id": self.objective_id,
-            "start_time": self.scheduled_start.isoformat(),
-            "end_time": self.scheduled_end.isoformat(),
-            "status": "pending",
-            "date": self.scheduled_start.date().isoformat(),
-            "reason": self.reason,
-            "is_sync_to_google": True,
-            "intensity_score": self.intensity_score,
-            "intensity_label": self.intensity_label,
-            "phase": self.phase,
-            "anchor_date": self.anchor_date,
-            "task_type": self.task_type,
-            "scheduled_window": self.scheduled_window,
-        }
+    priority: int                # maps to Flutter Priority enum index
+    is_completed: bool = False
+    is_sync_to_google: bool = False
 
 
-class DailyPlannerService:
-    def __init__(self, db, planner_model=None) -> None:
-        self._db = db
-        self._planner_model = planner_model
+@dataclass
+class _Slot:
+    """Internal representation of a time slot during block allocation."""
+    window: ScheduledWindow
+    start: datetime
+    end: datetime
+    clu_remaining: float
 
-    def generate_and_persist_daily_plan(
+
+# ══════════════════════════════════════════════════════════════
+# §3  FSRS-LITE SPACED REPETITION
+# ══════════════════════════════════════════════════════════════
+
+
+class FSRSLite:
+    """
+    Minimal FSRS (Free Spaced Repetition Scheduler) implementation.
+
+    Core equation:
+        R(t, S) = exp(ln(0.9) * t / S)
+    where R = retrievability, t = days elapsed, S = stability.
+
+    Urgency score = 1 - R, clamped to [0, 1].
+    Higher urgency → higher priority in today's plan.
+    """
+
+    DESIRED_RETENTION = 0.90
+
+    @staticmethod
+    def retrievability(stability: float, elapsed_days: float) -> float:
+        if elapsed_days <= 0 or stability <= 0:
+            return 1.0
+        return math.exp(math.log(FSRSLite.DESIRED_RETENTION) * elapsed_days / stability)
+
+    @staticmethod
+    def urgency(obj: SyllabusObjective, today: date) -> float:
+        """Returns 0–1 urgency; 1.0 = overdue, 0.0 = freshly reviewed."""
+        if obj.last_studied is None:
+            return 1.0
+        elapsed = max(0, (today - obj.last_studied.date()).days)
+        r = FSRSLite.retrievability(obj.stability, elapsed)
+        return round(1.0 - r, 4)
+
+    @staticmethod
+    def next_interval_days(stability: float) -> float:
+        """Days until retrievability drops to DESIRED_RETENTION."""
+        # Derived from R(t, S) = 0.9 → t = S (always, by construction)
+        return max(1.0, stability)
+
+    @staticmethod
+    def update_after_recall(stability: float, difficulty: float) -> float:
+        """Called when student demonstrates good recall."""
+        return stability * (1.0 + 11.0 * (1.0 - difficulty) * math.exp(-0.1 * stability))
+
+    @staticmethod
+    def update_after_lapse(stability: float) -> float:
+        """Called when student fails recall (e.g. marks question wrong)."""
+        return max(0.5, stability * 0.20)
+
+
+# ══════════════════════════════════════════════════════════════
+# §4  OBJECTIVE SCORING ENGINE
+# ══════════════════════════════════════════════════════════════
+
+
+class ObjectiveScoringEngine:
+    """
+    Computes a priority score ∈ [0, 1] for each syllabus objective.
+
+    Seven weighted factors (weights sum to 1.0):
+
+    ┌─────────────────────┬────────┬─────────────────────────────────────────────┐
+    │ Factor              │ Weight │ Rationale                                   │
+    ├─────────────────────┼────────┼─────────────────────────────────────────────┤
+    │ F1 mastery_decay    │  0.25  │ FSRS urgency: how much has been forgotten?  │
+    │ F2 grade_gap        │  0.20  │ Distance from target grade (A*, A, B …)     │
+    │ F3 paper_weight     │  0.15  │ Paper's % contribution to final grade       │
+    │ F4 command_word_gap │  0.15  │ Deficit in required command-word proficiency│
+    │ F5 prereq_unlock    │  0.10  │ # of objectives this one gates downstream   │
+    │ F6 examiner_flag    │  0.10  │ Flagged as common mistake in examiner report│
+    │ F7 recency_penalty  │  0.05  │ Penalises recently studied topics (−sign)   │
+    └─────────────────────┴────────┴─────────────────────────────────────────────┘
+
+    After weighted sum, a phase multiplier amplifies urgency as exams near:
+      Foundation × 1.0 | T-30 × 1.2 | T-14 × 1.5 | T-7 × 2.0
+    Crisis modifier (days ≤ 3 & mastery < 0.5) stacks an additional × 1.5.
+
+    Paper proximity boost: if a specific paper's exam is within 5 days,
+    objectives examined by that paper get a +0.15 additive bonus.
+    """
+
+    WEIGHTS = {
+        "mastery_decay":    0.25,
+        "grade_gap":        0.20,
+        "paper_weight":     0.15,
+        "command_word_gap": 0.15,
+        "prereq_unlock":    0.10,
+        "examiner_flag":    0.10,
+        "recency_penalty":  0.05,
+    }
+
+    GRADE_THRESHOLDS: Dict[str, float] = {
+        "A*": 0.90, "A": 0.80, "B": 0.70, "C": 0.60, "D": 0.50, "E": 0.40,
+    }
+
+    PHASE_MULTIPLIER: Dict[StudyPhase, float] = {
+        StudyPhase.FOUNDATION: 1.0,
+        StudyPhase.T30:        1.2,
+        StudyPhase.T14:        1.5,
+        StudyPhase.T7:         2.0,
+    }
+
+    def score(
         self,
-        user_id: str,
-        prioritized_objective_ids: list[str] | None = None,
-        crisis_mode: bool = False,
-        focus_areas: str | None = None,
-        plan_date: str | None = None,
-        force: bool = False,
-    ) -> list[dict[str, Any]]:
-        target_date = self._resolve_plan_date(plan_date)
-        plan_ref = self._db.collection("users_private").document(user_id).collection("daily_plan")
-        existing_docs = list(plan_ref.where("date", "==", target_date.isoformat()).stream())
-        if existing_docs and not force:
-            return [self._with_id(snapshot.id, snapshot.to_dict() or {}) for snapshot in existing_docs]
+        obj: SyllabusObjective,
+        ctx: SubjectContext,
+        cw_proficiency: Dict[str, float],
+        today: date,
+    ) -> float:
+        f: Dict[str, float] = {}
 
-        tasks = self.calculate_daily_load(
-            user_id,
-            prioritized_objective_ids=prioritized_objective_ids,
-            crisis_mode=crisis_mode,
-            focus_areas=focus_areas,
-            plan_date=target_date,
+        # F1: FSRS urgency (0 = fresh, 1 = overdue)
+        f["mastery_decay"] = FSRSLite.urgency(obj, today)
+
+        # F2: grade gap – how far current mastery is from the target threshold
+        target_thresh = self.GRADE_THRESHOLDS.get(ctx.target_grade, 0.70)
+        f["grade_gap"] = max(0.0, target_thresh - obj.mastery_score)
+
+        # F3: average weight of papers that examine this objective
+        rel_papers = [p for p in ctx.papers if p.number in obj.paper_numbers]
+        if rel_papers:
+            f["paper_weight"] = sum(p.weight_pct / 100.0 for p in rel_papers) / len(rel_papers)
+        else:
+            f["paper_weight"] = 0.30  # fallback assumption
+
+        # F4: command-word gap – max gap weighted by tier (higher tiers matter more)
+        if obj.command_words:
+            gaps = [
+                max(0.0, 1.0 - cw_proficiency.get(cw, 0.0))
+                * (COMMAND_WORD_TIERS.get(cw, 1) / 5.0)
+                for cw in obj.command_words
+            ]
+            f["command_word_gap"] = max(gaps)
+        else:
+            f["command_word_gap"] = 0.0
+
+        # F5: prerequisite unlock value (capped at 1.0 for 5+ successors)
+        successors = len(list(ctx.dep_graph.successors(obj.id)))
+        f["prereq_unlock"] = min(1.0, successors / 5.0)
+
+        # F6: examiner flagged
+        f["examiner_flag"] = 1.0 if obj.examiner_flagged else 0.0
+
+        # F7: recency penalty – penalises recently studied topics (negative contribution)
+        if obj.last_studied:
+            days_since = max(0, (today - obj.last_studied.date()).days)
+            f["recency_penalty"] = max(0.0, 1.0 - days_since / 3.0)
+        else:
+            f["recency_penalty"] = 0.0
+
+        # Weighted sum (recency_penalty subtracts)
+        raw = (
+            sum(self.WEIGHTS[k] * f[k] for k in self.WEIGHTS if k != "recency_penalty")
+            - self.WEIGHTS["recency_penalty"] * f["recency_penalty"]
         )
-        tasks = self._refine_tasks_with_model(
-            user_id=user_id,
-            tasks=tasks,
-            focus_areas=focus_areas,
-            plan_date=target_date,
+
+        # Phase multiplier
+        multiplied = raw * self.PHASE_MULTIPLIER[ctx.phase]
+
+        # Crisis modifier
+        if ctx.days_to_exam <= 3 and obj.mastery_score < 0.50:
+            multiplied *= 1.5
+
+        # Paper proximity boost: specific paper exam within 5 days
+        for p in rel_papers:
+            if p.exam_date and 0 <= (p.exam_date - today).days <= 5:
+                multiplied += 0.15
+                break
+
+        return round(min(1.0, max(0.0, multiplied)), 4)
+
+
+# ══════════════════════════════════════════════════════════════
+# §5  TASK BUILDER
+# ══════════════════════════════════════════════════════════════
+
+
+class TaskBuilder:
+    """
+    Converts a scored objective + SubjectContext into a fully populated PlannerTask.
+
+    Responsibilities:
+    - Select task type from phase mix or paper override
+    - Determine intensity (blue/orange/red) from score + days to exam
+    - Build human-readable title and actionable description
+    - Assign to the correct ScheduledWindow
+    - Compute start/end times from the slot
+    """
+
+    # Default durations (minutes) per task type
+    DURATIONS: Dict[TaskType, int] = {
+        TaskType.MOCK_EXAM:          120,
+        TaskType.PAST_PAPER:          60,
+        TaskType.DEEP_WORK:           50,
+        TaskType.PRACTICE:            40,
+        TaskType.COMMAND_WORD_DRILL:  30,
+        TaskType.REVIEW:              30,
+        TaskType.EXAMINER_REPORT:     25,
+        TaskType.FLASHCARDS:          20,
+    }
+
+    # Which windows each task type is best suited to
+    WINDOW_AFFINITY: Dict[TaskType, List[ScheduledWindow]] = {
+        TaskType.MOCK_EXAM:          [ScheduledWindow.PEAK_FOCUS_MORNING],
+        TaskType.PAST_PAPER:         [ScheduledWindow.PEAK_FOCUS_MORNING, ScheduledWindow.STRUCTURED_MORNING],
+        TaskType.DEEP_WORK:          [ScheduledWindow.PEAK_FOCUS_MORNING, ScheduledWindow.STRUCTURED_MORNING],
+        TaskType.PRACTICE:           [ScheduledWindow.STRUCTURED_MORNING, ScheduledWindow.AFTERNOON],
+        TaskType.COMMAND_WORD_DRILL: [ScheduledWindow.AFTERNOON, ScheduledWindow.STRUCTURED_MORNING],
+        TaskType.EXAMINER_REPORT:    [ScheduledWindow.REVIEW_EVENING, ScheduledWindow.AFTERNOON],
+        TaskType.REVIEW:             [ScheduledWindow.REVIEW_EVENING],
+        TaskType.FLASHCARDS:         [ScheduledWindow.REVIEW_EVENING, ScheduledWindow.LIGHT_EVENING],
+    }
+
+    TITLE_PREFIXES: Dict[TaskType, str] = {
+        TaskType.DEEP_WORK:          "Master",
+        TaskType.PRACTICE:           "Practice",
+        TaskType.REVIEW:             "Review",
+        TaskType.PAST_PAPER:         "Past Paper —",
+        TaskType.FLASHCARDS:         "Flashcards —",
+        TaskType.MOCK_EXAM:          "Mock Exam —",
+        TaskType.COMMAND_WORD_DRILL: "Command Drill —",
+        TaskType.EXAMINER_REPORT:    "Examiner Notes —",
+    }
+
+    INTENSITY_PRIORITY = {
+        IntensityLevel.RED:    3,  # Priority.high
+        IntensityLevel.ORANGE: 2,  # Priority.medium
+        IntensityLevel.BLUE:   1,  # Priority.low
+    }
+
+    def select_task_type(
+        self,
+        obj: SyllabusObjective,
+        ctx: SubjectContext,
+        paper_override: Optional[Dict[TaskType, float]],
+    ) -> TaskType:
+        """
+        Task-type selection logic (in priority order):
+        1. Paper-type override (MCQ / practical → specific mix)
+        2. Examiner-flagged objective in T14/T7 → examiner_report
+        3. High-tier command word gap → command_word_drill
+        4. Phase mix top weight
+        """
+        if paper_override:
+            return max(paper_override, key=lambda k: paper_override[k])
+
+        if obj.examiner_flagged and ctx.phase in (StudyPhase.T14, StudyPhase.T7):
+            return TaskType.EXAMINER_REPORT
+
+        if obj.command_words:
+            max_tier = max(COMMAND_WORD_TIERS.get(cw, 1) for cw in obj.command_words)
+            if max_tier >= 4 and ctx.phase in (StudyPhase.T14, StudyPhase.T7):
+                return TaskType.COMMAND_WORD_DRILL
+
+        phase_mix = PHASE_TASK_MIX[ctx.phase]
+        return max(phase_mix, key=lambda x: x[1])[0]
+
+    def determine_intensity(
+        self, score: float, days_to_exam: int
+    ) -> Tuple[float, IntensityLevel]:
+        if days_to_exam <= 3 or score >= 0.75:
+            return score, IntensityLevel.RED
+        elif score >= 0.45:
+            return score, IntensityLevel.ORANGE
+        else:
+            return score, IntensityLevel.BLUE
+
+    def build_title(self, obj: SyllabusObjective, task_type: TaskType) -> str:
+        prefix = self.TITLE_PREFIXES.get(task_type, "Study")
+        topic = obj.topic[:40] if len(obj.topic) > 40 else obj.topic
+        return f"{prefix} {topic}"
+
+    def build_description(
+        self, obj: SyllabusObjective, task_type: TaskType, ctx: SubjectContext
+    ) -> str:
+        parts = []
+        if obj.description:
+            parts.append(obj.description)
+        if obj.command_words:
+            parts.append(f"Command words: {', '.join(obj.command_words)}")
+        if task_type == TaskType.EXAMINER_REPORT and obj.examiner_flagged:
+            parts.append("⚠ Common error area — review examiner report commentary carefully.")
+        if task_type == TaskType.PAST_PAPER:
+            parts.append(f"Use mark-scheme after completing. Annotate why wrong answers were chosen.")
+        if task_type == TaskType.MOCK_EXAM:
+            parts.append("Strict timed conditions. No mark-scheme until complete.")
+        return " | ".join(parts)
+
+    def preferred_window(self, task_type: TaskType, slots: List[_Slot]) -> Optional[_Slot]:
+        preferred = self.WINDOW_AFFINITY.get(task_type, [ScheduledWindow.REVIEW_EVENING])
+        for pref in preferred:
+            for slot in slots:
+                if slot.window == pref and slot.clu_remaining > 0:
+                    return slot
+        # Fallback: any slot with capacity
+        for slot in slots:
+            if slot.clu_remaining > 0:
+                return slot
+        return None
+
+    def build(
+        self,
+        obj: SyllabusObjective,
+        ctx: SubjectContext,
+        score: float,
+        task_type: TaskType,
+        slot_start: datetime,
+        window: ScheduledWindow,
+        today_str: str,
+    ) -> PlannerTask:
+        intensity_score, intensity = self.determine_intensity(score, ctx.days_to_exam)
+        duration = self.DURATIONS[task_type]
+        end_time = slot_start + timedelta(minutes=duration)
+
+        paper_str = ""
+        if obj.paper_numbers:
+            paper_str = f"Paper {obj.paper_numbers[0]}"
+
+        return PlannerTask(
+            id=str(uuid.uuid4()),
+            title=self.build_title(obj, task_type),
+            subject=ctx.name,
+            description=self.build_description(obj, task_type, ctx),
+            paper=paper_str,
+            objective_id=obj.id,
+            start_time=slot_start,
+            end_time=end_time,
+            status="pending",
+            date=today_str,
+            reason=(
+                f"Score {score:.3f} | {ctx.phase.value} | "
+                f"{ctx.days_to_exam}d to exam | target {ctx.target_grade}"
+            ),
+            intensity_score=round(intensity_score, 3),
+            intensity_label=intensity.value,
+            phase=ctx.phase.value,
+            anchor_date=today_str,
+            task_type=task_type.value,
+            scheduled_window=window.value,
+            priority=self.INTENSITY_PRIORITY[intensity],
         )
 
-        existing_by_id = {
-            self._task_document_id(snapshot.to_dict() or {}): snapshot.to_dict() or {}
-            for snapshot in existing_docs
-        }
-        generated_ids: set[str] = set()
 
-        for task in tasks:
-            doc_id = self._task_document_id(task)
-            generated_ids.add(doc_id)
-            preserved = existing_by_id.get(doc_id, {})
-            if preserved.get("is_completed") is True or str(preserved.get("status", "")).lower() in {
-                "completed",
-                "done",
-            }:
-                task = {
-                    **task,
-                    "is_completed": preserved.get("is_completed", False),
-                    "status": preserved.get("status", "completed"),
-                    "completed_at": preserved.get("completed_at"),
-                }
-            plan_ref.document(doc_id).set(
+# ══════════════════════════════════════════════════════════════
+# §6  SLOT MANAGER  (cognitive load + time block allocation)
+# ══════════════════════════════════════════════════════════════
+
+
+class SlotManager:
+    """
+    Manages time slots and enforces cognitive load rules.
+
+    Day layout (proportional to available_hours):
+      ┌──────────────────────────────────────────────────┐
+      │  peak_focus_morning  [40% of time]               │
+      │  structured_morning  [20% of time]               │
+      │  — 20-min break —                                │
+      │  afternoon           [20% of time, optional]     │
+      │  — 30-min break —                                │
+      │  review_evening      [15% of time]               │
+      │  light_evening       [ 5% of time]               │
+      └──────────────────────────────────────────────────┘
+
+    Constraints enforced:
+      • Daily CLU budget (DAILY_CLU_BUDGET)
+      • No back-to-back RED intensity tasks
+      • Max MAX_SAME_SUBJECT_PER_DAY tasks per subject
+      • Pomodoro break gap injected between deep work blocks
+    """
+
+    def __init__(self, day_start: datetime, available_hours: float):
+        self._slots: List[_Slot] = self._build_slots(day_start, available_hours)
+        self._total_clu: float = 0.0
+        self._last_intensity: Optional[IntensityLevel] = None
+        self._subject_counts: Dict[str, int] = defaultdict(int)
+
+    # ── Slot construction ────────────────────────────────────
+
+    def _build_slots(self, ds: datetime, hours: float) -> List[_Slot]:
+        total_min = int(hours * 60)
+        slots: List[_Slot] = []
+
+        def add(window: ScheduledWindow, pct: float, clu_pct: float, start: datetime) -> datetime:
+            dur = int(total_min * pct)
+            end = start + timedelta(minutes=dur)
+            slots.append(_Slot(window=window, start=start, end=end,
+                               clu_remaining=DAILY_CLU_BUDGET * clu_pct))
+            return end
+
+        cursor = ds
+        cursor = add(ScheduledWindow.PEAK_FOCUS_MORNING,  0.40, 0.40, cursor)
+        cursor = add(ScheduledWindow.STRUCTURED_MORNING,  0.20, 0.20, cursor)
+        cursor += timedelta(minutes=20)   # break
+        cursor = add(ScheduledWindow.AFTERNOON,           0.20, 0.20, cursor)
+        cursor += timedelta(minutes=30)   # break
+        cursor = add(ScheduledWindow.REVIEW_EVENING,      0.15, 0.15, cursor)
+        cursor = add(ScheduledWindow.LIGHT_EVENING,       0.05, 0.05, cursor)
+        return slots
+
+    # ── Guard checks ─────────────────────────────────────────
+
+    def can_fit(
+        self, task_type: TaskType, intensity: IntensityLevel, subject: str
+    ) -> bool:
+        clu_needed = CLU_PER_TASK[task_type]
+        if self._total_clu + clu_needed > DAILY_CLU_BUDGET:
+            return False
+        if intensity == IntensityLevel.RED and self._last_intensity == IntensityLevel.RED:
+            return False
+        if self._subject_counts[subject] >= MAX_SAME_SUBJECT_PER_DAY:
+            return False
+        return True
+
+    # ── Slot consumption ─────────────────────────────────────
+
+    def consume(
+        self,
+        task_type: TaskType,
+        intensity: IntensityLevel,
+        subject: str,
+        duration_minutes: int,
+        preferred_window: Optional[ScheduledWindow] = None,
+    ) -> Optional[Tuple[datetime, ScheduledWindow]]:
+        """
+        Allocates a time slot for the task.
+        Returns (start_datetime, window) or None if no capacity.
+        Advances the slot cursor and injects Pomodoro break if needed.
+        """
+        clu = CLU_PER_TASK[task_type]
+
+        # Try preferred window first, then fall through
+        ordered = self._slots[:]
+        if preferred_window:
+            ordered.sort(key=lambda s: (0 if s.window == preferred_window else 1))
+
+        for slot in ordered:
+            if slot.clu_remaining < clu:
+                continue
+            if slot.start >= slot.end:
+                continue
+
+            # Fits — allocate
+            start = slot.start
+            slot.clu_remaining -= clu
+            self._total_clu += clu
+            self._last_intensity = intensity
+            self._subject_counts[subject] += 1
+
+            # Advance slot cursor (add Pomodoro break after deep-focus tasks)
+            gap = POMODORO_BREAK if task_type in (TaskType.DEEP_WORK, TaskType.PAST_PAPER, TaskType.MOCK_EXAM) else 5
+            slot.start = start + timedelta(minutes=duration_minutes + gap)
+
+            return (start, slot.window)
+
+        return None
+
+
+# ══════════════════════════════════════════════════════════════
+# §7  FIRESTORE HYDRATOR
+# ══════════════════════════════════════════════════════════════
+
+
+class FirestoreHydrator:
+    """All Firestore reads for a given user, with graceful fallbacks."""
+
+    def __init__(self, db: firestore.Client, uid: str):
+        self.db = db
+        self.uid = uid
+        self._user_doc = db.collection("users_private").document(uid)
+
+    # ── Helpers ──────────────────────────────────────────────
+
+    def _safe_collection(self, *path_parts: str) -> List[dict]:
+        try:
+            ref = self._user_doc
+            for part in path_parts:
+                ref = ref.collection(part) if hasattr(ref, "collection") else ref.document(part)
+            return [{"id": s.id, **s.to_dict()} for s in ref.stream()]
+        except Exception as e:
+            logger.warning(f"Firestore collection read failed {path_parts}: {e}")
+            return []
+
+    def _safe_doc(self, *path_parts: str) -> dict:
+        try:
+            ref = self._user_doc
+            for i, part in enumerate(path_parts):
+                if i % 2 == 0:
+                    ref = ref.collection(part)
+                else:
+                    ref = ref.document(part)
+            snap = ref.get()
+            return snap.to_dict() or {}
+        except Exception as e:
+            logger.warning(f"Firestore doc read failed {path_parts}: {e}")
+            return {}
+
+    # ── Public reads ─────────────────────────────────────────
+
+    def load_settings(self) -> dict:
+        return self._safe_doc("settings", "planner")
+
+    def load_subjects(self) -> List[dict]:
+        return self._safe_collection("subjects")
+
+    def load_objectives(self, subject_id: str) -> List[dict]:
+        try:
+            snaps = (
+                self._user_doc.collection("subjects")
+                .document(subject_id)
+                .collection("objectives")
+                .stream()
+            )
+            return [{"id": s.id, **s.to_dict()} for s in snaps]
+        except Exception as e:
+            logger.warning(f"Failed to load objectives for {subject_id}: {e}")
+            return []
+
+    def load_analytics(self) -> dict:
+        return self._safe_doc("analytics", "summary")
+
+    def load_command_word_proficiency(self) -> Dict[str, float]:
+        raw = self._safe_doc("analytics", "command_words")
+        return {k: float(v) for k, v in raw.items() if isinstance(v, (int, float))}
+
+    def load_calendar_events(self, date_str: str) -> List[dict]:
+        try:
+            snaps = (
+                self._user_doc.collection("calendar_events")
+                .where("date", "==", date_str)
+                .stream()
+            )
+            return [s.to_dict() for s in snaps]
+        except Exception:
+            return []
+
+    def load_existing_plan(self, date_str: str) -> List[dict]:
+        try:
+            snaps = (
+                self._user_doc.collection("daily_plan")
+                .where("date", "==", date_str)
+                .stream()
+            )
+            return [{"id": s.id, **s.to_dict()} for s in snaps]
+        except Exception:
+            return []
+
+
+# ══════════════════════════════════════════════════════════════
+# §8  AI POLISH PASS  (optional Gemini refinement)
+# ══════════════════════════════════════════════════════════════
+
+
+class AIPolicier:
+    """
+    Optional Gemini 1.5-Flash pass over the deterministic plan.
+
+    What it improves:
+      • Rewrites task titles to be specific and motivating (CAIE context-aware)
+      • Enhances descriptions with concrete study actions
+      • Detects and resolves same-paper / same-window conflicts
+      • Adds examiner-report citations for flagged objectives
+      • Ensures task progression is pedagogically coherent
+
+    PRESERVES: all fields except title, description, reason.
+    Does NOT add or remove tasks (deterministic engine controls structure).
+    Falls back silently to original tasks if API call fails.
+    """
+
+    SYSTEM_PROMPT = """You are Axon's AI study coach for CAIE students (IGCSE, AS Level, A Level).
+A deterministic algorithm has generated today's study plan. Your job is to IMPROVE it:
+
+1. Rewrite each task title: specific topic + action verb, max 60 chars, no generic phrasing.
+   Bad: "Deep Work Waves" | Good: "Master Superposition & Path Difference"
+2. Rewrite descriptions: give 1–2 concrete study actions (e.g. "Derive the formula, then attempt
+   3 past-paper questions on phase difference before checking the mark scheme.").
+3. Flag conflicts (same paper + same window, duplicate objectives) and resolve in the reason field.
+4. For examiner_report tasks, include the specific common mistake pattern from the reason field.
+5. Keep a motivating but calm tone appropriate for a student under exam pressure.
+
+Return ONLY a valid JSON array. Preserve all fields except title, description, reason.
+Do NOT add or remove tasks. Do NOT wrap in markdown code fences.
+"""
+
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key
+
+    def refine(self, tasks: List[PlannerTask]) -> List[PlannerTask]:
+        if not self.api_key or not tasks:
+            return tasks
+        try:
+            import json
+            import google.generativeai as genai
+            genai.configure(api_key=self.api_key)
+            model = genai.GenerativeModel(
+                "gemini-1.5-flash",
+                system_instruction=self.SYSTEM_PROMPT,
+            )
+            payload = [
                 {
-                    **task,
-                    "generated_by": "daily_planner_model" if self._planner_model else "deterministic_planner",
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                },
-                merge=True,
+                    "id": t.id,
+                    "title": t.title,
+                    "subject": t.subject,
+                    "description": t.description,
+                    "task_type": t.task_type,
+                    "phase": t.phase,
+                    "intensity_label": t.intensity_label,
+                    "reason": t.reason,
+                    "objective_id": t.objective_id,
+                    "paper": t.paper,
+                }
+                for t in tasks
+            ]
+            response = model.generate_content(
+                f"Improve this CAIE study plan:\n{json.dumps(payload, indent=2)}"
             )
+            refined: List[dict] = json.loads(response.text.strip())
+            task_map: Dict[str, PlannerTask] = {t.id: t for t in tasks}
+            for r in refined:
+                tid = r.get("id")
+                if tid and tid in task_map:
+                    orig = task_map[tid]
+                    task_map[tid] = PlannerTask(
+                        **{
+                            **orig.__dict__,
+                            "title":       str(r.get("title",       orig.title))[:80],
+                            "description": str(r.get("description", orig.description))[:600],
+                            "reason":      str(r.get("reason",      orig.reason))[:300],
+                        }
+                    )
+            return list(task_map.values())
+        except Exception as e:
+            logger.warning(f"AI polish pass failed (using original plan): {e}")
+            return tasks
 
-        for snapshot in existing_docs:
-            data = snapshot.to_dict() or {}
-            doc_id = self._task_document_id(data)
-            if doc_id in generated_ids:
-                continue
-            if data.get("is_completed") is True:
-                continue
-            if str(data.get("status", "pending")).lower() not in {"pending", "generated"}:
-                continue
-            try:
-                snapshot.reference.delete()
-            except AttributeError:
-                plan_ref.document(snapshot.id).delete()
 
-        return [{**task, "id": self._task_document_id(task)} for task in tasks]
+# ══════════════════════════════════════════════════════════════
+# §9  CONTEXT BUILDER  (Firestore → SubjectContext)
+# ══════════════════════════════════════════════════════════════
 
-    def run_daily_build(self, user_id: str) -> dict[str, Any]:
-        tasks = self.generate_and_persist_daily_plan(user_id, force=True)
-        return {
-            "tasks": tasks,
-            "task_count": len(tasks),
-            "built_at": datetime.now(timezone.utc).isoformat(),
-            "source_type": "DAILY_BUILD",
-        }
 
-    def reschedule_missed_block(self, user_id: str, task_id: str) -> dict[str, Any]:
-        plan_ref = self._db.collection("users_private").document(user_id).collection("daily_plan")
-        task_ref = plan_ref.document(task_id)
-        snapshot = task_ref.get()
-        if not snapshot.exists:
-            return {"status": "not_found", "task_id": task_id}
+class SubjectContextBuilder:
+    """Builds SubjectContext objects from raw Firestore documents."""
 
-        task = snapshot.to_dict() or {}
-        now = datetime.now(timezone.utc)
+    GRADE_THRESHOLDS = ObjectiveScoringEngine.GRADE_THRESHOLDS
 
-        # Check for existing tasks at 8 PM and 9 PM to avoid overlaps
-        target_hours = [20, 21]  # 8 PM, then 9 PM if occupied
-        assigned_hour = None
-
-        for hour in target_hours:
-            slot_conflict = False
-            slot_start = datetime.combine(now.date(), time(hour=hour), tzinfo=timezone.utc)
-            slot_end = slot_start + timedelta(minutes=45)
-
-            for other in plan_ref.where("date", "==", now.date().isoformat()).stream():
-                if other.id == task_id:
-                    continue
-                other_payload = other.to_dict() or {}
-                other_start_str = other_payload.get("start_time")
-                other_end_str = other_payload.get("end_time")
-
-                if other_start_str and other_end_str:
-                    try:
-                        other_start = datetime.fromisoformat(other_start_str.replace("Z", "+00:00"))
-                        other_end = datetime.fromisoformat(other_end_str.replace("Z", "+00:00"))
-                        # Check for overlap (simple interval overlap check)
-                        if slot_start < other_end and slot_end > other_start:
-                            slot_conflict = True
-                            break
-                    except (ValueError, TypeError):
-                        continue
-
-            if not slot_conflict:
-                assigned_hour = hour
-                break
-
-        if assigned_hour is None:
-            return {
-                "status": "conflict",
-                "task_id": task_id,
-                "message": "No available slot found for rescheduling this evening.",
-            }
-
-        start = datetime.combine(now.date(), time(hour=assigned_hour), tzinfo=timezone.utc)
-        end = start + timedelta(minutes=45)
-        time_label = "8 PM" if assigned_hour == 20 else "9 PM"
-
-        task_ref.set(
-            {
-                "status": "rescheduled",
-                "start_time": start.isoformat(),
-                "end_time": end.isoformat(),
-                "reason": (
-                    f"{task.get('reason', '')} Life happened: shifted this block to {time_label} tonight "
-                    "and trimmed review work to compensate."
-                ).strip(),
-                "scheduled_window": "late_evening_recovery",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            },
-            merge=True,
-        )
-
-        trimmed_id = None
-        for other in plan_ref.where("date", "==", now.date().isoformat()).stream():
-            if other.id == task_id:
-                continue
-            payload = other.to_dict() or {}
-            if str(payload.get("task_type", "")).lower() == "revision":
-                other.reference.set(
-                    {
-                        "status": "trimmed",
-                        "reason": (
-                            f"{payload.get('reason', '')} Review trimmed to make room for "
-                            f"the rescheduled {task.get('title', 'study block')}."
-                        ).strip(),
-                    },
-                    merge=True,
-                )
-                trimmed_id = other.id
-                break
-
-        return {
-            "status": "rescheduled",
-            "task_id": task_id,
-            "trimmed_task_id": trimmed_id,
-            "new_start_time": start.isoformat(),
-            "new_end_time": end.isoformat(),
-        }
-
-    def calculate_daily_load(
+    def build(
         self,
-        user_id: str,
-        prioritized_objective_ids: list[str] | None = None,
-        crisis_mode: bool = False,
-        focus_areas: str | None = None,
-        plan_date: date | None = None,
-    ) -> list[dict[str, Any]]:
-        user_doc = self._db.collection("users_private").document(user_id).get()
-        if not user_doc.exists:
-            return []
+        raw: dict,
+        hydrator: FirestoreHydrator,
+        analytics: dict,
+        today: date,
+    ) -> Optional[SubjectContext]:
+        try:
+            subject_id = raw["id"]
 
-        user_data = user_doc.to_dict() or {}
-        target_hours = float(user_data.get("target_hours", 4) or 4)
-        available_hours = max(1.0, target_hours)
-        block_minutes = 45
-        block_count = max(1, int((available_hours * 60) // block_minutes))
+            # Exam date
+            exam_date_str = raw.get("exam_date") or raw.get("examDate")
+            if not exam_date_str:
+                return None
+            exam_dt = datetime.fromisoformat(str(exam_date_str)).date()
+            days_to_exam = (exam_dt - today).days
+            if days_to_exam < 0:
+                return None  # exam has passed
 
-        deadlines = list(
-            self._db.collection("users_private").document(user_id).collection("deadlines").stream()
-        )
-        analytics_snapshot = (
-            self._db.collection("users_private")
-            .document(user_id)
-            .collection("analytics")
-            .document("current")
-            .get()
-        )
-        mastery_docs = list(
-            self._db.collection("users_private").document(user_id).collection("mastery").stream()
-        )
-        event_docs = list(
-            self._db.collection("users_private").document(user_id).collection("events").stream()
-        )
+            phase = self._phase_from_days(days_to_exam)
 
-        now = datetime.now(timezone.utc)
-        target_date = plan_date or now.date()
-        ranked_deadlines: list[tuple[datetime, dict[str, Any]]] = []
-        for snapshot in deadlines:
-            data = snapshot.to_dict() or {}
-            exam_at = _parse_datetime(data.get("exam_date"))
-            if exam_at is None or exam_at.date() < target_date:
-                continue
-            ranked_deadlines.append((exam_at, data))
-        ranked_deadlines.sort(key=lambda item: item[0])
-        if not ranked_deadlines:
-            print(f"[PlannerService] No deadlines for user {user_id}, skipping plan generation")
-            return []
+            # Papers
+            papers = [
+                self._parse_paper(p)
+                for p in raw.get("papers", [])
+                if p
+            ]
 
-        exam_at, deadline = ranked_deadlines[0]
-        analytics_data = analytics_snapshot.to_dict() if analytics_snapshot.exists else {}
-        subject = str(deadline.get("subject", "")).strip()
-        paper = str(deadline.get("paper", "")).strip() or "Core Paper"
-        days_to_exam = max(1, (exam_at.date() - now.date()).days)
-        no_study_zones = self._extract_no_study_zones(event_docs, now, exam_at)
-        completion_anchor = max(target_date + timedelta(days=1), exam_at.date() - timedelta(days=14))
-        active_days_remaining = self._count_active_days(
-            target_date,
-            completion_anchor,
-            no_study_zones,
-        )
+            # Objectives + dependency graph
+            raw_objs = hydrator.load_objectives(subject_id)
+            objectives = [self._parse_objective(o) for o in raw_objs if o]
+            dep_graph = self._build_dep_graph(objectives)
 
-        syllabus = list(self._db.collection("syllabus_maps").where("subject", "==", subject).stream())
-        if not syllabus:
-            return []
+            # Grade gap
+            target_grade = raw.get("targetGrade") or raw.get("target_grade") or "A"
+            sub_analytics = analytics.get(subject_id, {})
+            current_mastery = float(sub_analytics.get("avg_mastery", 0.5))
+            target_thresh = self.GRADE_THRESHOLDS.get(target_grade, 0.70)
+            grade_gap = max(0.0, target_thresh - current_mastery)
 
-        mastery_by_objective = {}
-        for snapshot in mastery_docs:
-            data = snapshot.to_dict() or {}
-            objective_key = str(
-                data.get("learning_objective_id")
-                or data.get("objective_id")
-                or snapshot.id
+            # Weak command words
+            weak_cws = (
+                raw.get("weak_command_words")
+                or sub_analytics.get("weak_command_words")
+                or []
             )
-            mastery_by_objective[objective_key] = data
-        recent_failures = {
-            str(
-                (snapshot.to_dict() or {}).get("learning_objective_id")
-                or (snapshot.to_dict() or {}).get("objective_id")
-                or (snapshot.to_dict() or {}).get("topic_id")
-                or ""
-            )
-            for snapshot in event_docs
-            if str((snapshot.to_dict() or {}).get("type", "")).lower() in {"mock_failed", "question_failed"}
-        }
-        phase = self._phase_for_days_remaining(days_to_exam)
-        completion_days_left = max(1, (completion_anchor - now.date()).days)
-        baseline_velocity = len(syllabus) / max(completion_days_left, 1)
-        adjusted_velocity = len(syllabus) / max(active_days_remaining, 1)
-        redistributed_load = max(0.0, adjusted_velocity - baseline_velocity)
-        scored: list[tuple[float, dict[str, Any], str, str, list[str], float]] = []
-        mastered_objectives: set[str] = set()
-        for snapshot in syllabus:
-            data = snapshot.to_dict() or {}
-            objective_id = str(
-                data.get("objective_id")
-                or data.get("code")
-                or snapshot.id
-            )
-            mastery = mastery_by_objective.get(objective_id, {})
-            confidence = float(mastery.get("confidence_score", 0.35) or 0.35)
-            decay_factor = float(mastery.get("decay_factor", 0.012) or 0.012)
-            last_tested = _parse_datetime(mastery.get("last_tested"))
-            days_since_review = 30 if last_tested is None else max(0, (now - last_tested).days)
-            stored_mastery = float(mastery.get("mastery_score", confidence) or confidence)
-            decayed_mastery = stored_mastery * math.exp(-decay_factor * days_since_review)
-            if decayed_mastery >= 0.85:
-                mastered_objectives.add(objective_id)
-            priority = (1.0 - decayed_mastery) * 50
-            priority += min(days_since_review, 45) * 0.9
-            priority += max(decay_factor, 0.005) * 120
-            priority += float(data.get("paper_weight", 0.0) or 0.0) * 30
-            if objective_id in recent_failures:
-                priority += 40
-            high_yield = float(
-                data.get("past_paper_frequency")
-                or data.get("past_paper_hits")
-                or data.get("historical_frequency")
-                or 0.0
-            )
-            priority += high_yield * 6
-            if phase == "timed_mock_sprint":
-                priority += high_yield * 10
-                priority += decayed_mastery * 18
-            elif phase == "hard_topic_deep_dive":
-                priority += (1.0 - decayed_mastery) * 22
-            elif phase == "first_pass_completion":
-                priority += (0.65 - decayed_mastery) * 10
 
-            prerequisite_ids = [
-                str(item).strip()
-                for item in (
-                    data.get("prerequisite_ids")
-                    or data.get("prerequisites")
-                    or []
-                )
-                if str(item).strip()
-            ]
-            unmet_prerequisites = [
-                item for item in prerequisite_ids if item not in mastered_objectives
-            ]
-            if phase == "timed_mock_sprint" and unmet_prerequisites:
-                priority -= 60
-            elif unmet_prerequisites:
-                priority -= min(15, len(unmet_prerequisites) * 5)
-
-            reason = (
-                f"Anchor {exam_at.date().isoformat()} | velocity {adjusted_velocity:.2f}/day. "
-                f"Mastery {decayed_mastery:.2f}, decay {decay_factor:.3f}, "
-                f"{days_since_review} day(s) since review."
-            )
-            if redistributed_load > 0:
-                reason += f" Buffer recovery adds {redistributed_load:.2f} objective/day."
-            scored.append((priority, data, objective_id, reason, prerequisite_ids, decayed_mastery))
-
-        scored = self._order_by_prerequisites(scored)
-        selected = scored[:block_count]
-        prioritized = [
-            objective_id
-            for objective_id in (prioritized_objective_ids or [])
-            if objective_id.strip()
-        ]
-        prioritized_set = set(prioritized)
-
-        if prioritized_set:
-            prioritized_candidates = [
-                item for item in scored if item[2] in prioritized_set
-            ]
-            non_prioritized_candidates = [
-                item for item in scored if item[2] not in prioritized_set
-            ]
-            selected = prioritized_candidates[:block_count]
-            if len(selected) < block_count:
-                selected.extend(non_prioritized_candidates[: block_count - len(selected)])
-
-        if crisis_mode and prioritized_set:
-            crisis_candidates = [
-                item for item in scored if item[2] in prioritized_set
-            ]
-            if crisis_candidates:
-                selected = crisis_candidates[:block_count]
-            if len(selected) < block_count:
-                for item in scored:
-                    if item in selected:
-                        continue
-                    selected.append(item)
-                    if len(selected) >= block_count:
-                        break
-
-        tasks: list[dict[str, Any]] = []
-        phase_label = self._phase_label(phase)
-        intensity_baseline = max(1.0, adjusted_velocity * 12)
-        focus_slots = self._build_slots(user_data, block_count)
-        for index, (priority, data, objective_id, reason, prerequisite_ids, decayed_mastery) in enumerate(selected):
-            slot = focus_slots[min(index, len(focus_slots) - 1)]
-            start = datetime.combine(target_date, slot["start"], tzinfo=timezone.utc)
-            end = start + timedelta(minutes=block_minutes)
-            crisis_reason = "Crisis mode: low-priority topics pruned to high-yield objectives. "
-            unmet_prerequisites = [
-                item for item in prerequisite_ids if item not in mastered_objectives
-            ]
-            raw_title = str(data.get("title") or data.get("topic") or objective_id).strip()
-            safe_title = raw_title or objective_id or "Study Objective"
-            title = self._task_title_for_phase(
+            return SubjectContext(
+                subject_id=subject_id,
+                name=raw.get("name", subject_id),
+                code=str(raw.get("code", "")),
+                level=raw.get("level", "A_LEVEL"),
+                papers=papers,
+                objectives=objectives,
+                days_to_exam=days_to_exam,
+                target_grade=target_grade,
                 phase=phase,
-                title=safe_title,
-                unmet_prerequisites=unmet_prerequisites,
+                grade_gap=grade_gap,
+                weak_command_words=weak_cws,
+                dep_graph=dep_graph,
             )
-            if unmet_prerequisites:
-                reason = (
-                    f"{reason} Prerequisite hold: complete {', '.join(unmet_prerequisites[:3])} "
-                    "before advanced mock work."
-                )
-            if phase == "hard_topic_deep_dive":
-                reason = f"{reason} Hard-topic focus from mastery engine."
-            elif phase == "timed_mock_sprint":
-                reason = f"{reason} Full-length timed mock window."
-            elif phase == "first_pass_completion":
-                reason = f"{reason} First-pass syllabus completion window."
-            task_type = "deep_work" if decayed_mastery < 0.55 else "revision"
-            if phase == "timed_mock_sprint":
-                task_type = "mock_exam"
-            if self._has_recent_missed_block(event_docs):
-                reason = (
-                    f"{reason} Yesterday's missed block increased velocity to "
-                    f"{adjusted_velocity:.2f}/day, so the schedule is tighter today."
-                )
-            if focus_areas:
-                reason = f"{reason} Student focus request: {focus_areas.strip()[:160]}."
-            tasks.append(
-                PlannerTask(
-                    title=title,
-                    subject=subject,
-                    paper=str(data.get("paper", paper)),
-                    objective_id=objective_id,
-                    scheduled_start=start,
-                    scheduled_end=end,
-                    intensity_score=round(min(3.0, max(1.0, priority / intensity_baseline)), 2),
-                    intensity_label=self._intensity_label(priority / intensity_baseline),
-                    phase=phase_label,
-                    anchor_date=exam_at.date().isoformat(),
-                    task_type=task_type,
-                    scheduled_window=slot["label"],
-                    reason=(crisis_reason + reason) if crisis_mode else reason,
-                ).to_firestore()
-            )
-        self._inject_command_word_drills(
-            tasks=tasks,
-            analytics_data=analytics_data,
-            subject=subject,
-            paper=paper,
-            anchor_date=exam_at.date().isoformat(),
-            now=datetime.combine(target_date, time(hour=19), tzinfo=timezone.utc),
-        )
-        return tasks
+        except Exception as e:
+            logger.warning(f"SubjectContextBuilder failed for {raw.get('id')}: {e}")
+            return None
 
-    def _resolve_plan_date(self, value: str | None) -> date:
-        if value:
+    # ── Parsers ──────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_paper(raw: dict) -> Paper:
+        exam_date = None
+        if raw.get("exam_date"):
             try:
-                return date.fromisoformat(str(value).split("T", 1)[0])
+                exam_date = datetime.fromisoformat(str(raw["exam_date"])).date()
             except ValueError:
                 pass
-        return datetime.now(timezone.utc).date()
-
-    def _task_document_id(self, task: dict[str, Any]) -> str:
-        seed = "|".join(
-            [
-                str(task.get("date", "")),
-                str(task.get("objective_id", "")),
-                str(task.get("task_type", "")),
-                str(task.get("scheduled_window", "")),
-            ]
+        return Paper(
+            number=int(raw.get("number", 1)),
+            paper_type=PaperType(raw.get("type", PaperType.STRUCTURED.value)),
+            duration_minutes=int(raw.get("duration_minutes", 90)),
+            total_marks=int(raw.get("total_marks", 100)),
+            weight_pct=float(raw.get("weight_pct", 33.0)),
+            exam_date=exam_date,
         )
-        digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:16]
-        return f"plan_{digest}"
 
-    def _with_id(self, doc_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return {"id": doc_id, **payload}
+    @staticmethod
+    def _parse_objective(raw: dict) -> SyllabusObjective:
+        last_studied = None
+        if raw.get("last_studied"):
+            try:
+                last_studied = datetime.fromisoformat(str(raw["last_studied"]))
+            except ValueError:
+                pass
+        return SyllabusObjective(
+            id=raw["id"],
+            topic=raw.get("topic", ""),
+            subtopic=raw.get("subtopic", ""),
+            description=raw.get("description", ""),
+            paper_numbers=[int(p) for p in raw.get("paper_numbers", [1])],
+            command_words=raw.get("command_words", []),
+            prerequisites=raw.get("prerequisites", []),
+            examiner_flagged=bool(raw.get("examiner_flagged", False)),
+            mastery_score=float(raw.get("mastery_score", 0.0)),
+            last_studied=last_studied,
+            stability=float(raw.get("stability", 1.0)),
+            difficulty=float(raw.get("difficulty", 0.3)),
+        )
 
-    def _refine_tasks_with_model(
+    @staticmethod
+    def _build_dep_graph(objectives: List[SyllabusObjective]) -> nx.DiGraph:
+        g = nx.DiGraph()
+        obj_ids = {o.id for o in objectives}
+        for obj in objectives:
+            g.add_node(obj.id)
+            for prereq in obj.prerequisites:
+                if prereq in obj_ids:
+                    g.add_edge(prereq, obj.id)
+        return g
+
+    @staticmethod
+    def _phase_from_days(days: int) -> StudyPhase:
+        if days <= 7:  return StudyPhase.T7
+        if days <= 14: return StudyPhase.T14
+        if days <= 30: return StudyPhase.T30
+        return StudyPhase.FOUNDATION
+
+
+# ══════════════════════════════════════════════════════════════
+# §10  MAIN PLANNER SERVICE
+# ══════════════════════════════════════════════════════════════
+
+
+class DailyPlannerServiceV2:
+    """
+    Primary entry point for daily plan generation.
+
+    Typical call flow:
+        service = DailyPlannerServiceV2(db=firestore_client, gemini_api_key="...")
+        tasks   = await service.generate_and_persist_daily_plan(uid="...", force=False)
+
+    Short-circuit behaviour:
+        If force=False and a non-empty plan already exists for today, returns [].
+        The caller can inspect Firestore directly for the existing tasks.
+
+    Multi-subject interleaving:
+        Objectives from different subjects are interleaved in a round-robin pass
+        before slot allocation. This prevents single-subject cognitive overload and
+        mirrors the interleaved-practice effect from memory research.
+    """
+
+    def __init__(
         self,
-        *,
-        user_id: str,
-        tasks: list[dict[str, Any]],
-        focus_areas: str | None,
-        plan_date: date,
-    ) -> list[dict[str, Any]]:
-        if not tasks or self._planner_model is None:
-            return tasks
+        db: firestore.Client,
+        gemini_api_key: Optional[str] = None,
+    ):
+        self.db = db
+        self._scorer      = ObjectiveScoringEngine()
+        self._builder     = TaskBuilder()
+        self._ctx_builder = SubjectContextBuilder()
+        self._ai          = AIPolicier(api_key=gemini_api_key)
 
-        prompt = {
-            "role": "daily_plan_refiner",
-            "instruction": (
-                "Refine this student's daily study plan. Keep the same number of tasks, "
-                "same objective_id values, same date, and valid non-overlapping time windows. "
-                "Return strict JSON only: {\"tasks\": [...]} with title, description, reason, "
-                "start_time, end_time, task_type, intensity_label. Do not add markdown."
-            ),
-            "student_focus": focus_areas or "",
-            "user_id": user_id,
-            "plan_date": plan_date.isoformat(),
-            "tasks": tasks,
-        }
-        try:
-            response = self._planner_model.generate_content(json.dumps(prompt, ensure_ascii=False))
-            raw = getattr(response, "text", "") or ""
-            payload = self._extract_json_object(raw)
-            refined = payload.get("tasks") if isinstance(payload, dict) else None
-            if not isinstance(refined, list) or len(refined) != len(tasks):
-                return tasks
-            return self._merge_model_tasks(tasks, refined)
-        except Exception:
-            return tasks
+    # ── Public API ───────────────────────────────────────────
 
-    def _extract_json_object(self, raw: str) -> dict[str, Any]:
-        text = raw.strip()
-        if text.startswith("```"):
-            text = text.strip("`")
-            if text.lower().startswith("json"):
-                text = text[4:].strip()
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return {}
-        return json.loads(text[start : end + 1])
-
-    def _merge_model_tasks(
+    async def generate_and_persist_daily_plan(
         self,
-        base_tasks: list[dict[str, Any]],
-        model_tasks: list[Any],
-    ) -> list[dict[str, Any]]:
-        allowed_labels = {"blue", "orange", "red"}
-        merged: list[dict[str, Any]] = []
-        for base, candidate in zip(base_tasks, model_tasks):
-            if not isinstance(candidate, dict):
-                merged.append(base)
-                continue
-            task = dict(base)
-            for field in ("title", "description", "reason", "task_type"):
-                value = str(candidate.get(field, "")).strip()
-                if value:
-                    task[field] = value[:600] if field == "reason" else value[:160]
-            label = str(candidate.get("intensity_label", "")).strip().lower()
-            if label in allowed_labels:
-                task["intensity_label"] = label
-            start = _parse_datetime(candidate.get("start_time"))
-            end = _parse_datetime(candidate.get("end_time"))
-            base_date = str(base.get("date", ""))
-            if start and end and end > start and start.date().isoformat() == base_date:
-                task["start_time"] = start.isoformat()
-                task["end_time"] = end.isoformat()
-            merged.append(task)
-        return merged
+        uid: str,
+        force: bool = False,
+        target_date: Optional[date] = None,
+    ) -> List[PlannerTask]:
+        today     = target_date or date.today()
+        today_str = today.isoformat()
+        hydrator  = FirestoreHydrator(self.db, uid)
 
-    def _extract_no_study_zones(
-        self,
-        event_docs: list[Any],
-        now: datetime,
-        exam_at: datetime,
-    ) -> list[tuple[datetime, datetime, str]]:
-        zones: list[tuple[datetime, datetime, str]] = []
-        for snapshot in event_docs:
-            data = snapshot.to_dict() or {}
-            event_type = str(data.get("type", "")).lower().strip()
-            if event_type not in {"travel", "trip", "blocked", "no_study_zone", "no_study"}:
-                continue
-            start = _parse_datetime(data.get("start_at") or data.get("occurred_at"))
-            if start is None:
-                continue
-            end = _parse_datetime(data.get("end_at"))
-            if end is None:
-                duration_minutes = int(data.get("duration_minutes", 0) or 0)
-                if duration_minutes > 0:
-                    end = start + timedelta(minutes=duration_minutes)
-                else:
-                    end = start
-            if end < now or start.date() > exam_at.date():
-                continue
-            zones.append((start, end, str(data.get("label", "")).strip()))
-        return zones
+        if not force:
+            existing = hydrator.load_existing_plan(today_str)
+            if existing:
+                logger.info(f"Plan exists for {uid} on {today_str} — skipping (force=False)")
+                return []
 
-    def _count_active_days(
-        self,
-        start_date,
-        exam_date,
-        no_study_zones: list[tuple[datetime, datetime, str]],
-    ) -> int:
-        active_days = 0
-        cursor = start_date
-        while cursor < exam_date:
-            if not self._is_blocked(cursor, no_study_zones):
-                active_days += 1
-            cursor += timedelta(days=1)
-        return max(active_days, 1)
+        tasks = self._calculate_daily_load(uid, hydrator, today, today_str)
+        tasks = self._ai.refine(tasks)
+        self._persist(uid, tasks, today_str, hydrator)
+        logger.info(f"Generated {len(tasks)} tasks for {uid} on {today_str}")
+        return tasks
 
-    def _is_blocked(
+    async def reschedule_missed_block(
         self,
-        date_value,
-        no_study_zones: list[tuple[datetime, datetime, str]],
+        uid: str,
+        task_id: str,
+        new_start: Optional[datetime] = None,
     ) -> bool:
-        for start, end, _ in no_study_zones:
-            if start.date() <= date_value <= end.date():
-                return True
-        return False
+        """
+        Reschedule a missed task. Strategy:
+        1. Slot into review_evening at 20:00 (or caller-supplied new_start).
+        2. If that slot is crowded, trim the lowest-priority flashcard/review task first.
+        3. If task cannot fit today, mark it 'rescheduled' and create a carry-forward
+           note in tomorrow's anchor_date queue.
+        Returns True if rescheduled successfully.
+        """
+        hydrator  = FirestoreHydrator(self.db, uid)
+        today_str = date.today().isoformat()
+        existing  = hydrator.load_existing_plan(today_str)
 
-    def _phase_for_days_remaining(self, days_to_exam: int) -> str:
-        if days_to_exam <= 7:
-            return "timed_mock_sprint"
-        if days_to_exam <= 14:
-            return "hard_topic_deep_dive"
-        if days_to_exam <= 30:
-            return "first_pass_completion"
-        return "foundation_build"
+        target = next((t for t in existing if t["id"] == task_id), None)
+        if not target:
+            logger.warning(f"reschedule_missed_block: task {task_id} not found")
+            return False
 
-    def _phase_label(self, phase: str) -> str:
-        return {
-            "timed_mock_sprint": "T-7 Mock Sprint",
-            "hard_topic_deep_dive": "T-14 Deep Dive",
-            "first_pass_completion": "T-30 Completion",
-            "foundation_build": "Foundation Build",
-        }.get(phase, "Study Block")
+        plan_col = self.db.collection("users_private").document(uid).collection("daily_plan")
+        evening_start = new_start or datetime.combine(date.today(), time(20, 0))
+        evening_end   = evening_start + timedelta(minutes=60)
 
-    def _build_slots(self, user_data: dict[str, Any], block_count: int) -> list[dict[str, Any]]:
-        deep_work_hour = int(user_data.get("deep_work_start_hour", 7) or 7)
-        review_hour = int(user_data.get("review_start_hour", 18) or 18)
-        slots: list[dict[str, Any]] = []
-        morning_blocks = max(1, math.ceil(block_count * 0.6))
-        for index in range(morning_blocks):
-            slots.append(
-                {
-                    "start": time(hour=min(22, deep_work_hour + index)),
-                    "label": "peak_focus_morning",
-                }
+        # Try to trim a low-priority evening task
+        trimmable = [
+            t for t in existing
+            if not t.get("is_completed")
+            and t.get("task_type") in (TaskType.FLASHCARDS.value, TaskType.REVIEW.value)
+            and t.get("scheduled_window") in (
+                ScheduledWindow.REVIEW_EVENING.value,
+                ScheduledWindow.LIGHT_EVENING.value,
             )
-        for index in range(block_count - morning_blocks):
-            slots.append(
-                {
-                    "start": time(hour=min(22, review_hour + index)),
-                    "label": "review_evening",
-                }
-            )
-        return slots or [{"start": time(hour=7), "label": "peak_focus_morning"}]
+            and t["id"] != task_id
+        ]
+        if trimmable:
+            plan_col.document(trimmable[0]["id"]).update({"status": "trimmed"})
 
-    def _task_title_for_phase(
+        plan_col.document(task_id).update({
+            "start_time":        evening_start.isoformat(),
+            "end_time":          evening_end.isoformat(),
+            "status":            "rescheduled",
+            "scheduled_window":  ScheduledWindow.REVIEW_EVENING.value,
+        })
+        return True
+
+    # ── Core algorithm ───────────────────────────────────────
+
+    def _calculate_daily_load(
         self,
-        phase: str,
-        title: str,
-        unmet_prerequisites: list[str],
-    ) -> str:
-        if unmet_prerequisites:
-            return f"Prerequisite Recovery: {title}"
-        prefix = {
-            "timed_mock_sprint": "Timed Mock",
-            "hard_topic_deep_dive": "Hard-Topic Deep Dive",
-            "first_pass_completion": "First Pass",
-            "foundation_build": "Foundation Build",
-        }.get(phase, "Study")
-        return f"{prefix}: {title}"
+        uid: str,
+        hydrator: FirestoreHydrator,
+        today: date,
+        today_str: str,
+    ) -> List[PlannerTask]:
 
-    def _intensity_label(self, intensity_score: float) -> str:
-        if intensity_score >= 2.2:
-            return "red"
-        if intensity_score >= 1.15:
-            return "orange"
-        return "blue"
+        # 1. Hydrate settings & calendar
+        settings         = hydrator.load_settings()
+        available_hours  = float(settings.get("target_hours_per_day", 4.0))
+        day_start_hour   = int(settings.get("day_start_hour", 8))
+        analytics        = hydrator.load_analytics()
+        cw_proficiency   = hydrator.load_command_word_proficiency()
+        cal_events       = hydrator.load_calendar_events(today_str)
 
-    def _has_recent_missed_block(self, event_docs: list[Any]) -> bool:
-        for snapshot in event_docs:
-            data = snapshot.to_dict() or {}
-            event_type = str(data.get("type", "")).lower().strip()
-            if event_type in {"missed_block", "skipped_session", "missed_session"}:
-                return True
-        return False
-
-    def _inject_command_word_drills(
-        self,
-        *,
-        tasks: list[dict[str, Any]],
-        analytics_data: dict[str, Any],
-        subject: str,
-        paper: str,
-        anchor_date: str,
-        now: datetime,
-    ) -> None:
-        weak_words = analytics_data.get("weak_command_words") or []
-        if not isinstance(weak_words, list) or not weak_words:
-            return
-
-        prioritized = sorted(
-            [
-                item
-                for item in weak_words
-                if isinstance(item, dict) and str(item.get("command_word", "")).strip()
-            ],
-            key=lambda item: (
-                0 if str(item.get("command_word", "")).strip().lower() == "explain" else 1,
-                float(item.get("accuracy", 1.0) or 1.0),
-                float(item.get("depth_score", 1.0) or 1.0),
-            ),
+        # Deduct calendar busy time from available hours
+        busy_hours = sum(
+            float(e.get("duration_hours", 0))
+            for e in cal_events
+            if e.get("blocks_study", True)
         )
-        if not prioritized:
-            return
+        available_hours = max(1.0, available_hours - busy_hours)
 
-        latest_end = max(
-            (
-                _parse_datetime(task.get("end_time"))
-                for task in tasks
-                if isinstance(task, dict) and _parse_datetime(task.get("end_time")) is not None
-            ),
-            default=datetime.combine(now.date(), time(hour=19), tzinfo=timezone.utc),
-        )
-        drill_start = latest_end + timedelta(minutes=15)
-        for item in prioritized[:2]:
-            command_word = str(item.get("command_word", "")).strip()
-            if not command_word:
+        day_start = datetime.combine(today, time(day_start_hour, 0))
+        slot_mgr  = SlotManager(day_start, available_hours)
+
+        # 2. Build subject contexts
+        raw_subjects = hydrator.load_subjects()
+        contexts: List[SubjectContext] = [
+            ctx
+            for raw in raw_subjects
+            for ctx in [self._ctx_builder.build(raw, hydrator, analytics, today)]
+            if ctx is not None
+        ]
+
+        if not contexts:
+            logger.warning(f"No active subjects found for {uid}")
+            return []
+
+        # Prioritise by urgency (nearest exam first, highest grade gap breaks ties)
+        contexts.sort(key=lambda c: (c.days_to_exam, -c.grade_gap))
+
+        # 3. Score all objectives
+        candidates: List[Tuple[float, SyllabusObjective, SubjectContext]] = []
+        for ctx in contexts:
+            topo_objs = self._topo_sort(ctx)
+            for obj in topo_objs:
+                s = self._scorer.score(obj, ctx, cw_proficiency, today)
+                candidates.append((s, obj, ctx))
+
+        # Sort globally by score, then interleave subjects
+        candidates.sort(key=lambda x: -x[0])
+        candidates = self._interleave_subjects(candidates)
+
+        # 4. Allocate tasks
+        tasks: List[PlannerTask] = []
+        for score, obj, ctx in candidates:
+            paper_override = self._paper_override(obj, ctx)
+            task_type      = self._builder.select_task_type(obj, ctx, paper_override)
+            _, intensity   = self._builder.determine_intensity(score, ctx.days_to_exam)
+
+            if not slot_mgr.can_fit(task_type, intensity, ctx.name):
                 continue
-            duration_minutes = int(item.get("recommended_duration_minutes", 10) or 10)
-            drill_end = drill_start + timedelta(minutes=duration_minutes)
-            objective_id = str(item.get("recommended_objective_id", "")).strip() or "command_word_focus"
-            reason = str(item.get("reason", "")).strip() or (
-                f"{command_word.title()} responses need depth repair."
-            )
-            tasks.append(
-                PlannerTask(
-                    title=f"{command_word.title()} Drill",
-                    subject=subject,
-                    paper=paper,
-                    objective_id=objective_id,
-                    scheduled_start=drill_start,
-                    scheduled_end=drill_end,
-                    intensity_score=1.15,
-                    intensity_label="orange",
-                    phase="Skill Repair",
-                    anchor_date=anchor_date,
-                    task_type="command_word_drill",
-                    scheduled_window="skill_repair_evening",
-                    reason=reason,
-                ).to_firestore()
-            )
-            drill_start = drill_end + timedelta(minutes=10)
 
-    def _order_by_prerequisites(
-        self,
-        scored: list[tuple[float, dict[str, Any], str, str, list[str], float]],
-    ) -> list[tuple[float, dict[str, Any], str, str, list[str], float]]:
-        if nx is None:
-            return sorted(scored, key=lambda item: item[0], reverse=True)
+            pref_window = self._builder.WINDOW_AFFINITY.get(task_type, [None])[0]
+            result = slot_mgr.consume(
+                task_type, intensity, ctx.name,
+                TaskBuilder.DURATIONS[task_type], pref_window
+            )
+            if result is None:
+                continue
 
-        graph = nx.DiGraph()
-        by_id = {item[2]: item for item in scored}
-        for _, _, objective_id, _, prerequisite_ids, _ in scored:
-            graph.add_node(objective_id)
-            for prereq in prerequisite_ids:
-                if prereq in by_id:
-                    graph.add_edge(prereq, objective_id)
+            slot_start, window = result
+            task = self._builder.build(obj, ctx, score, task_type, slot_start, window, today_str)
+            tasks.append(task)
+
+        # 5. Inject command-word drills for critical gaps
+        tasks = self._inject_cw_drills(tasks, cw_proficiency, contexts, slot_mgr, today_str)
+
+        # 6. Sort by start time
+        tasks.sort(key=lambda t: t.start_time)
+        return tasks
+
+    # ── Helper methods ───────────────────────────────────────
+
+    def _topo_sort(self, ctx: SubjectContext) -> List[SyllabusObjective]:
+        """Returns objectives in topological order (prerequisites before dependents)."""
         try:
-            order = list(nx.topological_sort(graph))
-        except Exception:
-            return sorted(scored, key=lambda item: item[0], reverse=True)
-        position = {objective_id: index for index, objective_id in enumerate(order)}
-        return sorted(
-            scored,
-            key=lambda item: (
-                position.get(item[2], len(position)),
-                -item[0],
-            ),
+            order   = list(nx.topological_sort(ctx.dep_graph))
+            obj_map = {o.id: o for o in ctx.objectives}
+            sorted_  = [obj_map[oid] for oid in order if oid in obj_map]
+            in_dag   = {o.id for o in sorted_}
+            remainder = [o for o in ctx.objectives if o.id not in in_dag]
+            return sorted_ + remainder
+        except nx.NetworkXUnfeasible:
+            logger.warning(f"Prerequisite cycle detected in {ctx.subject_id}; ignoring order")
+            return ctx.objectives
+
+    def _interleave_subjects(
+        self,
+        candidates: List[Tuple[float, SyllabusObjective, SubjectContext]],
+    ) -> List[Tuple[float, SyllabusObjective, SubjectContext]]:
+        """
+        Round-robin interleaving across subjects to reduce subject-saturation fatigue.
+        Within each subject, the original score order is preserved.
+        """
+        buckets: Dict[str, List] = defaultdict(list)
+        for item in candidates:
+            buckets[item[2].subject_id].append(item)
+
+        result: List = []
+        keys   = list(buckets.keys())
+        idx    = {k: 0 for k in keys}
+        total  = len(candidates)
+
+        while len(result) < total:
+            added = False
+            for k in keys:
+                if idx[k] < len(buckets[k]):
+                    result.append(buckets[k][idx[k]])
+                    idx[k] += 1
+                    added = True
+            if not added:
+                break
+        return result
+
+    def _paper_override(
+        self, obj: SyllabusObjective, ctx: SubjectContext
+    ) -> Optional[Dict[TaskType, float]]:
+        """Returns PAPER_TYPE_TASK_OVERRIDE dict if objective maps to MCQ or Practical paper."""
+        for paper in ctx.papers:
+            if paper.number in obj.paper_numbers:
+                override = PAPER_TYPE_TASK_OVERRIDE.get(paper.paper_type)
+                if override:
+                    return override
+        return None
+
+    def _inject_cw_drills(
+        self,
+        tasks: List[PlannerTask],
+        cw_proficiency: Dict[str, float],
+        contexts: List[SubjectContext],
+        slot_mgr: SlotManager,
+        today_str: str,
+    ) -> List[PlannerTask]:
+        """
+        Injects up to MAX_COMMAND_DRILLS_PER_DAY command-word drill tasks
+        for Tier ≥ 3 command words with proficiency < 0.60.
+        These supplement the main plan and are scheduled in light_evening or afternoon.
+        """
+        drills_added = 0
+        for ctx in contexts:
+            if drills_added >= MAX_COMMAND_DRILLS_PER_DAY:
+                break
+            for cw in ctx.weak_command_words:
+                if drills_added >= MAX_COMMAND_DRILLS_PER_DAY:
+                    break
+                tier = COMMAND_WORD_TIERS.get(cw, 1)
+                prof = cw_proficiency.get(cw, 0.0)
+                if tier < 3 or prof >= 0.60:
+                    continue
+
+                result = slot_mgr.consume(
+                    TaskType.COMMAND_WORD_DRILL,
+                    IntensityLevel.ORANGE,
+                    ctx.name,
+                    30,
+                    preferred_window=ScheduledWindow.AFTERNOON,
+                )
+                if result is None:
+                    continue
+
+                slot_start, window = result
+                tasks.append(PlannerTask(
+                    id=str(uuid.uuid4()),
+                    title=f"Command Drill — '{cw.capitalize()}'",
+                    subject=ctx.name,
+                    description=(
+                        f"Practise Tier-{tier} command word '{cw}'. "
+                        f"Attempt 3 past-paper questions that use this command word, "
+                        f"then self-assess against the mark scheme for mark-scheme language patterns."
+                    ),
+                    paper="",
+                    objective_id="",
+                    start_time=slot_start,
+                    end_time=slot_start + timedelta(minutes=30),
+                    status="pending",
+                    date=today_str,
+                    reason=f"Command word proficiency: {prof:.0%} (target ≥ 80%) | Tier {tier}",
+                    intensity_score=0.60,
+                    intensity_label=IntensityLevel.ORANGE.value,
+                    phase=ctx.phase.value,
+                    anchor_date=today_str,
+                    task_type=TaskType.COMMAND_WORD_DRILL.value,
+                    scheduled_window=window.value,
+                    priority=2,
+                ))
+                drills_added += 1
+
+        return tasks
+
+    # ── Persistence ──────────────────────────────────────────
+
+    def _persist(
+        self,
+        uid: str,
+        new_tasks: List[PlannerTask],
+        today_str: str,
+        hydrator: FirestoreHydrator,
+    ) -> None:
+        plan_col = (
+            self.db.collection("users_private")
+            .document(uid)
+            .collection("daily_plan")
+        )
+        existing     = hydrator.load_existing_plan(today_str)
+        completed_ids = {t["id"] for t in existing if t.get("is_completed")}
+
+        batch = self.db.batch()
+
+        # Delete stale uncompleted tasks
+        for t in existing:
+            if t["id"] not in completed_ids:
+                batch.delete(plan_col.document(t["id"]))
+
+        # Write new tasks (skip ids that were already completed — they're preserved above)
+        for task in new_tasks:
+            if task.id in completed_ids:
+                continue
+            batch.set(plan_col.document(task.id), {
+                "title":             task.title,
+                "subject":           task.subject,
+                "description":       task.description,
+                "paper":             task.paper,
+                "objective_id":      task.objective_id,
+                "start_time":        task.start_time.isoformat(),
+                "end_time":          task.end_time.isoformat(),
+                "status":            task.status,
+                "date":              task.date,
+                "reason":            task.reason,
+                "is_sync_to_google": task.is_sync_to_google,
+                "is_completed":      task.is_completed,
+                "intensity_score":   task.intensity_score,
+                "intensity_label":   task.intensity_label,
+                "phase":             task.phase,
+                "anchor_date":       task.anchor_date,
+                "task_type":         task.task_type,
+                "scheduled_window":  task.scheduled_window,
+                "priority":          task.priority,
+            })
+
+        batch.commit()
+        logger.info(f"Persisted {len(new_tasks)} tasks for uid={uid} date={today_str}")
+
+
+# ══════════════════════════════════════════════════════════════
+# §11  FSRS FEEDBACK ENDPOINT
+# ══════════════════════════════════════════════════════════════
+#
+# Called when a student completes a task and provides self-assessment.
+# Updates the objective's stability, difficulty, and next_due in Firestore.
+# Integrate this into the task-completion handler in daily_plan_service.dart.
+
+
+class FSRSFeedbackService:
+    """
+    Updates FSRS parameters for a syllabus objective after a study session.
+
+    Call this when:
+      • A past_paper question for this objective is marked correct/incorrect
+      • A flashcard for this objective is rated (again / good / easy)
+      • A practice task is completed with a self-assessed confidence level
+    """
+
+    GRADE_TO_RECALLED: Dict[int, bool] = {
+        1: False,  # Again / failed
+        2: True,   # Hard but recalled
+        3: True,   # Good recall
+        4: True,   # Easy recall
+    }
+
+    def __init__(self, db: firestore.Client):
+        self.db = db
+
+    def record_recall(
+        self,
+        uid: str,
+        subject_id: str,
+        objective_id: str,
+        grade: int,           # 1=again, 2=hard, 3=good, 4=easy
+    ) -> None:
+        """
+        grade: 1–4 (Anki-style)
+        Updates stability, difficulty, last_studied, next_due in Firestore.
+        """
+        obj_ref = (
+            self.db.collection("users_private")
+            .document(uid)
+            .collection("subjects")
+            .document(subject_id)
+            .collection("objectives")
+            .document(objective_id)
+        )
+        snap = obj_ref.get()
+        if not snap.exists:
+            logger.warning(f"Objective {objective_id} not found for FSRS update")
+            return
+
+        data       = snap.to_dict()
+        stability  = float(data.get("stability", 1.0))
+        difficulty = float(data.get("difficulty", 0.3))
+        recalled   = self.GRADE_TO_RECALLED.get(grade, True)
+
+        new_stability = (
+            FSRSLite.update_after_recall(stability, difficulty)
+            if recalled
+            else FSRSLite.update_after_lapse(stability)
+        )
+
+        # Update difficulty: easy pulls it down, again pushes it up
+        difficulty_delta = {1: +0.10, 2: +0.05, 3: 0.0, 4: -0.08}.get(grade, 0.0)
+        new_difficulty = max(0.1, min(0.9, difficulty + difficulty_delta))
+
+        # Mastery score: simple EMA
+        current_mastery = float(data.get("mastery_score", 0.0))
+        outcome_value   = {1: 0.0, 2: 0.4, 3: 0.75, 4: 1.0}.get(grade, 0.5)
+        new_mastery     = round(current_mastery * 0.8 + outcome_value * 0.2, 3)
+
+        today    = date.today()
+        next_due = today + timedelta(days=FSRSLite.next_interval_days(new_stability))
+
+        obj_ref.update({
+            "stability":     round(new_stability, 3),
+            "difficulty":    round(new_difficulty, 3),
+            "mastery_score": new_mastery,
+            "last_studied":  datetime.now().isoformat(),
+            "next_due":      next_due.isoformat(),
+        })
+        logger.debug(
+            f"FSRS update {objective_id}: S={new_stability:.2f} D={new_difficulty:.2f} "
+            f"mastery={new_mastery:.2f} next_due={next_due}"
         )

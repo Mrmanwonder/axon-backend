@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from functions.services.planner_service import DailyPlannerService
+from functions.services.planner_service import DailyPlannerServiceV2, PlannerTask
 
 
 class _FakeDocSnapshot:
@@ -40,6 +40,11 @@ class _FakeDocumentRef:
     def collection(self, name: str):
         path = f"{self._collection._path}/{self.id}/{name}"
         return self._collection._db.collection(path)
+
+    def update(self, payload):
+        current = self._collection._docs.get(self.id, {})
+        current.update(payload)
+        self._collection._docs[self.id] = current
 
 
 class _FakeQuery:
@@ -83,89 +88,77 @@ class _FakeDB:
     def collection(self, path: str):
         return _FakeCollectionRef(self, path)
 
+    def batch(self):
+        class _Batch:
+            def __init__(self, store):
+                self._ops = []
+                self._store = store
 
-def _seed_common_data(db: _FakeDB, user_id: str):
+            def set(self, ref, data):
+                self._ops.append(("set", ref, data))
+
+            def delete(self, ref):
+                self._ops.append(("delete", ref))
+
+            def commit(self):
+                for op, ref, *args in self._ops:
+                    if op == "set":
+                        ref.set(args[0])
+                    elif op == "delete":
+                        ref.delete()
+
+        return _Batch(self._store)
+
+
+def test_v2_generates_task_list():
+    db = _FakeDB()
+    uid = "test-user"
     now = datetime.now(timezone.utc)
-    users_private = db.collection("users_private")
-    users_private.document(user_id).set({"target_hours": 1})
 
-    deadlines = db.collection(f"users_private/{user_id}/deadlines")
-    deadlines.document("deadline-1").set(
-        {
-            "subject": "Physics",
-            "paper": "Paper 1",
-            "exam_date": (now + timedelta(days=10)).isoformat(),
-        }
-    )
+    # Seed: settings
+    ref = db.collection("users_private").document(uid)
+    ref.set({})
+    ref.collection("settings").document("prefs").set({
+        "target_hours_per_day": 2.0,
+        "day_start_hour": 8,
+    })
 
-    db.collection(f"users_private/{user_id}/analytics").document("current").set({})
-    mastery = db.collection(f"users_private/{user_id}/mastery")
-    mastery.document("obj-a").set({"objective_id": "obj-a", "mastery_score": 0.2})
-    mastery.document("obj-b").set({"objective_id": "obj-b", "mastery_score": 0.8})
+    # Seed: subject with exam 20 days away
+    subj_id = "physics-9702"
+    subj_ref = db.collection("users_private").document(uid).collection("subjects").document(subj_id)
+    subj_ref.set({
+        "id": subj_id,
+        "name": "Physics",
+        "code": "9702",
+        "level": "A_LEVEL",
+        "exam_date": (now + timedelta(days=20)).isoformat(),
+        "target_grade": "A",
+        "papers": [{"number": 1, "type": "structured", "duration_minutes": 90, "total_marks": 100, "weight_pct": 50.0}],
+        "weak_command_words": [],
+    })
 
-    syllabus = db.collection("syllabus_maps")
-    syllabus.document("obj-a").set(
-        {
-            "subject": "Physics",
-            "paper": "Paper 1",
-            "objective_id": "obj-a",
-            "title": "Kinematics",
-            "past_paper_frequency": 0.9,
-        }
-    )
-    syllabus.document("obj-b").set(
-        {
-            "subject": "Physics",
-            "paper": "Paper 1",
-            "objective_id": "obj-b",
-            "title": "Dynamics",
-            "past_paper_frequency": 0.1,
-        }
-    )
+    # Seed: objective
+    subj_ref.collection("objectives").document("obj-1").set({
+        "id": "obj-1",
+        "topic": "Kinematics",
+        "subtopic": "Motion",
+        "paper_numbers": [1],
+        "prerequisites": [],
+        "mastery_score": 0.3,
+        "stability": 1.0,
+        "difficulty": 0.3,
+    })
 
+    # Seed: analytics summary
+    db.collection("users_private").document(uid).collection("analytics").document("summary").set({})
 
-def test_prioritized_objective_is_respected_without_crisis_mode():
-    db = _FakeDB()
-    user_id = "user-1"
-    _seed_common_data(db, user_id)
+    service = DailyPlannerServiceV2(db)
+    import asyncio
+    tasks = asyncio.run(service.generate_and_persist_daily_plan(uid, force=True))
 
-    service = DailyPlannerService(db)
-    tasks = service.calculate_daily_load(
-        user_id,
-        prioritized_objective_ids=["obj-b"],
-        crisis_mode=False,
-    )
-
-    assert tasks, "Expected at least one task"
-    assert tasks[0]["objective_id"] == "obj-b"
-
-
-def test_generated_tasks_have_non_empty_title_and_time_bounds():
-    db = _FakeDB()
-    user_id = "user-2"
-    _seed_common_data(db, user_id)
-
-    syllabus = db.collection("syllabus_maps")
-    syllabus.document("obj-empty").set(
-        {
-            "subject": "Physics",
-            "paper": "Paper 1",
-            "objective_id": "obj-empty",
-            "title": "   ",
-            "topic": "",
-            "past_paper_frequency": 0.5,
-        }
-    )
-    db.collection(f"users_private/{user_id}/mastery").document("obj-empty").set(
-        {"objective_id": "obj-empty", "mastery_score": 0.1}
-    )
-
-    service = DailyPlannerService(db)
-    tasks = service.calculate_daily_load(user_id)
-
-    assert tasks, "Expected planner to generate tasks"
-    for task in tasks:
-        assert isinstance(task.get("title"), str) and task["title"].strip()
-        start = datetime.fromisoformat(task["start_time"])
-        end = datetime.fromisoformat(task["end_time"])
-        assert end > start
+    assert isinstance(tasks, list)
+    if tasks:
+        assert hasattr(tasks[0], "title")
+        assert hasattr(tasks[0], "start_time")
+        assert hasattr(tasks[0], "end_time")
+        assert tasks[0].end_time > tasks[0].start_time

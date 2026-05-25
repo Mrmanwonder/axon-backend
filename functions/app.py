@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from middleware.auth import current_user, initialize_firebase
 from services.exam_dates_service import OfficialExamDatesService
 from services.grading_service import HandwritingGradingGateway
-from services.planner_service import DailyPlannerService
+from services.planner_service import DailyPlannerServiceV2
 from services.study_pulse_service import StudyPulseService
 from services.university_catalog_service import UniversityCatalogService
 from services.university_program_crawler import UniversityProgramCrawler
@@ -110,9 +110,8 @@ def update_job(job_id: str, **fields: Any) -> None:
 
 _firestore_database_id = os.environ.get("FIRESTORE_DATABASE_ID", "axon")
 _gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
-_daily_planner_model_name = os.environ.get("DAILY_PLANNER_MODEL", "gemini-1.5-flash")
 _grading_gateway = None
-_planner_service = None
+_planner_service: "DailyPlannerServiceV2 | None" = None
 _study_pulse_service = None
 _exam_dates_service = None
 _uni_catalog_service = None
@@ -178,19 +177,10 @@ def get_grading_gateway() -> HandwritingGradingGateway:
     return _grading_gateway
 
 
-def get_planner_service() -> DailyPlannerService:
+def get_planner_service() -> DailyPlannerServiceV2:
     global _planner_service
     if _planner_service is None:
-        planner_model = None
-        if _gemini_api_key:
-            try:
-                import google.generativeai as genai
-
-                genai.configure(api_key=_gemini_api_key)
-                planner_model = genai.GenerativeModel(_daily_planner_model_name)
-            except Exception:
-                planner_model = None
-        _planner_service = DailyPlannerService(get_firestore(), planner_model=planner_model)
+        _planner_service = DailyPlannerServiceV2(get_firestore(), gemini_api_key=_gemini_api_key)
     return _planner_service
 
 
@@ -656,17 +646,18 @@ async def generate_daily_plan(
         raise HTTPException(status_code=403, detail="Forbidden")
 
     planner = get_planner_service()
-    tasks = await asyncio.to_thread(
-        planner.generate_and_persist_daily_plan,
+    from datetime import date
+    target = date.fromisoformat(payload.client_date) if payload.client_date else None
+    tasks = await planner.generate_and_persist_daily_plan(
         owner_uid,
-        focus_areas=payload.focus_areas,
-        plan_date=payload.client_date,
         force=payload.force,
+        target_date=target,
     )
+    serialized = [t.__dict__ if hasattr(t, '__dict__') else t for t in tasks]
     return {
         "owner_uid": owner_uid,
-        "task_count": len(tasks),
-        "tasks": tasks,
+        "task_count": len(serialized),
+        "tasks": serialized,
         "source_type": "MODEL_BACKED_DAILY_PLAN",
     }
 
@@ -681,8 +672,16 @@ async def run_daily_build(
         raise HTTPException(status_code=403, detail="Forbidden")
 
     planner = get_planner_service()
-    result = await asyncio.to_thread(planner.run_daily_build, owner_uid)
-    return {"owner_uid": owner_uid, **result}
+    tasks = await planner.generate_and_persist_daily_plan(
+        owner_uid,
+        force=True,
+        target_date=None,
+    )
+    return {
+        "owner_uid": owner_uid,
+        "task_count": len(tasks),
+        "tasks": [t.__dict__ if hasattr(t, '__dict__') else t for t in tasks],
+    }
 
 
 class RescheduleMissedBlockRequest(BaseModel):
@@ -702,12 +701,10 @@ async def reschedule_missed_block(
         raise HTTPException(status_code=403, detail="Forbidden")
 
     planner = get_planner_service()
-    result = await asyncio.to_thread(
-        planner.reschedule_missed_block,
-        owner_uid,
-        payload.task_id,
-    )
-    return {"owner_uid": owner_uid, **result}
+    success = await planner.reschedule_missed_block(owner_uid, payload.task_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Task not found or could not be rescheduled")
+    return {"owner_uid": owner_uid, "success": True}
 
 
 @app.post("/analyze-study-pulse")
