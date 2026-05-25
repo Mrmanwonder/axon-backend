@@ -112,6 +112,47 @@ class OfficialExamDatesService:
 
         print(f"[ExamDates] sync_user_deadlines: user={user_id}, board={board}, subjects={subjects}, year={target_year}, series={target_series}, zone={target_zone}")
 
+        deadlines_ref = (
+            self._db.collection("users_private").document(user_id).collection("deadlines")
+        )
+        existing_snapshots = list(deadlines_ref.stream())
+
+        sync_key = hashlib.sha1(
+            json.dumps([user_id, board, sorted(subjects), target_year, target_series, target_zone], sort_keys=True).encode("utf-8")
+        ).hexdigest()
+
+        existing_sync_key: str | None = None
+        existing_subjects: set[str] = set()
+        for snap in existing_snapshots:
+            data = snap.to_dict() or {}
+            existing_subjects.add(str(data.get("subject", "")))
+            key = data.get("_sync_key")
+            if key is not None:
+                existing_sync_key = key
+
+        if existing_sync_key == sync_key:
+            print(f"[ExamDates] Data already up-to-date for key {sync_key[:12]}..., skipping scrape")
+            stale = existing_subjects - set(subjects)
+            if stale:
+                for snap in existing_snapshots:
+                    data = snap.to_dict() or {}
+                    if str(data.get("subject", "")) in stale:
+                        try:
+                            snap.reference.delete()
+                        except AttributeError:
+                            deadlines_ref.document(snap.id).delete()
+                print(f"[ExamDates] Removed {len(stale)} stale subjects: {stale}")
+            return {
+                "board": self._canonical_board(board),
+                "subjects": subjects,
+                "year": target_year,
+                "series": target_series,
+                "administrative_zone": target_zone,
+                "persisted_count": 0,
+                "cached": True,
+                "events": [],
+            }
+
         try:
             events = self.fetch_official_exam_dates(
                 board=board,
@@ -127,17 +168,23 @@ class OfficialExamDatesService:
         print(f"[ExamDates] Fetched {len(events)} events")
 
         persisted = 0
-        if persist and events:
+        if persist:
             try:
-                deadlines_ref = (
-                    self._db.collection("users_private").document(user_id).collection("deadlines")
-                )
+                for snap in existing_snapshots:
+                    data = snap.to_dict() or {}
+                    if data.get("source_type") == "OFFICIAL_DATESHEET_SCRAPER":
+                        try:
+                            snap.reference.delete()
+                        except AttributeError:
+                            deadlines_ref.document(snap.id).delete()
+
                 for event in events:
                     payload = event.to_deadline_doc(
                         administrative_zone=target_zone,
                         series=target_series,
                         year=target_year,
                     )
+                    payload["_sync_key"] = sync_key
                     doc_id = hashlib.sha1(
                         json.dumps(
                             [
@@ -153,7 +200,7 @@ class OfficialExamDatesService:
                     ).hexdigest()
                     deadlines_ref.document(doc_id).set(payload, merge=True)
                     persisted += 1
-                print(f"[ExamDates] Persisted {persisted} deadlines to Firestore")
+                print(f"[ExamDates] Persisted {persisted} deadlines to Firestore (replaced {len(existing_snapshots)} old)")
             except Exception as e:
                 print(f"[ExamDates] Failed to persist deadlines: {e}")
 
@@ -164,6 +211,7 @@ class OfficialExamDatesService:
             "series": target_series,
             "administrative_zone": target_zone,
             "persisted_count": persisted,
+            "cached": False,
             "events": [event.to_deadline_doc(
                 administrative_zone=target_zone,
                 series=target_series,
