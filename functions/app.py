@@ -71,8 +71,6 @@ async def rate_limit_middleware(request, call_next):
 
 initialize_firebase()
 
-model = None
-model_path = None
 _firestore_client = None
 
 # Bounded job cache with TTL (max 1000 entries, 1 hour TTL)
@@ -173,33 +171,6 @@ def validate_https_url(url: str) -> bool:
     return parsed.scheme == "https" and bool(parsed.netloc)
 
 
-def get_model():
-    global model, model_path
-    if model is None:
-        try:
-            from ultralytics import YOLO
-
-            possible_paths = [
-                "exam_layout.pt",
-                "./exam_layout.pt",
-                os.path.join(os.getcwd(), "exam_layout.pt"),
-                "/opt/render/project/src/functions/exam_layout.pt",
-            ]
-
-            for path in possible_paths:
-                if os.path.exists(path):
-                    model_path = path
-                    break
-
-            if not model_path:
-                raise RuntimeError("Model file not found")
-
-            model = YOLO(model_path)
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Model unavailable: {exc}") from exc
-    return model
-
-
 def get_grading_gateway() -> HandwritingGradingGateway:
     global _grading_gateway
     if _grading_gateway is None:
@@ -272,43 +243,6 @@ def get_ai_proxy_service() -> AiProxyService:
     if _ai_proxy_service is None:
         _ai_proxy_service = AiProxyService()
     return _ai_proxy_service
-
-
-class DetectLayoutRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    image_data: str | None = None
-    image_url: str | None = None
-
-    @model_validator(mode="after")
-    def ensure_one_source(self):
-        if not self.image_data and not self.image_url:
-            raise ValueError("image_data or image_url is required")
-        if self.image_url and not validate_https_url(self.image_url):
-            raise ValueError("image_url must be a public HTTPS URL")
-        return self
-
-
-class DetectLayoutBatchItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    image_data: str | None = None
-    image_url: str | None = None
-    item_id: str | None = None
-
-    @model_validator(mode="after")
-    def ensure_one_source(self):
-        if not self.image_data and not self.image_url:
-            raise ValueError("image_data or image_url is required")
-        if self.image_url and not validate_https_url(self.image_url):
-            raise ValueError("image_url must be a public HTTPS URL")
-        return self
-
-
-class DetectLayoutBatchRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    items: list[DetectLayoutBatchItem] = Field(min_length=1, max_length=24)
 
 
 class AnalyzePdfRequest(BaseModel):
@@ -423,25 +357,7 @@ class AiChatRequest(BaseModel):
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
 
 
-def parse_detections(results):
-    detections = []
-    for result in results:
-        boxes = result.boxes
-        for box in boxes:
-            detections.append(
-                {
-                    "class": int(box.cls[0]),
-                    "confidence": float(box.conf[0]),
-                    "x": float(box.xywh[0][0]),
-                    "y": float(box.xywh[0][1]),
-                    "width": float(box.xywh[0][2]),
-                    "height": float(box.xywh[0][3]),
-                }
-            )
-    return detections
-
-
-async def download_or_decode_image(payload: DetectLayoutRequest) -> bytes:
+async def download_or_decode_image(payload: BaseModel) -> bytes:
     if payload.image_data:
         if payload.image_data.startswith("data:"):
             return base64.b64decode(payload.image_data.split(",", 1)[1])
@@ -455,14 +371,6 @@ async def download_or_decode_image(payload: DetectLayoutRequest) -> bytes:
         return response.content
 
     return await asyncio.to_thread(fetch)
-
-
-async def download_or_decode_batch_item(payload: DetectLayoutBatchItem) -> bytes:
-    request = DetectLayoutRequest(
-        image_data=payload.image_data,
-        image_url=payload.image_url,
-    )
-    return await download_or_decode_image(request)
 
 
 async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
@@ -560,85 +468,13 @@ async def process_pdf_job(job_id: str, pdf_bytes: bytes, owner_uid: str, filenam
             os.unlink(tmp_path)
 
 
-async def run_layout_detection_on_bytes(image_bytes: bytes) -> list[dict[str, Any]]:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-        tmp.write(image_bytes)
-        tmp_path = tmp.name
-
-    try:
-        yolo_model = get_model()
-        results = await asyncio.to_thread(yolo_model, tmp_path, verbose=False)
-        return parse_detections(results)
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-
-
 @app.get("/health")
 async def health():
-    # Eagerly load model on first health check so status is accurate
-    try:
-        get_model()
-    except Exception:
-        pass
     return {
         "status": "healthy",
         "firebase_admin_ready": True,
         "firestore_database_id": _firestore_database_id,
-        "model_loaded": model is not None,
         "transport": "fastapi",
-    }
-
-
-@app.post("/detectLayout")
-async def detect_layout(
-    payload: DetectLayoutRequest,
-    user: dict[str, Any] = Depends(current_user),
-):
-    image_bytes = await download_or_decode_image(payload)
-    detections = await run_layout_detection_on_bytes(image_bytes)
-    return {
-        "detections": detections,
-        "owner_uid": user["uid"],
-        "source_type": "MODEL_INFERENCE",
-    }
-
-
-@app.post("/detectLayoutBatch")
-async def detect_layout_batch(
-    payload: DetectLayoutBatchRequest,
-    user: dict[str, Any] = Depends(current_user),
-):
-    semaphore = asyncio.Semaphore(4)
-
-    async def process_item(index: int, item: DetectLayoutBatchItem) -> dict[str, Any]:
-        async with semaphore:
-            try:
-                image_bytes = await download_or_decode_batch_item(item)
-                detections = await run_layout_detection_on_bytes(image_bytes)
-                return {
-                    "index": index,
-                    "item_id": item.item_id,
-                    "detections": detections,
-                    "status": "completed",
-                }
-            except Exception as exc:
-                return {
-                    "index": index,
-                    "item_id": item.item_id,
-                    "detections": [],
-                    "status": "failed",
-                    "error": str(exc),
-                }
-
-    results = await asyncio.gather(
-        *(process_item(index, item) for index, item in enumerate(payload.items))
-    )
-    return {
-        "owner_uid": user["uid"],
-        "source_type": "MODEL_INFERENCE_BATCH",
-        "item_count": len(results),
-        "results": results,
     }
 
 

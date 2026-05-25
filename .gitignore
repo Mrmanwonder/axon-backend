@@ -14,9 +14,6 @@ functions/firebase-admin.json
 !runtime.txt
 !railway.json
 assets/*
-!assets/models/
-assets/models/*
-!assets/models/exam_layout.pt
 !functions/Procfile
 !functions/gunicorn.conf.py
 !functions/services/
