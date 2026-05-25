@@ -35,6 +35,16 @@ assets/*
 !pubspec.yaml
 !analysis_options.yaml
 
+# Large ML model files - not suitable for git
+lib/gemma/
+lib/gemma_4bit/
+lib/gemma_2b/
+lib/gemma_2b_train/
+lib/glm-ocr/
+*.safetensors
+lib/scrapper/batch_upload.json
+lib/scrapper/manifest.lock
+
 # Dependencies
 functions/__pycache__/
 functions/*.pyc

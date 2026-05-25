@@ -313,6 +313,81 @@ class StudyPulseRequest(BaseModel):
     session_id: str | None = None
 
 
+class SupabaseQueryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    table: str = Field(min_length=1, max_length=64)
+    method: str = Field(default="select", pattern=r"^(select|insert|update|delete|upsert)$")
+    params: dict[str, Any] = {}
+
+
+ALLOWED_SUPABASE_TABLES = {
+    "boards", "subjects", "chapters", "Datesheet", "PYQs",
+    "curriculum_subjects", "curriculum_chapters", "curriculum_subchapters", "curriculum_syllabi",
+    "user_notes", "user_subjects", "global_notes",
+    "subchapter_notes", "user_subchapter_progress",
+    "user_pyqs", "user_mocks", "study_progress",
+}
+
+
+@app.post("/supabase/query")
+async def supabase_query(
+    payload: SupabaseQueryRequest,
+    user: dict[str, Any] = Depends(current_user),
+):
+    if payload.table not in ALLOWED_SUPABASE_TABLES:
+        raise HTTPException(status_code=403, detail=f"Table '{payload.table}' not allowed")
+
+    supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+
+    if not supabase_url or not service_key:
+        raise HTTPException(status_code=500, detail="Supabase not configured on server")
+
+    url = f"{supabase_url}/rest/v1/{payload.table}"
+    headers = {
+        "apikey": service_key,
+        "Authorization": f"Bearer {service_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            if payload.method == "select":
+                resp = await client.get(url, headers=headers, params=payload.params)
+            elif payload.method == "insert":
+                body = payload.params.pop("body", [])
+                resp = await client.post(url, headers=headers, json=body, params=payload.params)
+            elif payload.method == "upsert":
+                body = payload.params.pop("body", [])
+                headers["Prefer"] = "resolution=merge-duplicates"
+                resp = await client.post(url, headers=headers, json=body, params=payload.params)
+            elif payload.method == "update":
+                body = payload.params.pop("body", {})
+                resp = await client.patch(url, headers=headers, json=body, params=payload.params)
+            elif payload.method == "delete":
+                resp = await client.delete(url, headers=headers, params=payload.params)
+            else:
+                raise HTTPException(status_code=400, detail=f"Unsupported method: {payload.method}")
+
+        if resp.status_code >= 400:
+            detail = resp.text[:500]
+            raise HTTPException(status_code=502, detail=f"Supabase error ({resp.status_code}): {detail}")
+
+        try:
+            return resp.json()
+        except Exception:
+            return {"result": resp.text}
+
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Supabase query timed out")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Supabase request failed: {e}")
+
+
 class SyncExamDatesRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
