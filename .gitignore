@@ -30,6 +30,7 @@ assets/*
 !functions/services/university_catalog_service.py
 !functions/Dockerfile
 !functions/.dockerignore
+!cloudbuild.yaml
 
 # Flutter app
 !lib/
