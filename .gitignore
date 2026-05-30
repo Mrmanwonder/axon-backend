@@ -28,6 +28,8 @@ assets/*
 !functions/seed_universities.py
 !functions/seed_university_datasets.py
 !functions/services/university_catalog_service.py
+!functions/Dockerfile
+!functions/.dockerignore
 
 # Flutter app
 !lib/
