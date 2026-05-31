@@ -30,7 +30,6 @@ assets/*
 !functions/services/university_catalog_service.py
 !functions/Dockerfile
 !functions/.dockerignore
-!cloudbuild.yaml
 !.github/
 !.github/**
 
