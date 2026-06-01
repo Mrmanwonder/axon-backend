@@ -1213,13 +1213,25 @@ class DailyPlannerServiceV2:
         cw_proficiency   = hydrator.load_command_word_proficiency()
         cal_events       = hydrator.load_calendar_events(today_str)
 
+        # Self-improvement / Adaptive Cognitive Load
+        # Reduce load if user is constantly missing targets or showing high burnout
+        recent_completion = float(analytics.get("last_7_days_completion_rate", 1.0))
+        burnout_factor    = float(analytics.get("burnout_indicator", 0.0))
+        load_modifier = 1.0
+        if recent_completion < 0.4:
+            load_modifier *= 0.8  # Gently ease the load to build momentum
+            logger.info(f"Adaptive Load: User {uid} completion <40%, reducing daily target.")
+        if burnout_factor > 0.7:
+            load_modifier *= 0.75 # Heavily ease load if burned out
+            logger.info(f"Adaptive Load: User {uid} burnout >70%, enforcing lighter day.")
+
         # Deduct calendar busy time from available hours
         busy_hours = sum(
             float(e.get("duration_hours", 0))
             for e in cal_events
             if e.get("blocks_study", True)
         )
-        available_hours = max(1.0, available_hours - busy_hours)
+        available_hours = max(1.0, (available_hours - busy_hours) * load_modifier)
 
         day_start = datetime.combine(today, time(day_start_hour, 0))
         slot_mgr  = SlotManager(day_start, available_hours)
