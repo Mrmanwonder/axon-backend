@@ -73,39 +73,10 @@ initialize_firebase()
 
 _firestore_client = None
 
-# Bounded job cache with TTL (max 1000 entries, 1 hour TTL)
-_job_cache: dict[str, dict[str, Any]] = {}
-_job_cache_ttl: dict[str, float] = {}
-_JOB_CACHE_MAX_SIZE = 1000
-_JOB_CACHE_TTL_SECONDS = 3600
-
-def _cleanup_job_cache():
-    """Remove expired entries from job cache."""
-    global _job_cache, _job_cache_ttl
-    now = time.time()
-    expired = [k for k, v in _job_cache_ttl.items() if now - v > _JOB_CACHE_TTL_SECONDS]
-    for k in expired:
-        _job_cache.pop(k, None)
-        _job_cache_ttl.pop(k, None)
-
-    # Evict oldest if over size limit
-    while len(_job_cache) > _JOB_CACHE_MAX_SIZE:
-        oldest = min(_job_cache_ttl, key=_job_cache_ttl.get)
-        _job_cache.pop(oldest, None)
-        _job_cache_ttl.pop(oldest, None)
+# Removed bounded in-memory job cache; now purely stateless via Firestore
 
 
-def save_job(job_id: str, payload: dict[str, Any]) -> None:
-    _cleanup_job_cache()
-    _job_cache[job_id] = payload
-    _job_cache_ttl[job_id] = time.time()
 
-
-def update_job(job_id: str, **fields: Any) -> None:
-    _cleanup_job_cache()
-    if job_id in _job_cache:
-        _job_cache[job_id].update(fields)
-        _job_cache_ttl[job_id] = time.time()
 
 
 _firestore_database_id = os.environ.get("FIRESTORE_DATABASE_ID", "axon")
@@ -153,16 +124,17 @@ def syllabus_maps_collection():
 
 
 def save_job(job_id: str, payload: dict[str, Any]) -> None:
-    _cleanup_job_cache()
-    _job_cache[job_id] = payload
-    _job_cache_ttl[job_id] = time.time()
-    jobs_collection().document(job_id).set(payload, merge=True)
-
+    try:
+        jobs_collection().document(job_id).set(payload, merge=True)
+    except Exception as e:
+        print(f"Error saving job {job_id}: {e}")
 
 def update_job(job_id: str, **fields: Any) -> None:
-    _cleanup_job_cache()
-    payload = {**_job_cache.get(job_id, {}), **fields, "updated_at": utc_now()}
-    save_job(job_id, payload)
+    try:
+        fields["updated_at"] = utc_now()
+        jobs_collection().document(job_id).update(fields)
+    except Exception as e:
+        print(f"Error updating job {job_id}: {e}")
 
 
 def validate_https_url(url: str) -> bool:
@@ -597,16 +569,19 @@ async def analyze_pdf(
 
 @app.get("/jobs/{job_id}")
 async def get_job(job_id: str, user: dict[str, Any] = Depends(current_user)):
-    job = _job_cache.get(job_id)
-    if job is None:
+    try:
         snapshot = jobs_collection().document(job_id).get()
         if snapshot.exists:
             job = snapshot.to_dict()
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if job.get("owner_uid") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Forbidden")
-    return job
+        else:
+            raise HTTPException(status_code=404, detail="Job not found")
+            
+        if job.get("owner_uid") != user["uid"]:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        return job
+    except Exception as e:
+        if isinstance(e, HTTPException): raise e
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/syncLeaderboardProfile")
