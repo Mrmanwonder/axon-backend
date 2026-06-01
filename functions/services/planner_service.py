@@ -770,17 +770,55 @@ class FirestoreHydrator:
         return self._safe_doc("settings", "planner")
 
     def load_subjects(self) -> List[dict]:
-        return self._safe_collection("subjects")
+        try:
+            user_doc = self._safe_doc()
+            if not user_doc:
+                return []
+            # Extract from either "subjects" array or "study_catalog" keys
+            subjects = user_doc.get("subjects", [])
+            if not subjects and "study_catalog" in user_doc:
+                subjects = list(user_doc["study_catalog"].keys())
+            
+            # Since the frontend only stores string names, we map them to a dict format
+            # expected by the context builder
+            return [{"id": s, "name": s, "code": s, "level": "A_LEVEL"} for s in subjects]
+        except Exception as e:
+            logger.warning(f"Failed to load user subjects: {e}")
+            return []
 
     def load_objectives(self, subject_id: str) -> List[dict]:
         try:
-            snaps = (
-                self._user_doc.collection("subjects")
-                .document(subject_id)
-                .collection("objectives")
-                .stream()
-            )
-            return [{"id": s.id, **s.to_dict()} for s in snaps]
+            # 1. Fetch global syllabus_maps for this subject
+            # The global collection is 'syllabus_maps'. We query where 'subject' == subject_id
+            snaps = self.db.collection("syllabus_maps").where("subject", "==", subject_id).stream()
+            global_objs = {s.id: s.to_dict() for s in snaps}
+            
+            if not global_objs:
+                # If exact match fails, try fetching all and doing a fuzzy/lower match
+                # This handles frontend storing "Mathematics" vs backend storing "9709"
+                all_snaps = self.db.collection("syllabus_maps").stream()
+                for s in all_snaps:
+                    data = s.to_dict()
+                    if data.get("subject", "").lower() == subject_id.lower():
+                        global_objs[s.id] = data
+
+            # 2. Fetch user's mastery from users_private/{uid}/mastery
+            mastery_snaps = self.db.collection("users_private").document(self.uid).collection("mastery").stream()
+            mastery_data = {s.id: s.to_dict() for s in mastery_snaps}
+
+            # 3. Merge them
+            merged = []
+            for obj_id, g_data in global_objs.items():
+                m_data = mastery_data.get(obj_id, {})
+                merged.append({
+                    "id": obj_id,
+                    **g_data,
+                    "mastery_score": m_data.get("mastery_score", 0.0),
+                    "last_studied": m_data.get("updated_at", None),
+                    "stability": m_data.get("stability", 1.0),
+                    "difficulty": m_data.get("difficulty", 0.3)
+                })
+            return merged
         except Exception as e:
             logger.warning(f"Failed to load objectives for {subject_id}: {e}")
             return []
@@ -1000,17 +1038,28 @@ class SubjectContextBuilder:
     @staticmethod
     def _parse_objective(raw: dict) -> SyllabusObjective:
         last_studied = None
-        if raw.get("last_studied"):
-            try:
-                last_studied = datetime.fromisoformat(str(raw["last_studied"]))
-            except ValueError:
-                pass
+        # Handle Firestore Datetime / String
+        ls = raw.get("last_studied")
+        if ls:
+            if hasattr(ls, "timestamp"):
+                last_studied = datetime.fromtimestamp(ls.timestamp())
+            else:
+                try:
+                    last_studied = datetime.fromisoformat(str(ls))
+                except ValueError:
+                    pass
+                    
+        # Parse papers string into list of ints
+        paper_str = str(raw.get("paper", "1"))
+        import re
+        paper_nums = [int(n) for n in re.findall(r'\d+', paper_str)] or [1]
+
         return SyllabusObjective(
             id=raw["id"],
             topic=raw.get("topic", ""),
-            subtopic=raw.get("subtopic", ""),
+            subtopic=raw.get("subtopic", raw.get("sub_topic", "")),
             description=raw.get("description", ""),
-            paper_numbers=[int(p) for p in raw.get("paper_numbers", [1])],
+            paper_numbers=raw.get("paper_numbers", paper_nums),
             command_words=raw.get("command_words", []),
             prerequisites=raw.get("prerequisites", []),
             examiner_flagged=bool(raw.get("examiner_flagged", False)),

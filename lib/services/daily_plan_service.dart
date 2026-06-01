@@ -24,7 +24,7 @@ class DailyPlanService {
   DailyPlanService({http.Client? client}) : _client = client ?? http.Client();
 
   static const String _backendUrl = BackendConfig.baseUrl;
-  static const Duration _requestTimeout = Duration(seconds: 25);
+  static const Duration _requestTimeout = Duration(seconds: 120);
   static final Map<String, Future<List<DailyPlanTask>>> _inFlightGenerations =
       {};
 
