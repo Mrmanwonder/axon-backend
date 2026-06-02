@@ -1,5 +1,5 @@
 """
-axon_planner_v2.py  –  Axon Daily Plan Generator (CAIE Edition)
+axon_planner_v2.py  -  Axon Daily Plan Generator (CAIE Edition)
 ════════════════════════════════════════════════════════════════
 
 Architecture
@@ -40,9 +40,12 @@ Key improvements over V1
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
 import math
-import uuid
+import os
+import time as time_module
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
@@ -53,6 +56,10 @@ import networkx as nx
 from google.cloud import firestore
 
 logger = logging.getLogger(__name__)
+
+_SYLLABUS_CACHE_TTL_SECONDS = int(os.environ.get("SYLLABUS_CACHE_TTL_SECONDS", "900"))
+_SYLLABUS_SUBJECT_CACHE: Dict[str, Tuple[float, Dict[str, dict]]] = {}
+_SYLLABUS_ALL_CACHE: Tuple[float, Dict[str, dict]] | None = None
 
 # ══════════════════════════════════════════════════════════════
 # §1  ENUMERATIONS & CONSTANTS
@@ -102,17 +109,17 @@ class PaperType(str, Enum):
 # ── CAIE Command Words ──────────────────────────────────────
 # Tiered by Bloom's cognitive demand (1 = recall, 5 = evaluate)
 COMMAND_WORD_TIERS: Dict[str, int] = {
-    # Tier 1 – Knowledge retrieval
+    # Tier 1 - Knowledge retrieval
     "state": 1, "list": 1, "name": 1, "give": 1, "identify": 1, "recall": 1,
-    # Tier 2 – Comprehension / application
+    # Tier 2 - Comprehension / application
     "define": 2, "describe": 2, "outline": 2, "calculate": 2,
     "show": 2, "determine": 2, "measure": 2, "complete": 2,
-    # Tier 3 – Analysis / reasoning
+    # Tier 3 - Analysis / reasoning
     "explain": 3, "suggest": 3, "deduce": 3, "sketch": 3, "plot": 3,
     "predict": 3, "comment": 3, "derive": 3, "estimate": 3,
-    # Tier 4 – Synthesis / evaluation
+    # Tier 4 - Synthesis / evaluation
     "discuss": 4, "analyse": 4, "compare": 4, "justify": 4, "contrast": 4,
-    # Tier 5 – Critical evaluation
+    # Tier 5 - Critical evaluation
     "evaluate": 5, "assess": 5, "criticise": 5, "to what extent": 5,
 }
 
@@ -211,10 +218,10 @@ class SyllabusObjective:
     command_words: List[str]     # CAIE command words used in questions
     prerequisites: List[str]     # ids of prerequisite objectives
     examiner_flagged: bool       # flagged as common error in examiner reports
-    mastery_score: float         # 0–1 current mastery
+    mastery_score: float         # 0-1 current mastery
     last_studied: Optional[datetime]
     stability: float             # FSRS stability in days (default 1.0)
-    difficulty: float            # FSRS difficulty 0–1 (default 0.3)
+    difficulty: float            # FSRS difficulty 0-1 (default 0.3)
     next_due: Optional[date] = None   # FSRS-computed next review date
 
 
@@ -227,9 +234,9 @@ class SubjectContext:
     papers: List[Paper]
     objectives: List[SyllabusObjective]
     days_to_exam: int
-    target_grade: str            # "A*", "A", "B" …
+    target_grade: str            # "A*", "A", "B" ...
     phase: StudyPhase
-    grade_gap: float             # 0–1: gap between current perf and target threshold
+    grade_gap: float             # 0-1: gap between current perf and target threshold
     weak_command_words: List[str]
     dep_graph: nx.DiGraph = field(default_factory=nx.DiGraph)
 
@@ -294,12 +301,17 @@ class FSRSLite:
 
     @staticmethod
     def urgency(obj: SyllabusObjective, today: date) -> float:
-        """Returns 0–1 urgency; 1.0 = overdue, 0.0 = freshly reviewed."""
+        """Returns 0-1 urgency; 1.0 = overdue, 0.0 = freshly reviewed."""
         if obj.last_studied is None:
             return 1.0
         elapsed = max(0, (today - obj.last_studied.date()).days)
+        # Cap elapsed to prevent math overflow or extreme drops on long hiatus
+        elapsed = min(elapsed, 90)
         r = FSRSLite.retrievability(obj.stability, elapsed)
-        return round(1.0 - r, 4)
+        # factor in difficulty: harder topics become urgent slightly faster
+        difficulty_factor = 1.0 + (obj.difficulty * 0.25)
+        urgency = (1.0 - r) * difficulty_factor
+        return round(max(0.0, min(1.0, urgency)), 4)
 
     @staticmethod
     def next_interval_days(stability: float) -> float:
@@ -310,12 +322,15 @@ class FSRSLite:
     @staticmethod
     def update_after_recall(stability: float, difficulty: float) -> float:
         """Called when student demonstrates good recall."""
-        return stability * (1.0 + 11.0 * (1.0 - difficulty) * math.exp(-0.1 * stability))
+        # Dampen the multiplier for high stabilities to avoid extreme interval stretching
+        growth = 1.0 + (11.0 * (1.0 - difficulty) * math.exp(-0.25 * stability))
+        return min(stability * growth, 60.0) # Cap stability at 60 days
 
     @staticmethod
     def update_after_lapse(stability: float) -> float:
         """Called when student fails recall (e.g. marks question wrong)."""
-        return max(0.5, stability * 0.20)
+        # A softer penalty than strict 20% wipeout for advanced concepts
+        return max(0.5, min(stability * 0.40, 7.0))
 
 
 # ══════════════════════════════════════════════════════════════
@@ -333,12 +348,12 @@ class ObjectiveScoringEngine:
     │ Factor              │ Weight │ Rationale                                   │
     ├─────────────────────┼────────┼─────────────────────────────────────────────┤
     │ F1 mastery_decay    │  0.25  │ FSRS urgency: how much has been forgotten?  │
-    │ F2 grade_gap        │  0.20  │ Distance from target grade (A*, A, B …)     │
+    │ F2 grade_gap        │  0.20  │ Distance from target grade (A*, A, B ...)     │
     │ F3 paper_weight     │  0.15  │ Paper's % contribution to final grade       │
     │ F4 command_word_gap │  0.15  │ Deficit in required command-word proficiency│
     │ F5 prereq_unlock    │  0.10  │ # of objectives this one gates downstream   │
     │ F6 examiner_flag    │  0.10  │ Flagged as common mistake in examiner report│
-    │ F7 recency_penalty  │  0.05  │ Penalises recently studied topics (−sign)   │
+    │ F7 recency_penalty  │  0.05  │ Penalises recently studied topics (-sign)   │
     └─────────────────────┴────────┴─────────────────────────────────────────────┘
 
     After weighted sum, a phase multiplier amplifies urgency as exams near:
@@ -382,7 +397,7 @@ class ObjectiveScoringEngine:
         # F1: FSRS urgency (0 = fresh, 1 = overdue)
         f["mastery_decay"] = FSRSLite.urgency(obj, today)
 
-        # F2: grade gap – how far current mastery is from the target threshold
+        # F2: grade gap - how far current mastery is from the target threshold
         target_thresh = self.GRADE_THRESHOLDS.get(ctx.target_grade, 0.70)
         f["grade_gap"] = max(0.0, target_thresh - obj.mastery_score)
 
@@ -393,25 +408,26 @@ class ObjectiveScoringEngine:
         else:
             f["paper_weight"] = 0.30  # fallback assumption
 
-        # F4: command-word gap – max gap weighted by tier (higher tiers matter more)
+        # F4: command-word gap - max gap weighted by tier (higher tiers matter more)
         if obj.command_words:
+            # We use an exponential weight for tiers: a Tier 5 gap is significantly worse than Tier 1
             gaps = [
                 max(0.0, 1.0 - cw_proficiency.get(cw, 0.0))
-                * (COMMAND_WORD_TIERS.get(cw, 1) / 5.0)
+                * (math.pow(1.5, COMMAND_WORD_TIERS.get(cw, 1)) / math.pow(1.5, 5.0))
                 for cw in obj.command_words
             ]
-            f["command_word_gap"] = max(gaps)
+            f["command_word_gap"] = max(gaps) if gaps else 0.0
         else:
             f["command_word_gap"] = 0.0
 
-        # F5: prerequisite unlock value (capped at 1.0 for 5+ successors)
+        # F5: prerequisite unlock value (non-linear scale)
         successors = len(list(ctx.dep_graph.successors(obj.id)))
-        f["prereq_unlock"] = min(1.0, successors / 5.0)
+        f["prereq_unlock"] = min(1.0, math.log(1.0 + successors) / math.log(6.0))
 
         # F6: examiner flagged
         f["examiner_flag"] = 1.0 if obj.examiner_flagged else 0.0
 
-        # F7: recency penalty – penalises recently studied topics (negative contribution)
+        # F7: recency penalty - penalises recently studied topics (negative contribution)
         if obj.last_studied:
             days_since = max(0, (today - obj.last_studied.date()).days)
             f["recency_penalty"] = max(0.0, 1.0 - days_since / 3.0)
@@ -485,11 +501,11 @@ class TaskBuilder:
         TaskType.DEEP_WORK:          "Master",
         TaskType.PRACTICE:           "Practice",
         TaskType.REVIEW:             "Review",
-        TaskType.PAST_PAPER:         "Past Paper —",
-        TaskType.FLASHCARDS:         "Flashcards —",
-        TaskType.MOCK_EXAM:          "Mock Exam —",
-        TaskType.COMMAND_WORD_DRILL: "Command Drill —",
-        TaskType.EXAMINER_REPORT:    "Examiner Notes —",
+        TaskType.PAST_PAPER:         "Past Paper -",
+        TaskType.FLASHCARDS:         "Flashcards -",
+        TaskType.MOCK_EXAM:          "Mock Exam -",
+        TaskType.COMMAND_WORD_DRILL: "Command Drill -",
+        TaskType.EXAMINER_REPORT:    "Examiner Notes -",
     }
 
     INTENSITY_PRIORITY = {
@@ -549,7 +565,7 @@ class TaskBuilder:
         if obj.command_words:
             parts.append(f"Command words: {', '.join(obj.command_words)}")
         if task_type == TaskType.EXAMINER_REPORT and obj.examiner_flagged:
-            parts.append("⚠ Common error area — review examiner report commentary carefully.")
+            parts.append("⚠ Common error area - review examiner report commentary carefully.")
         if task_type == TaskType.PAST_PAPER:
             parts.append(f"Use mark-scheme after completing. Annotate why wrong answers were chosen.")
         if task_type == TaskType.MOCK_EXAM:
@@ -586,8 +602,21 @@ class TaskBuilder:
         if obj.paper_numbers:
             paper_str = f"Paper {obj.paper_numbers[0]}"
 
+        stable_id = hashlib.sha1(
+            "|".join(
+                [
+                    today_str,
+                    ctx.subject_id,
+                    obj.id,
+                    task_type.value,
+                    window.value,
+                    slot_start.isoformat(),
+                ]
+            ).encode("utf-8")
+        ).hexdigest()[:24]
+
         return PlannerTask(
-            id=str(uuid.uuid4()),
+            id=f"plan_{stable_id}",
             title=self.build_title(obj, task_type),
             subject=ctx.name,
             description=self.build_description(obj, task_type, ctx),
@@ -624,9 +653,9 @@ class SlotManager:
       ┌──────────────────────────────────────────────────┐
       │  peak_focus_morning  [40% of time]               │
       │  structured_morning  [20% of time]               │
-      │  — 20-min break —                                │
+      │  - 20-min break -                                │
       │  afternoon           [20% of time, optional]     │
-      │  — 30-min break —                                │
+      │  - 30-min break -                                │
       │  review_evening      [15% of time]               │
       │  light_evening       [ 5% of time]               │
       └──────────────────────────────────────────────────┘
@@ -709,7 +738,7 @@ class SlotManager:
             if slot.start >= slot.end:
                 continue
 
-            # Fits — allocate
+            # Fits - allocate
             start = slot.start
             slot.clu_remaining -= clu
             self._total_clu += clu
@@ -778,7 +807,7 @@ class FirestoreHydrator:
             subjects = user_doc.get("subjects", [])
             if not subjects and "study_catalog" in user_doc:
                 subjects = list(user_doc["study_catalog"].keys())
-            
+
             # Since the frontend only stores string names, we map them to a dict format
             # expected by the context builder
             return [{"id": s, "name": s, "code": s, "level": "A_LEVEL"} for s in subjects]
@@ -790,17 +819,24 @@ class FirestoreHydrator:
         try:
             # 1. Fetch global syllabus_maps for this subject
             # The global collection is 'syllabus_maps'. We query where 'subject' == subject_id
-            snaps = self.db.collection("syllabus_maps").where("subject", "==", subject_id).stream()
-            global_objs = {s.id: s.to_dict() for s in snaps}
-            
+            cache_key = subject_id.strip().lower()
+            now = time_module.time()
+            cached = _SYLLABUS_SUBJECT_CACHE.get(cache_key)
+            if cached and now - cached[0] < _SYLLABUS_CACHE_TTL_SECONDS:
+                global_objs = {k: dict(v) for k, v in cached[1].items()}
+            else:
+                snaps = self.db.collection("syllabus_maps").where("subject", "==", subject_id).stream()
+                global_objs = {s.id: s.to_dict() for s in snaps}
+                _SYLLABUS_SUBJECT_CACHE[cache_key] = (now, global_objs)
+
             if not global_objs:
                 # If exact match fails, try fetching all and doing a fuzzy/lower match
                 # This handles frontend storing "Mathematics" vs backend storing "9709"
-                all_snaps = self.db.collection("syllabus_maps").stream()
-                for s in all_snaps:
-                    data = s.to_dict()
+                all_maps = self._load_all_syllabus_maps()
+                for obj_id, data in all_maps.items():
                     if data.get("subject", "").lower() == subject_id.lower():
-                        global_objs[s.id] = data
+                        global_objs[obj_id] = data
+                _SYLLABUS_SUBJECT_CACHE[cache_key] = (now, global_objs)
 
             # 2. Fetch user's mastery from users_private/{uid}/mastery
             mastery_snaps = self.db.collection("users_private").document(self.uid).collection("mastery").stream()
@@ -822,6 +858,16 @@ class FirestoreHydrator:
         except Exception as e:
             logger.warning(f"Failed to load objectives for {subject_id}: {e}")
             return []
+
+    def _load_all_syllabus_maps(self) -> Dict[str, dict]:
+        global _SYLLABUS_ALL_CACHE
+        now = time_module.time()
+        if _SYLLABUS_ALL_CACHE and now - _SYLLABUS_ALL_CACHE[0] < _SYLLABUS_CACHE_TTL_SECONDS:
+            return {k: dict(v) for k, v in _SYLLABUS_ALL_CACHE[1].items()}
+        snaps = self.db.collection("syllabus_maps").stream()
+        all_maps = {s.id: s.to_dict() for s in snaps}
+        _SYLLABUS_ALL_CACHE = (now, all_maps)
+        return {k: dict(v) for k, v in all_maps.items()}
 
     def load_analytics(self) -> dict:
         return self._safe_doc("analytics", "summary")
@@ -879,7 +925,7 @@ A deterministic algorithm has generated today's study plan. Your job is to IMPRO
 
 1. Rewrite each task title: specific topic + action verb, max 60 chars, no generic phrasing.
    Bad: "Deep Work Waves" | Good: "Master Superposition & Path Difference"
-2. Rewrite descriptions: give 1–2 concrete study actions (e.g. "Derive the formula, then attempt
+2. Rewrite descriptions: give 1-2 concrete study actions (e.g. "Derive the formula, then attempt
    3 past-paper questions on phase difference before checking the mark scheme.").
 3. Flag conflicts (same paper + same window, duplicate objectives) and resolve in the reason field.
 4. For examiner_report tasks, include the specific common mistake pattern from the reason field.
@@ -902,6 +948,9 @@ Do NOT add or remove tasks. Do NOT wrap in markdown code fences.
             model = genai.GenerativeModel(
                 "gemini-1.5-flash",
                 system_instruction=self.SYSTEM_PROMPT,
+                generation_config=genai.GenerationConfig(
+                    response_mime_type="application/json"
+                )
             )
             payload = [
                 {
@@ -1048,7 +1097,7 @@ class SubjectContextBuilder:
                     last_studied = datetime.fromisoformat(str(ls))
                 except ValueError:
                     pass
-                    
+
         # Parse papers string into list of ints
         paper_str = str(raw.get("paper", "1"))
         import re
@@ -1121,6 +1170,20 @@ class DailyPlannerServiceV2:
         self._builder     = TaskBuilder()
         self._ctx_builder = SubjectContextBuilder()
         self._ai          = AIPolicier(api_key=gemini_api_key)
+        self._generation_semaphore = asyncio.Semaphore(
+            max(1, int(os.environ.get("DAILY_PLANNER_MAX_PARALLEL", "24")))
+        )
+        self._ai_semaphore = asyncio.Semaphore(
+            max(1, int(os.environ.get("DAILY_PLANNER_AI_PARALLEL", "2")))
+        )
+        self._ai_timeout_seconds = float(
+            os.environ.get("DAILY_PLANNER_AI_TIMEOUT_SECONDS", "8")
+        )
+        self._ai_enabled = os.environ.get(
+            "DAILY_PLANNER_AI_ENABLED", "true"
+        ).lower() not in {"0", "false", "no", "off"}
+        self._inflight_lock = asyncio.Lock()
+        self._inflight: Dict[str, asyncio.Task[List[PlannerTask]]] = {}
 
     # ── Public API ───────────────────────────────────────────
 
@@ -1132,19 +1195,80 @@ class DailyPlannerServiceV2:
     ) -> List[PlannerTask]:
         today     = target_date or date.today()
         today_str = today.isoformat()
+        key = f"{uid}:{today_str}:{int(force)}"
+
+        async with self._inflight_lock:
+            current = self._inflight.get(key)
+            if current and not current.done():
+                logger.info("Daily planner coalesced in-flight request for uid=%s date=%s", uid, today_str)
+                task = current
+            else:
+                task = asyncio.create_task(
+                    self._generate_and_persist_daily_plan_uncached(
+                        uid=uid,
+                        force=force,
+                        today=today,
+                        today_str=today_str,
+                    )
+                )
+                self._inflight[key] = task
+
+        try:
+            return await task
+        finally:
+            async with self._inflight_lock:
+                if self._inflight.get(key) is task:
+                    self._inflight.pop(key, None)
+
+    async def _generate_and_persist_daily_plan_uncached(
+        self,
+        *,
+        uid: str,
+        force: bool,
+        today: date,
+        today_str: str,
+    ) -> List[PlannerTask]:
         hydrator  = FirestoreHydrator(self.db, uid)
 
         if not force:
-            existing = hydrator.load_existing_plan(today_str)
+            existing = await asyncio.to_thread(hydrator.load_existing_plan, today_str)
             if existing:
-                logger.info(f"Plan exists for {uid} on {today_str} — skipping (force=False)")
+                logger.info(f"Plan exists for {uid} on {today_str} - skipping (force=False)")
                 return []
 
-        tasks = self._calculate_daily_load(uid, hydrator, today, today_str)
-        tasks = self._ai.refine(tasks)
-        self._persist(uid, tasks, today_str, hydrator)
+        async with self._generation_semaphore:
+            tasks = await asyncio.to_thread(
+                self._calculate_daily_load, uid, hydrator, today, today_str
+            )
+            tasks = await self._refine_if_capacity(tasks)
+            await asyncio.to_thread(self._persist, uid, tasks, today_str, hydrator)
+        
         logger.info(f"Generated {len(tasks)} tasks for {uid} on {today_str}")
         return tasks
+
+    async def _refine_if_capacity(self, tasks: List[PlannerTask]) -> List[PlannerTask]:
+        if not self._ai_enabled or not tasks:
+            return tasks
+        if self._ai_semaphore.locked():
+            logger.info("Daily planner AI polish skipped under load")
+            return tasks
+
+        try:
+            await asyncio.wait_for(self._ai_semaphore.acquire(), timeout=0.05)
+        except asyncio.TimeoutError:
+            logger.info("Daily planner AI polish skipped after capacity timeout")
+            return tasks
+
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._ai.refine, tasks),
+                timeout=self._ai_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Daily planner AI polish timed out; using deterministic plan")
+            return tasks
+        finally:
+            self._ai_semaphore.release()
 
     async def reschedule_missed_block(
         self,
@@ -1383,9 +1507,21 @@ class DailyPlannerServiceV2:
                     continue
 
                 slot_start, window = result
+                stable_id = hashlib.sha1(
+                    "|".join(
+                        [
+                            today_str,
+                            ctx.subject_id,
+                            cw,
+                            TaskType.COMMAND_WORD_DRILL.value,
+                            window.value,
+                            slot_start.isoformat(),
+                        ]
+                    ).encode("utf-8")
+                ).hexdigest()[:24]
                 tasks.append(PlannerTask(
-                    id=str(uuid.uuid4()),
-                    title=f"Command Drill — '{cw.capitalize()}'",
+                    id=f"plan_{stable_id}",
+                    title=f"Command Drill - '{cw.capitalize()}'",
                     subject=ctx.name,
                     description=(
                         f"Practise Tier-{tier} command word '{cw}'. "
@@ -1435,7 +1571,7 @@ class DailyPlannerServiceV2:
             if t["id"] not in completed_ids:
                 batch.delete(plan_col.document(t["id"]))
 
-        # Write new tasks (skip ids that were already completed — they're preserved above)
+        # Write new tasks (skip ids that were already completed - they're preserved above)
         for task in new_tasks:
             if task.id in completed_ids:
                 continue
@@ -1502,7 +1638,7 @@ class FSRSFeedbackService:
         grade: int,           # 1=again, 2=hard, 3=good, 4=easy
     ) -> None:
         """
-        grade: 1–4 (Anki-style)
+        grade: 1-4 (Anki-style)
         Updates stability, difficulty, last_studied, next_due in Firestore.
         """
         obj_ref = (
