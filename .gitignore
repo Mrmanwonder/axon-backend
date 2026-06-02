@@ -13,6 +13,7 @@ functions/firebase-admin.json
 !requirements.txt
 !runtime.txt
 !railway.json
+!render.yaml
 assets/*
 !functions/Procfile
 !functions/gunicorn.conf.py
@@ -24,15 +25,9 @@ assets/*
 !functions/data/*
 !functions/tests/
 !functions/tests/*
-!functions/render.yaml
 !functions/seed_universities.py
 !functions/seed_university_datasets.py
 !functions/services/university_catalog_service.py
-!functions/Dockerfile
-!functions/.dockerignore
-!functions/cloudbuild.yaml
-!.github/
-!.github/**
 
 # Flutter app
 !lib/

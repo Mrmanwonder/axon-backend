@@ -1,9 +1,0 @@
-__pycache__
-.pytest_cache
-.env
-firebase-admin.json
-*.pyc
-.DS_Store
-README.md
-tests/
-data/
