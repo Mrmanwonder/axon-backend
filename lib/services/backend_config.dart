@@ -3,6 +3,6 @@ class BackendConfig {
 
   static const String baseUrl = String.fromEnvironment(
     'AXON_BACKEND_URL',
-    defaultValue: 'https://bhavu.up.railway.app',
+    defaultValue: 'https://axon-ml.onrender.com',
   );
 }

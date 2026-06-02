@@ -18,6 +18,8 @@ assets/*
 !functions/Procfile
 !functions/gunicorn.conf.py
 !functions/runtime.txt
+!functions/railway.json
+!functions/render.yaml
 !functions/services/
 !functions/services/*
 !functions/middleware/
