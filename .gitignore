@@ -17,6 +17,7 @@ functions/firebase-admin.json
 assets/*
 !functions/Procfile
 !functions/gunicorn.conf.py
+!functions/runtime.txt
 !functions/services/
 !functions/services/*
 !functions/middleware/
