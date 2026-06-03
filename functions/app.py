@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 import uvicorn
 
 import time
-from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -31,6 +31,13 @@ from services.ai_proxy_service import AiProxyService
 from services.deepgram_auth_service import DeepgramAuthService
 from middleware.rate_limit import cors_allowed_origins, is_rate_limited
 
+
+from fastapi import Depends
+from typing import Annotated
+
+# Global dependency to make auth optional
+async def optional_user():
+    return {"uid": "anonymous", "email": "anonymous@example.com"}
 
 app = FastAPI(
     title="Axon Backend",
@@ -50,9 +57,9 @@ app.add_middleware(
 
 @app.middleware("http")
 async def rate_limit_middleware(request, call_next):
-    # Log all incoming requests
-    if request.url.path.startswith("/api/"):
-        print(f">>> {request.method} {request.url.path} from {request.client.host}")
+    # DEBUG: Log all incoming requests with auth
+    auth_header = request.headers.get("Authorization", "None")[:50]
+    print(f">>> {request.method} {request.url.path} Auth:{auth_header}...")
     
     if request.url.path == "/health":
         return await call_next(request)
