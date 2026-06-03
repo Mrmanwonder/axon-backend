@@ -638,6 +638,7 @@ async def process_pdf_job(job_id: str, pdf_bytes: bytes, owner_uid: str, filenam
 async def health():
     return {
         "status": "healthy",
+        "version": "2.1.1",  # DEBUG: v2 endpoint added in e82b52e
         "firebase_admin_ready": True,
         "firestore_database_id": _firestore_database_id,
         "transport": "fastapi",
