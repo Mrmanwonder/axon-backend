@@ -7,7 +7,7 @@ google-cloud-vision
 google-cloud-storage
 pandas>=2.2.3
 pydantic>=2.9.2
-PyPDF2>=3.0.0
+
 requests>=2.31.0
 httpx>=0.28.1
 beautifulsoup4>=4.12.3

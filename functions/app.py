@@ -1281,9 +1281,12 @@ async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
     ]
 
     # ── Build slots ──
+    from datetime import time as dt_time
     now_dt = datetime.now()
     start_hour = max(now_dt.hour + 1, 8)
-    cursor = datetime.combine(date.today(), datetime.min.time().replace(hour=start_hour))
+    if start_hour >= 24:
+        start_hour = 8
+    cursor = datetime.combine(date.today(), dt_time(hour=start_hour))
     slots = []
     for w in windows:
         dur = int(total_minutes * w["pct"])
