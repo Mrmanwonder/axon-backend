@@ -47,13 +47,15 @@ def initialize_firebase() -> None:
 
 
 async def current_user(request: Request) -> dict[str, Any]:
+    """Optional auth - returns placeholder if no token, doesn't block requests"""
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing Token")
+        # Return a placeholder instead of blocking
+        return {"uid": "anonymous", "email": "anonymous@example.com"}
 
     token = auth_header.split(" ", 1)[1].strip()
     if not token:
-        raise HTTPException(status_code=401, detail="Invalid Token")
+        return {"uid": "anonymous", "email": "anonymous@example.com"}
 
     try:
         decoded_token = auth.verify_id_token(token)
@@ -61,4 +63,4 @@ async def current_user(request: Request) -> dict[str, Any]:
             decoded_token["uid"] = decoded_token["sub"]
         return decoded_token
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid Token")
+        return {"uid": "anonymous", "email": "anonymous@example.com"}
