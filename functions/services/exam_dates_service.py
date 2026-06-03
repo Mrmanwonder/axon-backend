@@ -11,7 +11,6 @@ from urllib.parse import urljoin
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-from PyPDF2 import PdfReader
 
 
 def _utc_now() -> str:
@@ -51,13 +50,9 @@ def _parse_date_from_text(value: str, *, year: int) -> str | None:
 
 
 def _extract_pdf_text(pdf_bytes: bytes) -> str:
-    from io import BytesIO
-
-    reader = PdfReader(BytesIO(pdf_bytes))
-    chunks: list[str] = []
-    for page in reader.pages:
-        chunks.append(page.extract_text() or "")
-    return "\n".join(chunks)
+    # PDF functionality has been removed as per user request
+    # Return empty string to maintain compatibility but disable PDF text extraction
+    return ""
 
 
 @dataclass(frozen=True)
