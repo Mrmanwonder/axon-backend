@@ -116,17 +116,28 @@ class DailyPlanService {
     String? focusAreas,
     String? uidOverride,
   }) async {
+    debugPrint('DailyPlanService: _generateLocalPlan() called');
     try {
       final user = FirebaseAuth.instance.currentUser;
+      debugPrint('DailyPlanService: currentUser=${user?.uid}');
       final uid = uidOverride ?? user?.uid;
-      if (uid == null || uid.isEmpty) return;
+      if (uid == null || uid.isEmpty) {
+        debugPrint('DailyPlanService: uid is null/empty');
+        return;
+      }
       final today = _todayString();
+      debugPrint('DailyPlanService: uid=$uid, today=$today');
 
       final existing = await getTasksForDate(uid, today);
+      debugPrint('DailyPlanService: existing tasks=${existing.length}');
       if (existing.isNotEmpty) return;
 
       final subjects = await _getUserSubjects();
-      if (subjects.isEmpty) return;
+      debugPrint('DailyPlanService: subjects=$subjects');
+      if (subjects.isEmpty) {
+        debugPrint('DailyPlanService: subjects is empty');
+        return;
+      }
 
       final prefs = await SharedPreferences.getInstance();
       double targetHours = prefs.getDouble('userTargetHours') ?? 4.0;
@@ -439,7 +450,7 @@ class DailyPlanService {
         await _generateLocalPlan(focusAreas: focusAreas, uidOverride: uid);
       }
     } catch (e) {
-      debugPrint('DailyPlanService: ensure failed, using local fallback - $e');
+      debugPrint('DailyPlanService: ensureTodayPlan backend failed - $e');
       await _generateLocalPlan(focusAreas: focusAreas, uidOverride: uid);
     }
 
