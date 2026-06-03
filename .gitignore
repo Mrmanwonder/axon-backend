@@ -14,6 +14,7 @@ functions/firebase-admin.json
 !runtime.txt
 !railway.json
 !render.yaml
+!firestore.rules
 assets/*
 !functions/Procfile
 !functions/gunicorn.conf.py
@@ -57,3 +58,4 @@ build/
 .dart_tool/
 .idea/
 .pub/
+.blackboxcli/

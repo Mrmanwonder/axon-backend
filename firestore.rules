@@ -1,0 +1,639 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function validUid(userId) {
+      return userId is string
+        && userId.size() > 0
+        && userId.size() <= 128
+        && userId.matches('^[A-Za-z0-9_-]+$');
+    }
+
+    function validUserDoc() {
+      return request.resource.data.keys().hasAll(['display_name', 'email'])
+        && request.resource.data.display_name is string
+        && request.resource.data.display_name.size() <= 100
+        && request.resource.data.email is string
+        && request.resource.data.email.size() <= 254
+        && (!request.resource.data.keys().hasAny(['board'])
+            || (request.resource.data.board is string
+                && request.resource.data.board.size() <= 80))
+        && (!request.resource.data.keys().hasAny(['subjects'])
+            || request.resource.data.subjects is list)
+        && (!request.resource.data.keys().hasAny(['motivation_style'])
+            || request.resource.data.motivation_style is int)
+        && (!request.resource.data.keys().hasAny(['target_hours'])
+            || request.resource.data.target_hours is number)
+        && (!request.resource.data.keys().hasAny(['onboarding_complete'])
+            || request.resource.data.onboarding_complete is bool)
+        && (!request.resource.data.keys().hasAny(['photo_url'])
+            || request.resource.data.photo_url == null
+            || (request.resource.data.photo_url is string
+                && request.resource.data.photo_url.size() <= 2048))
+        && (!request.resource.data.keys().hasAny(['total_sessions'])
+            || request.resource.data.total_sessions is int)
+        && (!request.resource.data.keys().hasAny(['total_minutes'])
+            || request.resource.data.total_minutes is int)
+        && (!request.resource.data.keys().hasAny(['current_streak'])
+            || request.resource.data.current_streak is int)
+        && (!request.resource.data.keys().hasAny(['predicted_performance'])
+            || request.resource.data.predicted_performance is number);
+    }
+
+    function validSessionDoc(userId) {
+      return request.resource.data.keys().hasAll([
+          'uid',
+          'subject',
+          'chapter',
+          'intensity_index',
+          'study_hours',
+          'break_count',
+          'streak'
+        ])
+        && request.resource.data.uid == userId
+        && request.resource.data.subject is string
+        && request.resource.data.subject.size() <= 50
+        && request.resource.data.chapter is string
+        && request.resource.data.chapter.size() <= 100
+        && request.resource.data.intensity_index is number
+        && request.resource.data.study_hours is number
+        && request.resource.data.break_count is int
+        && request.resource.data.streak is int
+        && (!request.resource.data.keys().hasAny(['board'])
+            || (request.resource.data.board is string
+                && request.resource.data.board.size() <= 80));
+    }
+
+    function validResourceDoc(userId) {
+      return request.resource.data.keys().hasAll([
+          'ownerId',
+          'board',
+          'subject',
+          'chapter',
+          'resources'
+        ])
+        && request.resource.data.ownerId == userId
+        && request.resource.data.board is string
+        && request.resource.data.board.size() <= 80
+        && request.resource.data.subject is string
+        && request.resource.data.subject.size() <= 80
+        && request.resource.data.chapter is string
+        && request.resource.data.chapter.size() <= 120
+        && request.resource.data.resources is list;
+    }
+
+    function validActiveSessionDoc(userId) {
+      return request.resource.data.keys().hasAll([
+          'sessionId',
+          'subject',
+          'chapter',
+          'startedAt',
+          'elapsedSeconds',
+          'breakCount',
+          'deviceId',
+          'isActive'
+        ])
+        && request.resource.data.subject is string
+        && request.resource.data.subject.size() <= 80
+        && request.resource.data.chapter is string
+        && request.resource.data.chapter.size() <= 160
+        && request.resource.data.elapsedSeconds is int
+        && request.resource.data.breakCount is int
+        && request.resource.data.deviceId is string
+        && request.resource.data.deviceId.size() <= 128
+        && request.resource.data.isActive is bool
+        && (!request.resource.data.keys().hasAny(['uid'])
+            || request.resource.data.uid == userId);
+    }
+
+    function validSubscriptionDoc(userId) {
+      return (!request.resource.data.keys().hasAny(['uid'])
+            || request.resource.data.uid == userId)
+        && (!request.resource.data.keys().hasAny(['tier'])
+            || request.resource.data.tier is string)
+        && (!request.resource.data.keys().hasAny(['status'])
+            || request.resource.data.status is string)
+        && (!request.resource.data.keys().hasAny(['renews_at'])
+            || request.resource.data.renews_at is string
+            || request.resource.data.renews_at is timestamp)
+        && (!request.resource.data.keys().hasAny(['expires_at'])
+            || request.resource.data.expires_at is string
+            || request.resource.data.expires_at is timestamp)
+        && (!request.resource.data.keys().hasAny(['features'])
+            || request.resource.data.features is list);
+    }
+
+    function validAuditLog() {
+      return request.resource.data.keys().hasAll([
+          'id',
+          'type',
+          'severity',
+          'description',
+          'timestamp'
+        ])
+        && request.resource.data.id is string
+        && request.resource.data.id.size() <= 128
+        && request.resource.data.type is string
+        && request.resource.data.type.size() <= 64
+        && request.resource.data.severity is string
+        && request.resource.data.severity.size() <= 32
+        && request.resource.data.description is string
+        && request.resource.data.description.size() <= 1000
+        && request.resource.data.timestamp is string;
+    }
+
+    function validSyllabusMapDoc() {
+      return request.resource.data.keys().hasAll([
+          'id',
+          'objective_id',
+          'board',
+          'subject',
+          'paper',
+          'topic',
+          'sub_topic',
+          'code',
+          'title',
+          'description'
+        ])
+        && request.resource.data.id is string
+        && request.resource.data.objective_id is string
+        && request.resource.data.board is string
+        && request.resource.data.subject is string
+        && request.resource.data.paper is string
+        && request.resource.data.topic is string
+        && request.resource.data.sub_topic is string
+        && request.resource.data.code is string
+        && request.resource.data.title is string
+        && request.resource.data.description is string
+        && (!request.resource.data.keys().hasAny(['paper_weight'])
+            || request.resource.data.paper_weight is number)
+        && (!request.resource.data.keys().hasAny(['command_words'])
+            || request.resource.data.command_words is list);
+    }
+
+    function validMasteryDoc() {
+      return request.resource.data.keys().hasAll([
+          'learning_objective_id',
+          'confidence_score',
+          'decay_factor',
+          'mastery_score'
+        ])
+        && request.resource.data.learning_objective_id is string
+        && request.resource.data.confidence_score is number
+        && request.resource.data.decay_factor is number
+        && request.resource.data.mastery_score is number
+        && (!request.resource.data.keys().hasAny(['last_tested'])
+            || request.resource.data.last_tested is string
+            || request.resource.data.last_tested is timestamp)
+        && (!request.resource.data.keys().hasAny(['last_mock_score'])
+            || request.resource.data.last_mock_score is number);
+    }
+
+    function validEventDoc() {
+      return request.resource.data.keys().hasAll([
+          'id',
+          'type',
+          'duration_minutes',
+          'learning_objective_id',
+          'intensity',
+          'occurred_at',
+          'subject'
+        ])
+        && request.resource.data.id is string
+        && request.resource.data.type is string
+        && request.resource.data.duration_minutes is int
+        && request.resource.data.learning_objective_id is string
+        && request.resource.data.intensity is number
+        && (request.resource.data.occurred_at is string
+            || request.resource.data.occurred_at is timestamp)
+        && request.resource.data.subject is string
+        && (!request.resource.data.keys().hasAny(['start_at'])
+            || request.resource.data.start_at is string
+            || request.resource.data.start_at is timestamp)
+        && (!request.resource.data.keys().hasAny(['end_at'])
+            || request.resource.data.end_at is string
+            || request.resource.data.end_at is timestamp)
+        && (!request.resource.data.keys().hasAny(['label'])
+            || request.resource.data.label is string);
+    }
+
+    function validDeadlineDoc() {
+      return request.resource.data.keys().hasAll([
+          'subject',
+          'paper',
+          'exam_date'
+        ])
+        && request.resource.data.subject is string
+        && request.resource.data.paper is string
+        && (request.resource.data.exam_date is string
+            || request.resource.data.exam_date is timestamp)
+        && (!request.resource.data.keys().hasAny(['board'])
+            || request.resource.data.board is string)
+        && (!request.resource.data.keys().hasAny(['label'])
+            || request.resource.data.label is string)
+        && (!request.resource.data.keys().hasAny(['source_url'])
+            || request.resource.data.source_url is string)
+        && (!request.resource.data.keys().hasAny(['source_title'])
+            || request.resource.data.source_title is string)
+        && (!request.resource.data.keys().hasAny(['source_type'])
+            || request.resource.data.source_type is string)
+        && (!request.resource.data.keys().hasAny(['series'])
+            || request.resource.data.series is string)
+        && (!request.resource.data.keys().hasAny(['year'])
+            || request.resource.data.year is int)
+        && (!request.resource.data.keys().hasAny(['administrative_zone'])
+            || request.resource.data.administrative_zone is string)
+        && (!request.resource.data.keys().hasAny(['scraped_at'])
+            || request.resource.data.scraped_at is string
+            || request.resource.data.scraped_at is timestamp)
+        && (!request.resource.data.keys().hasAny(['status'])
+            || request.resource.data.status is string);
+    }
+
+    function validDailyPlanDoc() {
+      return request.resource.data.keys().hasAll([
+          'title',
+          'start_time',
+          'end_time',
+          'objective_id',
+          'status',
+          'date'
+        ])
+        && request.resource.data.title is string
+        && (request.resource.data.start_time is string
+            || request.resource.data.start_time is timestamp)
+        && (request.resource.data.end_time is string
+            || request.resource.data.end_time is timestamp)
+        && request.resource.data.objective_id is string
+        && request.resource.data.status is string
+        && request.resource.data.date is string
+        && (!request.resource.data.keys().hasAny(['subject'])
+            || request.resource.data.subject is string)
+        && (!request.resource.data.keys().hasAny(['paper'])
+            || request.resource.data.paper is string)
+        && (!request.resource.data.keys().hasAny(['reason'])
+            || request.resource.data.reason is string)
+        && (!request.resource.data.keys().hasAny(['is_sync_to_google'])
+            || request.resource.data.is_sync_to_google is bool)
+        && (!request.resource.data.keys().hasAny(['intensity_score'])
+            || request.resource.data.intensity_score is number)
+        && (!request.resource.data.keys().hasAny(['intensity_label'])
+            || request.resource.data.intensity_label is string)
+        && (!request.resource.data.keys().hasAny(['phase'])
+            || request.resource.data.phase is string)
+        && (!request.resource.data.keys().hasAny(['anchor_date'])
+            || request.resource.data.anchor_date is string)
+        && (!request.resource.data.keys().hasAny(['task_type'])
+            || request.resource.data.task_type is string)
+        && (!request.resource.data.keys().hasAny(['scheduled_window'])
+            || request.resource.data.scheduled_window is string);
+    }
+
+    function validStudyEventDoc() {
+      return request.resource.data.keys().hasAll([
+          'id',
+          'subject',
+          'chapter',
+          'objective_id',
+          'type',
+          'duration_minutes',
+          'occurred_at'
+        ])
+        && request.resource.data.id is string
+        && request.resource.data.subject is string
+        && request.resource.data.chapter is string
+        && request.resource.data.objective_id is string
+        && request.resource.data.type is string
+        && request.resource.data.duration_minutes is int
+        && (request.resource.data.occurred_at is string
+            || request.resource.data.occurred_at is timestamp)
+        && (!request.resource.data.keys().hasAny(['topic_id'])
+            || request.resource.data.topic_id is string)
+        && (!request.resource.data.keys().hasAny(['accuracy_score'])
+            || request.resource.data.accuracy_score is number)
+        && (!request.resource.data.keys().hasAny(['intensity'])
+            || request.resource.data.intensity is number);
+    }
+
+    function validMockResultDoc() {
+      return request.resource.data.keys().hasAll([
+          'objective_id',
+          'subject',
+          'command_word',
+          'awarded_marks',
+          'available_marks'
+        ])
+        && request.resource.data.objective_id is string
+        && request.resource.data.subject is string
+        && request.resource.data.command_word is string
+        && request.resource.data.awarded_marks is number
+        && request.resource.data.available_marks is number
+        && (!request.resource.data.keys().hasAny(['topic_id'])
+            || request.resource.data.topic_id is string)
+        && (!request.resource.data.keys().hasAny(['duration_seconds'])
+            || request.resource.data.duration_seconds is int)
+        && (!request.resource.data.keys().hasAny(['error_type'])
+            || request.resource.data.error_type is string)
+        && (!request.resource.data.keys().hasAny(['command_word_depth'])
+            || request.resource.data.command_word_depth is map)
+        && (!request.resource.data.keys().hasAny(['semantic_match'])
+            || request.resource.data.semantic_match is map)
+        && (!request.resource.data.keys().hasAny(['recorded_at'])
+            || request.resource.data.recorded_at is string
+            || request.resource.data.recorded_at is timestamp);
+    }
+
+    function validAnalyticsDoc() {
+      return (!request.resource.data.keys().hasAny(['coverage'])
+            || request.resource.data.coverage is number)
+        && (!request.resource.data.keys().hasAny(['accuracy'])
+            || request.resource.data.accuracy is number)
+        && (!request.resource.data.keys().hasAny(['average_readiness'])
+            || request.resource.data.average_readiness is number)
+        && (!request.resource.data.keys().hasAny(['exam_risk'])
+            || request.resource.data.exam_risk is number)
+        && (!request.resource.data.keys().hasAny(['predicted_grade_band'])
+            || request.resource.data.predicted_grade_band is string)
+        && (!request.resource.data.keys().hasAny(['advisor'])
+            || request.resource.data.advisor is map);
+    }
+
+    function validAdmissionsTargetDoc() {
+      return request.resource.data.keys().hasAll([
+          'university_name',
+          'country',
+          'course_name',
+          'classification',
+          'application_system',
+          'status'
+        ])
+        && request.resource.data.university_name is string
+        && request.resource.data.country is string
+        && request.resource.data.course_name is string
+        && request.resource.data.classification is string
+        && request.resource.data.application_system is string
+        && request.resource.data.status is string
+        && (!request.resource.data.keys().hasAny(['rationale'])
+            || request.resource.data.rationale is string)
+        && (!request.resource.data.keys().hasAny(['entry_requirements'])
+            || request.resource.data.entry_requirements is string)
+        && (!request.resource.data.keys().hasAny(['source_url'])
+            || request.resource.data.source_url is string)
+        && (!request.resource.data.keys().hasAny(['fit_band'])
+            || request.resource.data.fit_band is string)
+        && (!request.resource.data.keys().hasAny(['deadline_at'])
+            || request.resource.data.deadline_at is string
+            || request.resource.data.deadline_at is timestamp)
+        && (!request.resource.data.keys().hasAny(['readiness_score'])
+            || request.resource.data.readiness_score is number);
+    }
+
+    function validAdmissionsMilestoneDoc() {
+      return request.resource.data.keys().hasAll([
+          'target_id',
+          'title',
+          'due_at',
+          'completed',
+          'dependency_type'
+        ])
+        && request.resource.data.target_id is string
+        && request.resource.data.title is string
+        && (request.resource.data.due_at is string
+            || request.resource.data.due_at is timestamp)
+        && request.resource.data.completed is bool
+        && request.resource.data.dependency_type is string
+        && (!request.resource.data.keys().hasAny(['phase'])
+            || request.resource.data.phase is string)
+        && (!request.resource.data.keys().hasAny(['status'])
+            || request.resource.data.status is string)
+        && (!request.resource.data.keys().hasAny(['depends_on_ids'])
+            || request.resource.data.depends_on_ids is list)
+        && (!request.resource.data.keys().hasAny(['evidence_asset_ids'])
+            || request.resource.data.evidence_asset_ids is list);
+    }
+
+    function validAdmissionsVaultDoc() {
+      return request.resource.data.keys().hasAll([
+          'title',
+          'asset_type',
+          'url'
+        ])
+        && request.resource.data.title is string
+        && request.resource.data.asset_type is string
+        && request.resource.data.url is string
+        && (!request.resource.data.keys().hasAny(['provider'])
+            || request.resource.data.provider is string)
+        && (!request.resource.data.keys().hasAny(['project_name'])
+            || request.resource.data.project_name is string)
+        && (!request.resource.data.keys().hasAny(['tags'])
+            || request.resource.data.tags is list)
+        && (!request.resource.data.keys().hasAny(['linked_target_ids'])
+            || request.resource.data.linked_target_ids is list);
+    }
+
+    function validCommandWordDrillAttemptDoc() {
+      return request.resource.data.keys().hasAll([
+          'objective_id',
+          'cards',
+          'responses',
+          'overall_score'
+        ])
+        && request.resource.data.objective_id is string
+        && request.resource.data.cards is list
+        && request.resource.data.responses is map
+        && request.resource.data.overall_score is number
+        && (!request.resource.data.keys().hasAny(['feedback'])
+            || request.resource.data.feedback is string);
+    }
+
+    match /syllabus_maps/{docId} {
+      allow read: if signedIn();
+      allow create, update: if false;
+      allow delete: if false;
+    }
+
+    match /users_private/{userId} {
+      allow create: if isOwner(userId) && validUid(userId);
+      allow read, update, delete: if isOwner(userId);
+
+      match /sessions/{sessionId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validSessionDoc(userId);
+      }
+
+      match /resources/{resourceId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validResourceDoc(userId);
+      }
+
+      match /active_sessions/{sessionId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validActiveSessionDoc(userId);
+      }
+
+      match /devices/{deviceId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId);
+      }
+
+      match /pending_transfers/{transferId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId);
+      }
+
+      match /metrics/{metricId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId);
+      }
+
+      match /mastery/{objectiveId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validMasteryDoc();
+      }
+
+      match /events/{eventId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validEventDoc();
+      }
+
+      match /deadlines/{deadlineId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validDeadlineDoc();
+      }
+
+      match /daily_plan/{taskId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validDailyPlanDoc();
+      }
+
+      match /study_events/{eventId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validStudyEventDoc();
+      }
+
+      match /mock_results/{resultId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validMockResultDoc();
+      }
+
+      match /analytics/{docId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validAnalyticsDoc();
+      }
+
+      match /leaderboard_stats/{docId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId);
+      }
+
+      match /subscription/{docId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validSubscriptionDoc(userId);
+      }
+
+      match /admissions_targets/{targetId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validAdmissionsTargetDoc();
+      }
+
+      match /admissions_milestones/{milestoneId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validAdmissionsMilestoneDoc();
+      }
+
+      match /admissions_vault/{assetId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validAdmissionsVaultDoc();
+      }
+
+      match /command_word_drills/{attemptId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validCommandWordDrillAttemptDoc();
+      }
+    }
+
+    match /users_public/{userId} {
+      allow read: if signedIn();
+      allow write: if isOwner(userId);
+    }
+
+    match /userPapers/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    match /leaderboard/{userId} {
+      allow read: if signedIn();
+      allow write: if isOwner(userId);
+    }
+
+    // Legacy migration bridge. Keep owner-only while the app moves to
+    // users_private/users_public.
+    match /users/{userId} {
+      allow create: if isOwner(userId) && validUid(userId);
+      allow read, update, delete: if isOwner(userId);
+
+      match /sessions/{sessionId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId);
+      }
+
+      match /resources/{resourceId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId);
+      }
+
+      match /active_sessions/{sessionId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId);
+      }
+
+      match /subscription/{docId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId);
+      }
+    }
+
+    match /jobs/{jobId} {
+      allow create: if signedIn()
+        && request.resource.data.owner_uid == request.auth.uid;
+      allow read: if signedIn()
+        && resource.data.owner_uid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /audit_logs/{logId} {
+      allow create: if signedIn() && validAuditLog();
+      allow read, update, delete: if false;
+    }
+
+    // Manifests collection - public read, owner write
+    match /manifests/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    // Challenges collection - public read, authenticated write
+    match /challenges/{challengeId} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update, delete: if signedIn() && resource.data.creator_id == request.auth.uid;
+    }
+
+    // Health check endpoint - public read access
+    match /_backend_health/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
