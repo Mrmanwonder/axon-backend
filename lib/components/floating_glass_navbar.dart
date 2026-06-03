@@ -28,7 +28,7 @@ class _FloatingGlassNavbarState extends ConsumerState<FloatingGlassNavbar>
   static const List<String> _appRoutes = [
     '/home',
     '/analysis',
-    '/pdf',
+    '/exam/planner',
     '/study',
     '/settings',
   ];
@@ -36,25 +36,25 @@ class _FloatingGlassNavbarState extends ConsumerState<FloatingGlassNavbar>
   static const List<IconData> _appIcons = [
     Icons.grid_view_rounded,
     Icons.analytics_outlined,
-    Icons.event_note_rounded,
+    Icons.school_outlined,
     Icons.auto_stories_outlined,
     Icons.settings_outlined,
   ];
 
   static const List<IconData> _examPlannerIcons = [
-    Icons.insights_rounded,
-    Icons.flag_rounded,
-    Icons.folder_rounded,
-    Icons.task_alt_rounded,
-    Icons.functions_rounded,
+    Icons.grid_view_rounded,
+    Icons.analytics_outlined,
+    Icons.school_rounded,
+    Icons.auto_stories_outlined,
+    Icons.settings_outlined,
   ];
 
   static const List<String> _examPlannerLabels = [
-    'DATA',
-    'GOALS',
-    'VAULT',
-    'TASKS',
-    'MATH',
+    'HOME',
+    'ANALYSIS',
+    'EXAMS',
+    'STUDY',
+    'SETTINGS',
   ];
 
   @override
