@@ -614,29 +614,34 @@ class DailyPlanService {
     String today, {
     String? focusAreas,
   }) async {
+    // Try v2 endpoint first (no Firestore dependency - responds in <5s)
     try {
-      final response = await _post(
-        '/generate-daily-plan',
-        body: {
-          if (focusAreas != null && focusAreas.isNotEmpty)
-            'focus_areas': focusAreas,
-          'client_date': today,
-          'force': false,
-        },
-        retries: 2,
-      );
-      if (_taskCountFromResponse(response) == 0) {
-        debugPrint(
-            'DailyPlanService: planner returned no tasks, using smart local fallback');
-        await _generateSmartLocalPlan(focusAreas: focusAreas, uidOverride: uid);
+      final tasks = await _generateV2Plan(focusAreas: focusAreas);
+      if (tasks.isNotEmpty) {
+        debugPrint('DailyPlanService: v2 generated ${tasks.length} tasks');
+        return tasks;
       }
+      debugPrint(
+          'DailyPlanService: v2 returned no tasks, using smart local fallback');
     } catch (e) {
-      debugPrint('DailyPlanService: ensureTodayPlan backend failed - $e');
-      await _generateSmartLocalPlan(focusAreas: focusAreas, uidOverride: uid);
+      debugPrint('DailyPlanService: v2 generation failed - $e, using smart local');
     }
 
-    final tasks = await _waitForPlan(uid, today);
-    if (tasks.isNotEmpty) return tasks;
+    // Fall back to smart local (offline, no network needed)
+    await _generateSmartLocalPlan(focusAreas: focusAreas, uidOverride: uid);
+    final tasks = await _loadTasksFromOffline(uid, today);
+    if (tasks.isNotEmpty) {
+      debugPrint('DailyPlanService: smart local generated ${tasks.length} tasks');
+      return tasks;
+    }
+
+    // Last resort: check if subjects exist (don't require targetHours)
+    final subjects = await _getUserSubjects();
+    if (subjects.isEmpty) {
+      throw const DailyPlanException(
+        'Add subjects to generate a daily plan.',
+      );
+    }
 
     throw const DailyPlanException(
       'Daily planner could not create a plan. Add subjects or exam dates, then try again.',
