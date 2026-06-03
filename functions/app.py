@@ -13,12 +13,14 @@ from urllib.parse import urlparse
 import uvicorn
 
 import time
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from middleware.auth import current_user, initialize_firebase
+from middleware.supabase_scope import apply_user_scope, assert_table_access
+from middleware.url_safety import assert_safe_https_url
 from services.exam_dates_service import OfficialExamDatesService
 from services.grading_service import HandwritingGradingGateway
 from services.planner_service import DailyPlannerServiceV2
@@ -26,6 +28,8 @@ from services.study_pulse_service import StudyPulseService
 from services.university_catalog_service import UniversityCatalogService
 from services.university_program_crawler import UniversityProgramCrawler
 from services.ai_proxy_service import AiProxyService
+from services.deepgram_auth_service import DeepgramAuthService
+from middleware.rate_limit import cors_allowed_origins, is_rate_limited
 
 
 app = FastAPI(
@@ -34,39 +38,50 @@ app = FastAPI(
     description="ASGI backend for Axon document analysis, grading, and trust-safe sync.",
 )
 
-# Security: CORS
+# Security: CORS (configure via CORS_ALLOWED_ORIGINS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://axon.edu", "http://localhost:3000"],
+    allow_origins=cors_allowed_origins(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Content-Type", "Authorization", "Accept", "X-Client-Version", "X-Client-Platform"],
 )
 
-# Security: rate limiting
+
 @app.middleware("http")
 async def rate_limit_middleware(request, call_next):
-    import collections
+    if request.url.path == "/health":
+        return await call_next(request)
 
     client_ip = request.client.host if request.client else "unknown"
-    key = f"rl:{client_ip}:{int(time.time() // 60)}"
-    now = time.time()
+    auth_header = request.headers.get("Authorization", "")
+    identifier = (
+        auth_header.split(" ", 1)[1][:32]
+        if auth_header.startswith("Bearer ")
+        else client_ip
+    )
 
-    # Simple in-memory rate limit: 60 requests per minute per IP
-    if not hasattr(rate_limit_middleware, "_counts"):
-        rate_limit_middleware._counts = collections.defaultdict(list)
-
-    rate_limit_middleware._counts[key] = [
-        t for t in rate_limit_middleware._counts[key] if now - t < 60
-    ]
-    if len(rate_limit_middleware._counts[key]) >= 60:
+    if is_rate_limited(identifier, request.url.path):
         return JSONResponse(
             status_code=429,
             content={"detail": "Rate limit exceeded"},
         )
-    rate_limit_middleware._counts[key].append(now)
 
     return await call_next(request)
+
+
+@app.middleware("http")
+async def security_headers_middleware(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+    return response
 
 
 initialize_firebase()
@@ -87,6 +102,11 @@ _study_pulse_service = None
 _exam_dates_service = None
 _uni_catalog_service = None
 _ai_proxy_service = None
+_deepgram_auth_service: DeepgramAuthService | None = None
+_drive_service = None
+
+MAX_DRIVE_DOWNLOAD_BYTES = 600 * 1024 * 1024
+_DRIVE_FILE_ID_PATTERN = r"^[a-zA-Z0-9_-]{10,}$"
 
 
 def utc_now() -> str:
@@ -138,8 +158,15 @@ def update_job(job_id: str, **fields: Any) -> None:
 
 
 def validate_https_url(url: str) -> bool:
-    parsed = urlparse(url)
-    return parsed.scheme == "https" and bool(parsed.netloc)
+    try:
+        assert_safe_https_url(url)
+        return True
+    except ValueError:
+        return False
+
+
+MAX_PDF_BASE64_CHARS = 20 * 1024 * 1024  # ~15 MB decoded
+MAX_IMAGE_BASE64_CHARS = 8 * 1024 * 1024
 
 
 def get_grading_gateway() -> HandwritingGradingGateway:
@@ -165,7 +192,12 @@ def get_study_pulse_service() -> StudyPulseService:
                 import google.generativeai as genai
 
                 genai.configure(api_key=_gemini_api_key)
-                advisor_model = genai.GenerativeModel("gemini-1.5-flash")
+                advisor_model = genai.GenerativeModel(
+                    "gemini-1.5-flash",
+                    generation_config=genai.GenerationConfig(
+                        response_mime_type="application/json"
+                    )
+                )
             except Exception:
                 advisor_model = None
         _study_pulse_service = StudyPulseService(get_firestore(), advisor_model=advisor_model)
@@ -207,12 +239,36 @@ def get_ai_proxy_service() -> AiProxyService:
     return _ai_proxy_service
 
 
+def get_deepgram_auth_service() -> DeepgramAuthService:
+    global _deepgram_auth_service
+    if _deepgram_auth_service is None:
+        _deepgram_auth_service = DeepgramAuthService()
+    return _deepgram_auth_service
+
+
+def get_drive_service():
+    global _drive_service
+    if _drive_service is None:
+        from services.google_drive_service import GoogleDriveService
+
+        _drive_service = GoogleDriveService()
+    return _drive_service
+
+
+def assert_drive_file_id(file_id: str) -> str:
+    import re
+
+    if not re.fullmatch(_DRIVE_FILE_ID_PATTERN, file_id or ""):
+        raise HTTPException(status_code=400, detail="Invalid file id")
+    return file_id
+
+
 class AnalyzePdfRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     pdf_base64: str | None = None
     pdf_url: str | None = None
-    filename: str = "upload.pdf"
+    filename: str = Field(default="upload.pdf", max_length=255)
 
     @model_validator(mode="after")
     def ensure_pdf_source(self):
@@ -220,6 +276,8 @@ class AnalyzePdfRequest(BaseModel):
             raise ValueError("pdf_base64 or pdf_url is required")
         if self.pdf_url and not validate_https_url(self.pdf_url):
             raise ValueError("pdf_url must be a public HTTPS URL")
+        if self.pdf_base64 and len(self.pdf_base64) > MAX_PDF_BASE64_CHARS:
+            raise ValueError("pdf_base64 exceeds maximum allowed size")
         return self
 
 
@@ -256,6 +314,8 @@ class ExtractTextRequest(BaseModel):
             raise ValueError("image_data or image_url is required")
         if self.image_url and not validate_https_url(self.image_url):
             raise ValueError("image_url must be a public HTTPS URL")
+        if self.image_data and len(self.image_data) > MAX_IMAGE_BASE64_CHARS:
+            raise ValueError("image_data exceeds maximum allowed size")
         return self
 
 
@@ -300,6 +360,18 @@ async def supabase_query(
     if payload.table not in ALLOWED_SUPABASE_TABLES:
         raise HTTPException(status_code=403, detail=f"Table '{payload.table}' not allowed")
 
+    try:
+        assert_table_access(payload.table, payload.method)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    scoped_params = apply_user_scope(
+        payload.table,
+        payload.method,
+        payload.params,
+        user["uid"],
+    )
+
     supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
@@ -319,19 +391,19 @@ async def supabase_query(
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             if payload.method == "select":
-                resp = await client.get(url, headers=headers, params=payload.params)
+                resp = await client.get(url, headers=headers, params=scoped_params)
             elif payload.method == "insert":
-                body = payload.params.pop("body", [])
-                resp = await client.post(url, headers=headers, json=body, params=payload.params)
+                body = scoped_params.pop("body", [])
+                resp = await client.post(url, headers=headers, json=body, params=scoped_params)
             elif payload.method == "upsert":
-                body = payload.params.pop("body", [])
+                body = scoped_params.pop("body", [])
                 headers["Prefer"] = "resolution=merge-duplicates"
-                resp = await client.post(url, headers=headers, json=body, params=payload.params)
+                resp = await client.post(url, headers=headers, json=body, params=scoped_params)
             elif payload.method == "update":
-                body = payload.params.pop("body", {})
-                resp = await client.patch(url, headers=headers, json=body, params=payload.params)
+                body = scoped_params.pop("body", {})
+                resp = await client.patch(url, headers=headers, json=body, params=scoped_params)
             elif payload.method == "delete":
-                resp = await client.delete(url, headers=headers, params=payload.params)
+                resp = await client.delete(url, headers=headers, params=scoped_params)
             else:
                 raise HTTPException(status_code=400, detail=f"Unsupported method: {payload.method}")
 
@@ -388,10 +460,24 @@ class NormalizeDegreeRequest(BaseModel):
 class AiChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    messages: list[dict[str, str]] = Field(min_length=1, max_length=100)
+    messages: list[dict[str, str]] = Field(min_length=1, max_length=50)
     stream: bool = False
     max_tokens: int | None = Field(default=None, ge=1, le=16384)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+
+    @model_validator(mode="after")
+    def validate_messages(self):
+        allowed_roles = {"system", "user", "assistant"}
+        for entry in self.messages:
+            role = entry.get("role", "")
+            if role not in allowed_roles:
+                raise ValueError(f"Invalid message role: {role}")
+            content = entry.get("content", "")
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("Message content must be a non-empty string")
+            if len(content) > 12000:
+                raise ValueError("Message content exceeds maximum length")
+        return self
 
 
 async def download_or_decode_image(payload: BaseModel) -> bytes:
@@ -403,11 +489,27 @@ async def download_or_decode_image(payload: BaseModel) -> bytes:
     import requests
 
     def fetch() -> bytes:
-        response = requests.get(payload.image_url, timeout=20)
+        assert_safe_https_url(payload.image_url)
+        response = requests.get(
+            payload.image_url,
+            timeout=20,
+            allow_redirects=False,
+        )
+        if response.status_code in {301, 302, 303, 307, 308}:
+            location = response.headers.get("Location")
+            if not location or not validate_https_url(location):
+                raise requests.HTTPError("Unsafe redirect target")
+            response = requests.get(location, timeout=20, allow_redirects=False)
         response.raise_for_status()
-        return response.content
+        content = response.content
+        if len(content) > MAX_IMAGE_BASE64_CHARS:
+            raise ValueError("Downloaded image exceeds maximum allowed size")
+        return content
 
-    return await asyncio.to_thread(fetch)
+    try:
+        return await asyncio.to_thread(fetch)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
@@ -417,12 +519,28 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
     import requests
 
     def fetch() -> tuple[bytes, str]:
-        response = requests.get(payload.pdf_url, timeout=30)
+        assert_safe_https_url(payload.pdf_url)
+        response = requests.get(
+            payload.pdf_url,
+            timeout=30,
+            allow_redirects=False,
+        )
+        if response.status_code in {301, 302, 303, 307, 308}:
+            location = response.headers.get("Location")
+            if not location or not validate_https_url(location):
+                raise requests.HTTPError("Unsafe redirect target")
+            response = requests.get(location, timeout=30, allow_redirects=False)
         response.raise_for_status()
+        content = response.content
+        if len(content) > MAX_PDF_BASE64_CHARS:
+            raise ValueError("Downloaded PDF exceeds maximum allowed size")
         filename = os.path.basename(urlparse(payload.pdf_url).path) or payload.filename
-        return response.content, filename
+        return content, filename
 
-    return await asyncio.to_thread(fetch)
+    try:
+        return await asyncio.to_thread(fetch)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
@@ -512,6 +630,18 @@ async def health():
         "firebase_admin_ready": True,
         "firestore_database_id": _firestore_database_id,
         "transport": "fastapi",
+    }
+
+
+# Public debug endpoint - no auth required
+@app.get("/ping")
+async def ping():
+    """Lightweight ping to check backend is awake"""
+    ai_service = get_ai_proxy_service()
+    return {
+        "status": "awake",
+        "ai_configured": len(ai_service._provider_configs) > 0,
+        "model": ai_service._provider_configs.get("openrouter", {}).get("model", "none"),
     }
 
 
@@ -833,48 +963,216 @@ async def ai_status(user: dict[str, Any] = Depends(current_user)):
     return service.get_status()
 
 
-_CREDENTIAL_KEYS = [
-    "SERPER_API_KEY",
-    "CLOUDINARY_CLOUD_NAME",
-    "CLOUDINARY_UPLOAD_PRESET",
-    "GROK_API_KEY",
-    "VERCEL_API_KEY",
-    "OPENROUTER_API_KEY",
-    "DEEPSEEK_API_KEY",
-    "DEEPGRAM_API_KEY",
-    "GOOGLE_PRIVATE_KEY",
-]
+class SerperSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    q: str = Field(min_length=1, max_length=500)
+    num: int = Field(default=10, ge=1, le=20)
+    gl: str | None = Field(default=None, max_length=8)
+    hl: str | None = Field(default=None, max_length=8)
+
+
+@app.get("/api/service-capabilities")
+async def service_capabilities(user: dict[str, Any] = Depends(current_user)):
+    del user  # authenticated access only
+    ai_status = get_ai_proxy_service().get_status()
+    return {
+        "ai_chat": ai_status.get("provider_count", 0) > 0,
+        "search": bool(os.environ.get("SERPER_API_KEY")),
+        "cloudinary": bool(
+            os.environ.get("CLOUDINARY_CLOUD_NAME")
+            and os.environ.get("CLOUDINARY_UPLOAD_PRESET")
+        ),
+        "cloudinary_cloud_name": os.environ.get("CLOUDINARY_CLOUD_NAME", ""),
+        "cloudinary_upload_preset": os.environ.get("CLOUDINARY_UPLOAD_PRESET", ""),
+        "speech": bool(os.environ.get("DEEPGRAM_API_KEY")),
+        "drive_sync": bool(os.environ.get("GOOGLE_PRIVATE_KEY")),
+    }
 
 
 @app.post("/api/credentials")
-async def get_credentials(user: dict[str, Any] = Depends(current_user)):
-    result = {}
-    for key in _CREDENTIAL_KEYS:
-        val = os.environ.get(key, "")
-        if key == "GOOGLE_PRIVATE_KEY":
-            val = val.replace("\\n", "\n")
-        result[key.lower()] = val
-    return result
+async def get_credentials_deprecated(user: dict[str, Any] = Depends(current_user)):
+    """Deprecated: never expose server secrets to clients."""
+    return await service_capabilities(user)
 
 
 @app.post("/api/search")
 async def proxy_search(
-    payload: dict[str, Any],
+    payload: SerperSearchRequest,
     user: dict[str, Any] = Depends(current_user),
 ):
+    del user
     api_key = os.environ.get("SERPER_API_KEY")
     if not api_key:
         raise HTTPException(status_code=502, detail="Serper API key not configured")
     import httpx
+
+    serper_body: dict[str, Any] = {"q": payload.q, "num": payload.num}
+    if payload.gl:
+        serper_body["gl"] = payload.gl
+    if payload.hl:
+        serper_body["hl"] = payload.hl
+
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(
             "https://google.serper.dev/search",
             headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
-            json=payload,
+            json=serper_body,
         )
     if resp.status_code >= 400:
         raise HTTPException(status_code=502, detail=f"Serper error: {resp.text[:300]}")
     return resp.json()
+
+
+class DeepgramTokenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ttl_seconds: int | None = Field(default=None, ge=30, le=300)
+
+
+@app.get("/api/drive/status")
+async def drive_status(user: dict[str, Any] = Depends(current_user)):
+    del user
+    configured = bool(os.environ.get("GOOGLE_PRIVATE_KEY", "").strip())
+    return {"configured": configured, "source_type": "GOOGLE_DRIVE_PROXY"}
+
+
+@app.get("/api/drive/folders/find")
+async def drive_find_folder(
+    name: str,
+    user: dict[str, Any] = Depends(current_user),
+):
+    del user
+    clean_name = name.strip()
+    if not clean_name or len(clean_name) > 128:
+        raise HTTPException(status_code=400, detail="Invalid folder name")
+
+    try:
+        service = get_drive_service()
+        folder_id = await asyncio.to_thread(service.find_folder, clean_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return {"name": clean_name, "folder_id": folder_id}
+
+
+@app.get("/api/drive/folders/{folder_id}/items")
+async def drive_list_items(
+    folder_id: str,
+    user: dict[str, Any] = Depends(current_user),
+):
+    del user
+    assert_drive_file_id(folder_id)
+
+    try:
+        service = get_drive_service()
+        items = await asyncio.to_thread(service.list_items, folder_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return {"items": items, "total": len(items)}
+
+
+@app.get("/api/drive/files/{file_id}/metadata")
+async def drive_file_metadata(
+    file_id: str,
+    user: dict[str, Any] = Depends(current_user),
+):
+    del user
+    assert_drive_file_id(file_id)
+
+    try:
+        service = get_drive_service()
+        metadata = await asyncio.to_thread(service.get_file_info, file_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return metadata
+
+
+@app.get("/api/drive/files/{file_id}/content")
+async def drive_file_content(
+    file_id: str,
+    user: dict[str, Any] = Depends(current_user),
+):
+    del user
+    assert_drive_file_id(file_id)
+
+    try:
+        service = get_drive_service()
+        metadata = await asyncio.to_thread(service.get_file_info, file_id)
+        file_size = int(metadata.get("size", 0) or 0)
+        if file_size > MAX_DRIVE_DOWNLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="File exceeds download limit")
+
+        payload = await asyncio.to_thread(service.download_file, file_id)
+        content = payload.getvalue()
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    mime_type = metadata.get("mimeType") or "application/octet-stream"
+    filename = metadata.get("name") or "download"
+    return Response(
+        content=content,
+        media_type=mime_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/speech/deepgram/token")
+async def deepgram_token(
+    user: dict[str, Any] = Depends(current_user),
+    payload: DeepgramTokenRequest | None = None,
+):
+    del user
+    service = get_deepgram_auth_service()
+    if not service.is_configured:
+        raise HTTPException(status_code=503, detail="Speech service not configured")
+
+    try:
+        return await service.grant_token(
+            ttl_seconds=payload.ttl_seconds if payload else None
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/speech/deepgram/transcribe")
+async def deepgram_transcribe(
+    user: dict[str, Any] = Depends(current_user),
+    file: UploadFile = File(...),
+):
+    del user
+    service = get_deepgram_auth_service()
+    if not service.is_configured:
+        raise HTTPException(status_code=503, detail="Speech service not configured")
+
+    audio = await file.read()
+    if not audio:
+        raise HTTPException(status_code=400, detail="Empty audio payload")
+    if len(audio) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Audio file too large")
+
+    content_type = file.content_type or "audio/wav"
+    try:
+        transcript = await service.transcribe_bytes(audio, content_type=content_type)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if not transcript:
+        raise HTTPException(status_code=422, detail="No speech detected")
+
+    return {"transcript": transcript, "source_type": "DEEPGRAM_PROXY"}
 
 
 if __name__ == "__main__":
