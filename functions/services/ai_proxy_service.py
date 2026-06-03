@@ -20,6 +20,7 @@ class AiProxyService:
     _provider_configs: dict[str, dict[str, str]] = {}
     _rate_limits: dict[str, list[float]] = defaultdict(list)
     _last_provider_warning: float = 0
+    _last_rate_limit_reap: float = 0
 
     MAX_RETRIES = 2
     RATE_LIMIT_PER_USER = 30  # requests per minute
@@ -35,28 +36,13 @@ class AiProxyService:
     def _init_providers(self) -> None:
         configs: dict[str, dict[str, str]] = {}
 
+        # Only OpenRouter - OWL Alpha model
         openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
         if openrouter_key:
             configs[self.PROVIDER_OPENROUTER] = {
                 "url": "https://openrouter.ai/api/v1/chat/completions",
                 "key": openrouter_key,
-                "model": os.environ.get("OPENROUTER_MODEL", "google/gemini-2.0-flash-001"),
-            }
-
-        grok_key = os.environ.get("GROK_API_KEY", "")
-        if grok_key:
-            configs[self.PROVIDER_GROK] = {
-                "url": "https://api.x.ai/v1/chat/completions",
-                "key": grok_key,
-                "model": os.environ.get("GROK_MODEL", "grok-2-latest"),
-            }
-
-        deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "")
-        if deepseek_key:
-            configs[self.PROVIDER_DEEPSEEK] = {
-                "url": "https://api.deepseek.com/v1/chat/completions",
-                "key": deepseek_key,
-                "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+                "model": "openrouter/owl-alpha",
             }
 
         self._provider_configs = configs
@@ -195,21 +181,21 @@ class AiProxyService:
                 ) as response:
                     if response.status_code != 200:
                         error_text = await response.aread()
-                        yield f"data: {json.dumps({'error': f'{provider_name}: HTTP {response.status_code}', 'detail': error_text.decode(errors='replace')[:500]})}\n\n"
-                        yield "data: [DONE]\n\n"
-                        return
+                        print(f"AiProxyService: {provider_name} returned {response.status_code}: {error_text.decode(errors='replace')[:200]}")
+                        continue # Failover to next provider
 
+                    # If we got here, stream was successful
                     async for line in response.aiter_lines():
                         if line.startswith("data: "):
                             yield f"{line}\n"
                             if line.strip() == "data: [DONE]":
                                 return
 
-                return
+                return # Ensure we exit after successful stream completion
 
             except (httpx.TimeoutException, httpx.RequestError) as exc:
-                yield f"data: {json.dumps({'warning': f'{provider_name} failed, trying next', 'detail': str(exc)})}\n\n"
-                continue
+                print(f"AiProxyService: {provider_name} network error: {exc}")
+                continue # Failover to next provider
 
         yield f"data: {json.dumps({'error': 'all_providers_failed'})}\n\n"
         yield "data: [DONE]\n\n"
@@ -217,6 +203,13 @@ class AiProxyService:
     def _check_rate_limit(self, user_id: str) -> bool:
         now = time.time()
         window_start = now - self.RATE_LIMIT_WINDOW
+        
+        if now - self._last_rate_limit_reap > 300:
+            stale_users = [u for u, t in self._rate_limits.items() if not t or t[-1] <= window_start]
+            for u in stale_users:
+                self._rate_limits.pop(u, None)
+            self._last_rate_limit_reap = now
+
         self._rate_limits[user_id] = [
             t for t in self._rate_limits[user_id] if t > window_start
         ]
