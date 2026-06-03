@@ -555,6 +555,174 @@ class DailyPlanService {
   String _todayString([DateTime? now]) =>
       (now ?? DateTime.now()).toIso8601String().split('T').first;
 
+  // ========== OFFLINE STORAGE ==========
+  static const String _offlinePlansKey = 'offline_daily_plans';
+
+  Future<Map<String, List<Map<String, dynamic>>>> _loadOfflinePlans() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final data = prefs.getString(_offlinePlansKey);
+      if (data == null || data.isEmpty) return {};
+      final decoded = jsonDecode(data) as Map<String, dynamic>;
+      return decoded.map((k, v) => MapEntry(
+        k,
+        (v as List).map((e) => Map<String, dynamic>.from(e as Map)).toList(),
+      ));
+    } catch (e) {
+      debugPrint('DailyPlanService: _loadOfflinePlans failed - $e');
+      return {};
+    }
+  }
+
+  Future<void> _saveOfflinePlans(Map<String, List<Map<String, dynamic>>> plans) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final data = jsonEncode(plans);
+      await prefs.setString(_offlinePlansKey, data);
+    } catch (e) {
+      debugPrint('DailyPlanService: _saveOfflinePlans failed - $e');
+    }
+  }
+
+  Future<void> _saveTasksToOffline(
+    String uid,
+    String date,
+    List<DailyPlanTask> tasks,
+  ) async {
+    final all = await _loadOfflinePlans();
+    final key = '${uid}_$date';
+    all[key] = tasks.map((t) => t.toJson()).toList();
+    await _saveOfflinePlans(all);
+    debugPrint('DailyPlanService: saved ${tasks.length} tasks for $key to offline');
+  }
+
+  Future<List<DailyPlanTask>> _loadTasksFromOffline(String uid, String date) async {
+    final all = await _loadOfflinePlans();
+    final key = '${uid}_$date';
+    final taskMaps = all[key];
+    if (taskMaps == null) return [];
+    return taskMaps.map((t) => DailyPlanTask.fromJson(t['id'] as String, t)).toList();
+  }
+
+  // ========== USER DATA CHECK ==========
+  Future<bool> checkUserDataSufficient() async {
+    final subjects = await _getUserSubjects();
+    if (subjects.isEmpty) return false;
+    
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final targetHours = prefs.getDouble('userTargetHours') ?? 0;
+      return targetHours >= 1;
+    } catch (_) {
+      return subjects.isNotEmpty;
+    }
+  }
+
+  // ========== MONTHLY PLAN ==========
+  /// Auto-generate monthly plan (30 days). Returns empty for new users without enough data.
+  /// Starts offline and online generation simultaneously.
+  Future<List<List<DailyPlanTask>>> ensureMonthPlan({
+    required String uid,
+    String? focusAreas,
+  }) async {
+    // Check user data first
+    final hasData = await checkUserDataSufficient();
+    if (!hasData) {
+      debugPrint('DailyPlanService: insufficient user data for monthly plan');
+      return [];
+    }
+    
+    final results = <List<DailyPlanTask>>[];
+    final today = DateTime.now();
+    
+    for (int i = 0; i < 30; i++) {
+      final date = today.add(Duration(days: i));
+      final dateStr = date.toIso8601String().split('T').first;
+      
+      // Check if we already have this date's plan (Firestore)
+      final existing = await getTasksForDate(uid, dateStr);
+      if (existing.isNotEmpty) {
+        results.add(existing);
+        continue;
+      }
+      
+      // Also check offline cache
+      final offlineTasks = await _loadTasksFromOffline(uid, dateStr);
+      if (offlineTasks.isNotEmpty) {
+        results.add(offlineTasks);
+        // Sync to Firestore in background
+        _syncOfflineToFirestore(uid, dateStr, offlineTasks);
+        continue;
+      }
+      
+      // Start offline AND online simultaneously
+      final onlineTask = _generateOnlineForDate(uid, dateStr, focusAreas);
+      
+      // Use offline plan or wait for online
+      List<DailyPlanTask> plan = offlineTasks.isNotEmpty 
+          ? offlineTasks 
+          : await onlineTask;
+      
+      if (plan.isNotEmpty) {
+        results.add(plan);
+        // Save to offline storage
+        await _saveTasksToOffline(uid, dateStr, plan);
+      }
+    }
+    
+    return results;
+  }
+
+  Future<void> _syncOfflineToFirestore(String uid, String date, List<DailyPlanTask> tasks) async {
+    try {
+      final batch = FirebaseFirestore.instance.batch();
+      for (final task in tasks) {
+        final ref = _dailyPlanCollection(uid).doc(task.id);
+        batch.set(ref, task.toJson());
+      }
+      await batch.commit();
+    } catch (e) {
+      debugPrint('DailyPlanService: _syncOfflineToFirestore failed - $e');
+    }
+  }
+
+  Future<List<DailyPlanTask>> _generateOnlineForDate(
+    String uid,
+    String date,
+    String? focusAreas,
+  ) async {
+    try {
+      final response = await _post(
+        '/generate-daily-plan',
+        body: {
+          'user_id': uid,
+          'client_date': date,
+          if (focusAreas != null) 'focus_areas': focusAreas,
+          'force': true,
+        },
+        retries: 1,
+      );
+      return _tasksFromResponse(response);
+    } catch (e) {
+      debugPrint('DailyPlanService: _generateOnlineForDate failed - $e');
+      return [];
+    }
+  }
+
+  List<DailyPlanTask> _tasksFromResponse(http.Response response) {
+    if (response.statusCode != 200) return [];
+    try {
+      final data = jsonDecode(response.body);
+      final taskList = data['tasks'] as List?;
+      if (taskList == null) return [];
+      return taskList
+          .map((t) => DailyPlanTask.fromJson(t['id'] as String? ?? '', t as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
   List<DailyPlanTask> _sortTasks(List<DailyPlanTask> tasks) {
     tasks.sort((a, b) {
       final dateCompare = a.date.compareTo(b.date);
