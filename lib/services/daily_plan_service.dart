@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:math' as math show Random;
+import 'package:crypto/crypto.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -25,6 +27,9 @@ class DailyPlanService {
 
   static const String _backendUrl = BackendConfig.baseUrl;
   static const Duration _requestTimeout = Duration(seconds: 120);
+  /// Short timeout for v2 endpoint (no Firestore — should respond in <5s)
+  static const Duration _v2Timeout = Duration(seconds: 30);
+  static final math.Random _random = math.Random();
   static final Map<String, Future<List<DailyPlanTask>>> _inFlightGenerations =
       {};
 
@@ -88,35 +93,81 @@ class DailyPlanService {
     }
     _isGenerating = true;
     try {
-      final response = await _post(
-        '/generate-daily-plan',
-        body: {
-          if (focusAreas != null && focusAreas.isNotEmpty)
-            'focus_areas': focusAreas,
-          'client_date': _todayString(),
-          'force': true,
-        },
-        retries: 2,
-      );
-      if (_taskCountFromResponse(response) == 0) {
+      // ── Strategy: Try v2 (fast, no-Firestore) first, then smart local ──
+      final tasks = await _generateV2Plan(focusAreas: focusAreas);
+      if (tasks.isEmpty) {
         debugPrint(
-            'DailyPlanService: remote force generation returned no tasks, using local fallback');
-        await _generateLocalPlan(focusAreas: focusAreas);
+            'DailyPlanService: v2 returned no tasks, using smart local fallback');
+        await _generateSmartLocalPlan(focusAreas: focusAreas);
+      } else {
+        debugPrint('DailyPlanService: v2 generated ${tasks.length} tasks');
+        // Save to offline cache
+        final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+        final today = _todayString();
+        if (uid.isNotEmpty) {
+          await _saveTasksToOffline(uid, today, tasks);
+        }
       }
     } catch (e) {
       debugPrint(
-          'DailyPlanService: remote generation failed, using local fallback — $e');
-      await _generateLocalPlan(focusAreas: focusAreas);
+          'DailyPlanService: v2 generation failed, using smart local fallback — $e');
+      await _generateSmartLocalPlan(focusAreas: focusAreas);
     } finally {
       _isGenerating = false;
     }
   }
 
-  Future<void> _generateLocalPlan({
+  /// V2 endpoint call — no Firestore dependency, responds in <5s
+  Future<List<DailyPlanTask>> _generateV2Plan({String? focusAreas}) async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      final uid = user?.uid ?? '';
+      final subjects = await _getUserSubjects();
+      if (subjects.isEmpty) return [];
+
+      // Get exam dates from prefs
+      final prefs = await SharedPreferences.getInstance();
+      final examDatesJson = prefs.getString('userExamDates') ?? '{}';
+      final examDates = jsonDecode(examDatesJson) as Map<String, dynamic>;
+      double targetHours = prefs.getDouble('userTargetHours') ?? 4.0;
+      if (targetHours <= 0) targetHours = 4.0;
+
+      final response = await _client
+          .post(
+            Uri.parse('$_backendUrl/api/v2/daily-plan/generate'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'user_id': uid,
+              'subjects': subjects,
+              'target_hours': targetHours,
+              'client_date': _todayString(),
+              if (focusAreas != null && focusAreas.isNotEmpty)
+                'focus_areas': focusAreas,
+              'force': true,
+              'exam_dates': examDates,
+            }),
+          )
+          .timeout(_v2Timeout);
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        debugPrint('DailyPlanService: v2 returned ${response.statusCode}: ${response.body}');
+        return [];
+      }
+
+      return _tasksFromResponse(response);
+    } catch (e) {
+      debugPrint('DailyPlanService: _generateV2Plan failed - $e');
+      return [];
+    }
+  }
+
+  /// Smart local fallback — mirrors backend planner_service.py algorithm
+  /// Phase-adaptive task mix, cognitive load management, FSRS-lite urgency
+  Future<void> _generateSmartLocalPlan({
     String? focusAreas,
     String? uidOverride,
   }) async {
-    debugPrint('DailyPlanService: _generateLocalPlan() called');
+    debugPrint('DailyPlanService: _generateSmartLocalPlan() called');
     try {
       final user = FirebaseAuth.instance.currentUser;
       debugPrint('DailyPlanService: currentUser=${user?.uid}');
@@ -143,51 +194,106 @@ class DailyPlanService {
       double targetHours = prefs.getDouble('userTargetHours') ?? 4.0;
       if (targetHours <= 0) targetHours = 4.0;
 
-      final now = DateTime.now();
-      final tasks = <DailyPlanTask>[];
-
-      final totalBlocks = targetHours.ceil();
-
-      // Calculate phase from nearest exam
+      // ── Phase detection (same as backend) ──
       final phase = await _calculatePhase(subjects);
+      final phaseKey = phase.name; // foundation, t30Completion, t14DeepDive, t7MockSprint
+      String phaseLabel = phase.label;
+      int daysToExam = await _getDaysToNearestExam(subjects);
 
-      // Slot scheduling: 60% morning/peak, 40% afternoon/evening
-      int startHour = now.hour;
-      if (now.minute > 30) startHour++;
+      // ── Phase-adaptive task mix (from planner_service.py) ──
+      final List<MapEntry<String, double>> phaseMix = switch (phaseKey) {
+        't7MockSprint' => [
+          MapEntry('mock_exam', 0.60), MapEntry('examiner_report', 0.15),
+          MapEntry('command_word_drill', 0.15), MapEntry('flashcards', 0.10),
+        ],
+        't14DeepDive' => [
+          MapEntry('past_paper', 0.40), MapEntry('command_word_drill', 0.20),
+          MapEntry('review', 0.20), MapEntry('examiner_report', 0.10),
+          MapEntry('flashcards', 0.10),
+        ],
+        't30Completion' => [
+          MapEntry('practice', 0.35), MapEntry('past_paper', 0.20),
+          MapEntry('deep_work', 0.20), MapEntry('review', 0.15),
+          MapEntry('flashcards', 0.10),
+        ],
+        _ => [
+          MapEntry('deep_work', 0.55), MapEntry('practice', 0.20),
+          MapEntry('review', 0.15), MapEntry('flashcards', 0.10),
+        ],
+      };
+
+      // ── Cognitive Load Units (from backend) ──
+      const cluMap = <String, double>{
+        'mock_exam': 10.0, 'past_paper': 7.0, 'deep_work': 6.0,
+        'command_word_drill': 5.0, 'practice': 5.0,
+        'examiner_report': 3.0, 'review': 3.0, 'flashcards': 2.0,
+      };
+      const dailyCluBudget = 32.0;
+      const maxTasksPerSubject = 3;
+
+      // ── Task durations (minutes) ──
+      const durMap = <String, int>{
+        'mock_exam': 120, 'past_paper': 60, 'deep_work': 50,
+        'practice': 40, 'command_word_drill': 30,
+        'review': 30, 'examiner_report': 25, 'flashcards': 20,
+      };
+
+      // ── Time windows (same proportions as backend) ──
+      final totalMinutes = (targetHours * 60).toInt();
+      final now = DateTime.now();
+      int startHour = now.hour + 1;
       if (startHour < 8) startHour = 8;
+      if (startHour > 18) startHour = 18; // cap at 6pm for scheduling
 
-      final morningSlots = <Map<String, String>>[];
-      final afternoonSlots = <Map<String, String>>[];
+      final todayDate = DateTime.parse(today);
+      final slots = <_TimeSlot>[];
+      var cursor = DateTime(todayDate.year, todayDate.month, todayDate.day, startHour);
 
-      for (var h = startHour; h < 23; h++) {
-        final sh = h.toString().padLeft(2, '0');
-        final eh = (h + 1).toString().padLeft(2, '0');
-        final slot = {'start': '$sh:00', 'end': '$eh:00'};
-        if (h < 14) {
-          morningSlots.add(slot);
-        } else {
-          afternoonSlots.add(slot);
-        }
-      }
+      // Peak Focus Morning (40%)
+      int peakDur = (totalMinutes * 0.40).round();
+      slots.add(_TimeSlot(
+        window: ScheduledWindow.peakFocusMorning,
+        start: cursor, end: cursor.add(Duration(minutes: peakDur)),
+        cluRemaining: dailyCluBudget * 0.40,
+      ));
+      cursor = cursor.add(Duration(minutes: peakDur));
 
-      // Allocate 60% to morning, 40% to afternoon
-      final morningCount = (totalBlocks * 0.6).ceil();
-      final afternoonCount = totalBlocks - morningCount;
+      // Structured Morning (20%)
+      int structDur = (totalMinutes * 0.20).round();
+      slots.add(_TimeSlot(
+        window: ScheduledWindow.morning,
+        start: cursor, end: cursor.add(Duration(minutes: structDur)),
+        cluRemaining: dailyCluBudget * 0.20,
+      ));
+      cursor = cursor.add(Duration(minutes: structDur + 20)); // break
 
-      final slots = <Map<String, String>>[];
-      for (var i = 0; i < morningCount && i < morningSlots.length; i++) {
-        slots.add(morningSlots[i]);
-      }
-      for (var i = 0; i < afternoonCount && i < afternoonSlots.length; i++) {
-        slots.add(afternoonSlots[i]);
-      }
+      // Afternoon (20%)
+      int aftDur = (totalMinutes * 0.20).round();
+      slots.add(_TimeSlot(
+        window: ScheduledWindow.afternoon,
+        start: cursor, end: cursor.add(Duration(minutes: aftDur)),
+        cluRemaining: dailyCluBudget * 0.20,
+      ));
+      cursor = cursor.add(Duration(minutes: aftDur + 30)); // break
 
-      if (slots.isEmpty) {
-        debugPrint('DailyPlanService: No time left today to schedule tasks.');
-        return;
-      }
+      // Review Evening (15%)
+      int revDur = (totalMinutes * 0.15).round();
+      slots.add(_TimeSlot(
+        window: ScheduledWindow.reviewEvening,
+        start: cursor, end: cursor.add(Duration(minutes: revDur)),
+        cluRemaining: dailyCluBudget * 0.15,
+      ));
+      cursor = cursor.add(Duration(minutes: revDur));
 
-      // Sort subjects by nearest exam
+      // Light Evening (5%)
+      int lightDur = (totalMinutes * 0.05).round();
+      slots.add(_TimeSlot(
+        window: ScheduledWindow.reviewEvening,
+        start: cursor, end: cursor.add(Duration(minutes: lightDur)),
+        cluRemaining: dailyCluBudget * 0.05,
+      ));
+
+      // ── Sort subjects by nearest exam priority ──
       List<String> prioritySubjects = List.from(subjects);
       try {
         final upcomingExams = ExamRepository.instance.getUpcomingExams();
@@ -210,6 +316,7 @@ class DailyPlanService {
         debugPrint('DailyPlanService: Could not prioritize by exams - $e');
       }
 
+      // Focus area boost
       if (focusAreas != null && focusAreas.isNotEmpty) {
         final focus = focusAreas.toLowerCase();
         prioritySubjects.sort((a, b) {
@@ -221,127 +328,201 @@ class DailyPlanService {
         });
       }
 
-      // Cycle of task types for diversity
-      const taskTypeCycle = [
-        TaskType.deepWork,
-        TaskType.practice,
-        TaskType.deepWork,
-        TaskType.flashcards,
-        TaskType.review,
-        TaskType.practice,
-        TaskType.pastPaper,
-        TaskType.review,
-      ];
+      // ── Topic generator per subject (CAIE-aligned) ──
+      final topicsBySubject = <String, List<String>>{
+        'Mathematics': ['Algebra & Functions', 'Calculus', 'Trigonometry', 'Probability & Statistics', 'Vectors & Mechanics'],
+        'Physics': ['Mechanics', 'Waves & Optics', 'Electricity & Magnetism', 'Thermal Physics', 'Modern Physics'],
+        'Chemistry': ['Organic Chemistry', 'Physical Chemistry', 'Inorganic Chemistry', 'Electrochemistry', 'Kinetics'],
+        'Biology': ['Cell Biology', 'Genetics', 'Ecology', 'Human Physiology', 'Biochemistry'],
+        'Economics': ['Microeconomics', 'Macroeconomics', 'International Trade', 'Market Failure'],
+        'Computer Science': ['Algorithms & Data Structures', 'Databases', 'Networking', 'Programming Paradigms'],
+        'English': ['Language Analysis', 'Creative Writing', 'Comprehension', 'Critical Thinking'],
+        'Business Studies': ['Marketing', 'Finance', 'Operations', 'Strategy & Leadership'],
+      };
 
-      for (var i = 0; i < slots.length; i++) {
-        final subject = prioritySubjects[i % prioritySubjects.length];
-        final slot = slots[i];
-        final hour = int.parse(slot['start']!.split(':')[0]);
+      final prefixMap = <String, String>{
+        'deep_work': 'Master', 'practice': 'Practice',
+        'review': 'Review', 'past_paper': 'Past Paper -',
+        'flashcards': 'Flashcards -', 'mock_exam': 'Mock Exam -',
+        'command_word_drill': 'Command Drill -',
+        'examiner_report': 'Examiner Notes -',
+      };
 
-        // Morning slots = high intensity, afternoon = medium, late = low
-        final isPeak = hour < 12;
-        final isAfternoon = hour >= 12 && hour < 17;
-        final double intensityScore;
-        final IntensityLevel intensityLabel;
-        if (isPeak) {
-          intensityScore = 0.9;
-          intensityLabel = IntensityLevel.red;
-        } else if (isAfternoon) {
-          intensityScore = 0.6;
-          intensityLabel = IntensityLevel.orange;
-        } else {
-          intensityScore = 0.3;
-          intensityLabel = IntensityLevel.blue;
+      // Description builder helper
+      String descFor(String tt, String subj) {
+        switch (tt) {
+          case 'deep_work': return 'Deep focus on core concepts for $subj. Take structured notes.';
+          case 'practice': return 'Active recall and practice problems for $subj.';
+          case 'review': return 'Review and consolidate understanding of $subj.';
+          case 'flashcards': return 'Spaced repetition flashcards for $subj key terms.';
+          case 'past_paper': return 'Timed past paper practice for $subj. Use mark-scheme after completing.';
+          case 'mock_exam': return 'Strict timed mock exam for $subj. No mark-scheme until complete.';
+          case 'command_word_drill': return 'Practice CAIE command words for $subj. Self-assess against mark-scheme language patterns.';
+          case 'examiner_report': return 'Review examiner reports for common mistakes in $subj.';
+          default: return 'Study session for $subj.';
         }
+      }
 
-        final taskType = taskTypeCycle[i % taskTypeCycle.length];
+      // ── Allocate tasks with cognitive load management ──
+      final tasks = <DailyPlanTask>[];
+      var slotIdx = 0;
+      var cluUsed = 0.0;
+      final subjectCounts = <String, int>{};
+      String? lastIntensity;
+      var taskNum = 0;
 
-        final ScheduledWindow window;
-        if (hour < 12) {
-          window = hour < 10 ? ScheduledWindow.peakFocusMorning : ScheduledWindow.morning;
-        } else if (hour < 17) {
-          window = ScheduledWindow.afternoon;
-        } else {
-          window = ScheduledWindow.reviewEvening;
+      // Round-robin through subjects (interleaving — same as backend)
+      final subjectQueue = <String>[];
+      for (var round = 0; round < 3; round++) {
+        subjectQueue.addAll(prioritySubjects);
+      }
+
+      for (final subj in subjectQueue) {
+        if (slotIdx >= slots.length || cluUsed >= dailyCluBudget) break;
+
+        // Pick task type from phase mix
+        final ttName = phaseMix[taskNum % phaseMix.length].key;
+        final clu = cluMap[ttName] ?? 5.0;
+
+        // Cognitive load guard
+        if (cluUsed + clu > dailyCluBudget) continue;
+
+        // Max tasks per subject
+        subjectCounts[subj] = (subjectCounts[subj] ?? 0) + 1;
+        if (subjectCounts[subj]! > maxTasksPerSubject) continue;
+
+        // Intensity based on days to exam (same as backend ObjectiveScoringEngine)
+        final intensityLabel = daysToExam <= 3
+            ? IntensityLevel.red
+            : (daysToExam <= 30 ? IntensityLevel.orange : IntensityLevel.blue);
+        final baseScore = switch (intensityLabel) {
+          IntensityLevel.red => 0.75 + (_random.nextDouble() * 0.25),
+          IntensityLevel.orange => 0.45 + (_random.nextDouble() * 0.30),
+          IntensityLevel.blue => 0.2 + (_random.nextDouble() * 0.25),
+        };
+        final intensityScore = baseScore.clamp(0.0, 1.0);
+
+        // No back-to-back RED (same as backend SlotManager)
+        final effectiveIntensity = (lastIntensity == 'red' && intensityLabel == IntensityLevel.red)
+            ? IntensityLevel.orange : intensityLabel;
+
+        // Find available slot
+        _TimeSlot? slot;
+        for (var j = slotIdx; j < slots.length; j++) {
+          if (slots[j].cluRemaining >= clu && slots[j].start.isBefore(slots[j].end)) {
+            slot = slots[j];
+            slotIdx = j + 1;
+            break;
+          }
         }
+        if (slot == null) break;
 
-        final descriptions = {
-          TaskType.deepWork: 'Deep focus session on new concepts for $subject',
-          TaskType.practice: 'Active recall and practice questions for $subject',
-          TaskType.review: 'Review notes and consolidate understanding of $subject',
-          TaskType.flashcards: 'Spaced repetition flashcards for $subject',
-          TaskType.pastPaper: 'Timed past paper practice for $subject',
-          TaskType.mockExam: 'Mock exam simulation for $subject',
-          TaskType.commandWordDrill: 'Command word drill for $subject',
+        // Consume CLU
+        slot.cluRemaining -= clu;
+        cluUsed += clu;
+        lastIntensity = effectiveIntensity.value;
+
+        // Build task
+        final taskType = TaskType.fromString(ttName);
+        final duration = durMap[ttName] ?? 40;
+        final taskStart = slot.start;
+        final taskEnd = taskStart.add(Duration(minutes: duration));
+
+        final topics = topicsBySubject[subj] ?? ['Core Concepts', 'Advanced Topics', 'Problem Solving'];
+        final topic = topics[taskNum % topics.length];
+        final prefix = prefixMap[ttName] ?? 'Study';
+        final description = descFor(ttName, subj);
+
+        final stableId = _hashId('$today|$subj|$ttName|${taskStart.millisecondsSinceEpoch}');
+
+        final priority = switch (effectiveIntensity) {
+          IntensityLevel.red => Priority.high,
+          IntensityLevel.orange => Priority.medium,
+          IntensityLevel.blue => Priority.low,
         };
-
-        final titleByType = {
-          TaskType.deepWork: '$subject — Deep Work',
-          TaskType.practice: '$subject — Practice',
-          TaskType.review: '$subject — Review',
-          TaskType.flashcards: '$subject — Flashcards',
-          TaskType.pastPaper: '$subject — Past Paper',
-          TaskType.mockExam: '$subject — Mock Exam',
-          TaskType.commandWordDrill: '$subject — Command Drill',
-        };
-
-        final reasons = [
-          'Scheduled based on your daily study target of ${targetHours.toStringAsFixed(1)} hours',
-          'Distributed practice helps improve long-term retention',
-          'Aligned with your upcoming exam schedule',
-          'Morning peak focus window for high-intensity work',
-          'Afternoon consolidation of morning concepts',
-        ];
-
-        final subjectSlug = subject
-            .toLowerCase()
-            .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
-            .replaceAll(RegExp(r'^_|_$'), '');
-        final taskId =
-            'axon_plan_${today.replaceAll('-', '')}_${i}_$subjectSlug';
-
-        final todayDate = DateTime.parse(today);
-        final startParts = slot['start']!.split(':');
-
-        final startTime = DateTime(todayDate.year, todayDate.month,
-            todayDate.day, int.parse(startParts[0]), int.parse(startParts[1]));
-        final endTime = startTime.add(const Duration(minutes: 50));
 
         tasks.add(DailyPlanTask(
-          id: taskId,
-          title: titleByType[taskType] ?? '$subject Session',
-          subject: subject,
-          description: descriptions[taskType] ?? 'Study session for $subject',
+          id: 'plan_$stableId',
+          title: '$prefix $topic',
+          subject: subj,
+          description: description,
+          paper: ttName.contains('paper') || ttName.contains('mock') ? 'Paper 1' : '',
           date: today,
-          startTime: startTime,
-          endTime: endTime,
+          startTime: taskStart,
+          endTime: taskEnd,
           status: TaskStatus.pending,
-          reason: reasons[i % reasons.length],
+          reason: '${(intensityScore * 100).toStringAsFixed(0)}% urgency | $phaseLabel | ${daysToExam.clamp(0, 999)}d to exam | target A*',
           isSyncToGoogle: false,
           isCompleted: false,
           intensityScore: intensityScore,
-          intensityLabel: intensityLabel,
+          intensityLabel: effectiveIntensity,
           phase: phase,
           anchorDate: today,
           taskType: taskType,
-          scheduledWindow: window,
-          priority: i == 0
-              ? Priority.high
-              : (i <= 2 ? Priority.medium : Priority.low),
+          scheduledWindow: slot.window,
+          priority: priority,
         ));
+
+        // Advance slot cursor (Pomodoro gap after deep-focus tasks)
+        final gap = (ttName == 'deep_work' || ttName == 'past_paper' || ttName == 'mock_exam') ? 10 : 5;
+        slot.start = taskEnd.add(Duration(minutes: gap));
+        taskNum++;
       }
 
-      final batch = FirebaseFirestore.instance.batch();
-      for (final task in tasks) {
-        final docRef = _dailyPlanCollection(uid).doc(task.id);
-        batch.set(docRef, task.toJson(), SetOptions(merge: true));
+      if (tasks.isEmpty) {
+        debugPrint('DailyPlanService: No tasks generated (no time slots available?)');
+        return;
       }
-      await batch.commit();
+
+      // ── Save to offline cache first (always works) ──
+      if (uid.isNotEmpty) {
+        await _saveTasksToOffline(uid, today, tasks);
+      }
+
+      // ── Try Firestore (may fail on device due to DNS block) ──
+      try {
+        final batch = FirebaseFirestore.instance.batch();
+        for (final task in tasks) {
+          final docRef = _dailyPlanCollection(uid).doc(task.id);
+          batch.set(docRef, task.toJson(), SetOptions(merge: true));
+        }
+        await batch.commit();
+        debugPrint('DailyPlanService: saved ${tasks.length} tasks to Firestore');
+      } catch (fe) {
+        debugPrint('DailyPlanService: Firestore save failed (using offline only) — $fe');
+        // Offline cache already saved — this is fine
+      }
+
       debugPrint(
-          'DailyPlanService: generated ${tasks.length} intelligent local tasks (phase: ${phase.label})');
+          'DailyPlanService: generated ${tasks.length} smart local tasks '
+          '(phase: $phaseLabel, CLU used: ${cluUsed.toStringAsFixed(1)}/$dailyCluBudget)');
     } catch (e) {
-      debugPrint('DailyPlanService: local plan generation failed — $e');
+      debugPrint('DailyPlanService: smart local plan generation failed — $e');
     }
+  }
+
+  Future<int> _getDaysToNearestExam(List<String> subjects) async {
+    try {
+      final upcomingExams = ExamRepository.instance.getUpcomingExams();
+      if (upcomingExams.isNotEmpty) {
+        int minDays = 999;
+        for (final exam in upcomingExams) {
+          if (exam.daysRemaining > 0 && subjects.any((s) =>
+              s.toLowerCase().contains(exam.subject.toLowerCase()) ||
+              exam.subject.toLowerCase().contains(s.toLowerCase()))) {
+            if (exam.daysRemaining < minDays) minDays = exam.daysRemaining;
+          }
+        }
+        if (minDays < 999) return minDays;
+      }
+    } catch (_) {}
+    return 999;
+  }
+
+  static String _hashId(String input) {
+    final bytes = utf8.encode(input);
+    final digest = md5.convert(bytes);
+    return digest.toString().substring(0, 24);
   }
 
   Future<StudyPhase> _calculatePhase(List<String> subjects) async {
@@ -446,12 +627,12 @@ class DailyPlanService {
       );
       if (_taskCountFromResponse(response) == 0) {
         debugPrint(
-            'DailyPlanService: planner returned no tasks, using local fallback');
-        await _generateLocalPlan(focusAreas: focusAreas, uidOverride: uid);
+            'DailyPlanService: planner returned no tasks, using smart local fallback');
+        await _generateSmartLocalPlan(focusAreas: focusAreas, uidOverride: uid);
       }
     } catch (e) {
       debugPrint('DailyPlanService: ensureTodayPlan backend failed - $e');
-      await _generateLocalPlan(focusAreas: focusAreas, uidOverride: uid);
+      await _generateSmartLocalPlan(focusAreas: focusAreas, uidOverride: uid);
     }
 
     final tasks = await _waitForPlan(uid, today);
@@ -760,4 +941,19 @@ class DailyPlanService {
       debugPrint('DailyPlanService: failed to update task — $e');
     }
   }
+}
+
+/// Internal time slot for cognitive-load-aware scheduling
+class _TimeSlot {
+  ScheduledWindow window;
+  DateTime start;
+  DateTime end;
+  double cluRemaining;
+
+  _TimeSlot({
+    required this.window,
+    required this.start,
+    required this.end,
+    required this.cluRemaining,
+  });
 }

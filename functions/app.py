@@ -1186,6 +1186,237 @@ async def deepgram_transcribe(
     return {"transcript": transcript, "source_type": "DEEPGRAM_PROXY"}
 
 
+# ══════════════════════════════════════════════════════════════
+# V2 DAILY PLAN — No Firestore dependency, works offline
+# ══════════════════════════════════════════════════════════════
+
+class V2DailyPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user_id: str | None = None
+    subjects: list[str] | None = Field(default=None, max_length=20)
+    target_hours: float | None = Field(default=4.0, ge=1.0, le=16.0)
+    client_date: str | None = Field(default=None, max_length=32)
+    focus_areas: str | None = Field(default=None, max_length=800)
+    force: bool = False
+    exam_dates: dict[str, str] | None = Field(default=None)  # {"Maths": "2026-06-15"}
+
+
+@app.post("/api/v2/daily-plan/generate")
+async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
+    """
+    Firestore-free daily plan generator.
+    Returns a complete daily plan using the same algorithm as planner_service.py
+    but without any Firestore dependency.
+    """
+    from datetime import date, datetime, timedelta
+    import hashlib
+    import math
+    import random
+
+    today = (date.fromisoformat(payload.client_date) if payload.client_date else date.today()).isoformat()
+    subjects = payload.subjects or ["Mathematics", "Physics", "Chemistry"]
+    target_hours = payload.target_hours or 4.0
+    exam_dates = payload.exam_dates or {}
+    focus_areas = payload.focus_areas or ""
+
+    # ── Phase detection from nearest exam ──
+    days_to_exam = 999
+    for subj in subjects:
+        ed_str = exam_dates.get(subj)
+        if ed_str:
+            try:
+                d = date.fromisoformat(ed_str)
+                dt = (d - date.today()).days
+                if 0 <= dt < days_to_exam:
+                    days_to_exam = dt
+            except ValueError:
+                pass
+
+    if days_to_exam <= 7:
+        phase = "T-7 Mock Sprint"
+        phase_key = "t7"
+    elif days_to_exam <= 14:
+        phase = "T-14 Deep Dive"
+        phase_key = "t14"
+    elif days_to_exam <= 30:
+        phase = "T-30 Completion"
+        phase_key = "t30"
+    else:
+        phase = "Foundation Build"
+        phase_key = "foundation"
+
+    # ── Phase-adaptive task mix (from planner_service.py) ──
+    phase_mix = {
+        "foundation": [("deep_work", 0.55), ("practice", 0.20), ("review", 0.15), ("flashcards", 0.10)],
+        "t30": [("practice", 0.35), ("past_paper", 0.20), ("deep_work", 0.20), ("review", 0.15), ("flashcards", 0.10)],
+        "t14": [("past_paper", 0.40), ("command_word_drill", 0.20), ("review", 0.20), ("examiner_report", 0.10), ("flashcards", 0.10)],
+        "t7": [("mock_exam", 0.60), ("examiner_report", 0.15), ("command_word_drill", 0.15), ("flashcards", 0.10)],
+    }
+
+    # ── Cognitive Load Units ──
+    clu_map = {
+        "mock_exam": 10.0, "past_paper": 7.0, "deep_work": 6.0,
+        "command_word_drill": 5.0, "practice": 5.0,
+        "examiner_report": 3.0, "review": 3.0, "flashcards": 2.0,
+    }
+    daily_clu_budget = 32.0
+
+    # ── Task durations (minutes) ──
+    dur_map = {
+        "mock_exam": 120, "past_paper": 60, "deep_work": 50,
+        "practice": 40, "command_word_drill": 30,
+        "review": 30, "examiner_report": 25, "flashcards": 20,
+    }
+
+    # ── Time windows ──
+    total_minutes = int(target_hours * 60)
+    windows = [
+        {"name": "peak_focus_morning", "pct": 0.40},
+        {"name": "structured_morning", "pct": 0.20},
+        # 20-min break
+        {"name": "afternoon", "pct": 0.20},
+        # 30-min break
+        {"name": "review_evening", "pct": 0.15},
+        {"name": "light_evening", "pct": 0.05},
+    ]
+
+    # ── Build slots ──
+    now_dt = datetime.now()
+    start_hour = max(now_dt.hour + 1, 8)
+    cursor = datetime.combine(date.today(), datetime.min.time().replace(hour=start_hour))
+    slots = []
+    for w in windows:
+        dur = int(total_minutes * w["pct"])
+        end = cursor + timedelta(minutes=dur)
+        slots.append({"window": w["name"], "start": cursor, "end": end, "clu_remaining": daily_clu_budget * w["pct"]})
+        cursor = end + (timedelta(minutes=20) if w["name"] == "structured_morning" else timedelta(minutes=(30 if w["name"] == "afternoon" else 5)))
+
+    # ── Sample tasks per subject based on phase ──
+    mix = phase_mix.get(phase_key, phase_mix["foundation"])
+    tasks = []
+    slot_idx = 0
+    clu_used = 0.0
+    subject_counts = {}
+    last_intensity = None
+    task_num = 0
+
+    # Round-robin through subjects
+    subject_queue = list(subjects) * 3  # repeat for enough coverage
+    random.seed(hash(today))
+    random.shuffle(subject_queue)
+
+    for si, subj in enumerate(subject_queue):
+        if slot_idx >= len(slots): break
+        if clu_used >= daily_clu_budget: break
+
+        # Pick task type from phase mix (cycle through)
+        tt_name, _ = mix[task_num % len(mix)]
+        clu = clu_map.get(tt_name, 5.0)
+
+        # Cognitive load guard
+        if clu_used + clu > daily_clu_budget: continue
+
+        # Max 3 tasks per subject
+        subject_counts[subj] = subject_counts.get(subj, 0) + 1
+        if subject_counts[subj] > 3: continue
+
+        # Intensity
+        if days_to_exam <= 3 or (days_to_exam <= 14 and task_num <= 1):
+            intensity = "red"
+            score = round(0.75 + random.random() * 0.25, 3)
+        elif days_to_exam <= 30:
+            intensity = "orange"
+            score = round(0.45 + random.random() * 0.30, 3)
+        else:
+            intensity = "blue"
+            score = round(0.2 + random.random() * 0.25, 3)
+
+        # No back-to-back red
+        if last_intensity == "red" and intensity == "red":
+            intensity = "orange"
+            score = round(0.5 + random.random() * 0.25, 3)
+
+        # Find slot
+        slot = None
+        for j in range(slot_idx, len(slots)):
+            if slots[j]["clu_remaining"] >= clu and slots[j]["start"] < slots[j]["end"]:
+                slot = slots[j]
+                slot_idx = j + 1
+                break
+        if not slot: break
+
+        # Consume CLU
+        slot["clu_remaining"] -= clu
+        clu_used += clu
+        last_intensity = intensity
+
+        # Task title prefixes
+        prefix_map = {
+            "deep_work": "Master", "practice": "Practice",
+            "review": "Review", "past_paper": "Past Paper -",
+            "flashcards": "Flashcards -", "mock_exam": "Mock Exam -",
+            "command_word_drill": "Command Drill -",
+            "examiner_report": "Examiner Notes -",
+        }
+        prefix = prefix_map.get(tt_name, "Study")
+
+        # Generate topic-like name
+        topics_by_subject = {
+            "Mathematics": ["Algebra & Functions", "Calculus", "Trigonometry", "Probability & Statistics", "Vectors & Mechanics"],
+            "Physics": ["Mechanics", "Waves & Optics", "Electricity & Magnetism", "Thermal Physics", "Modern Physics"],
+            "Chemistry": ["Organic Chemistry", "Physical Chemistry", "Inorganic Chemistry", "Electrochemistry", "Kinetics"],
+            "Biology": ["Cell Biology", "Genetics", "Ecology", "Human Physiology", "Biochemistry"],
+            "Economics": ["Microeconomics", "Macroeconomics", "International Trade", "Market Failure"],
+            "Computer Science": ["Algorithms & Data Structures", "Databases", "Networking", "Programming Paradigms"],
+        }
+        topics = topics_by_subject.get(subj, ["Core Concepts", "Advanced Topics", "Problem Solving", "Theory & Application"])
+        topic = topics[task_num % len(topics)]
+
+        duration = dur_map.get(tt_name, 40)
+        task_start = slot["start"]
+        task_end = task_start + timedelta(minutes=duration)
+
+        stable_id = hashlib.sha1(f"{today}|{subj}|{tt_name}|{task_start.isoformat()}".encode()).hexdigest()[:24]
+
+        priority = 3 if intensity == "red" else (2 if intensity == "orange" else 1)
+
+        tasks.append({
+            "id": f"plan_{stable_id}",
+            "title": f"{prefix} {topic}",
+            "subject": subj,
+            "description": f"Phase: {phase} | Focus on key concepts. {'Use mark-scheme after completing.' if tt_name in ('past_paper', 'mock_exam') else 'Take notes and attempt practice problems.'}",
+            "paper": "Paper 1" if tt_name in ("past_paper", "mock_exam") else "",
+            "objective_id": "",
+            "start_time": task_start.isoformat(),
+            "end_time": task_end.isoformat(),
+            "status": "pending",
+            "date": today,
+            "reason": f"Score {score:.3f} | {phase} | {max(0, days_to_exam)}d to exam | target A*",
+            "intensity_score": score,
+            "intensity_label": intensity,
+            "phase": phase,
+            "anchor_date": today,
+            "task_type": tt_name,
+            "scheduled_window": slot["window"],
+            "priority": priority,
+            "is_completed": False,
+            "is_sync_to_google": False,
+        })
+
+        slot["start"] = task_end + timedelta(minutes=(10 if tt_name in ("deep_work", "past_paper", "mock_exam") else 5))
+        task_num += 1
+
+    return {
+        "owner_uid": payload.user_id or "v2_user",
+        "task_count": len(tasks),
+        "tasks": tasks,
+        "source_type": "V2_OFFLINE_DAILY_PLAN",
+        "phase": phase,
+        "days_to_exam": max(0, days_to_exam),
+        "target_hours": target_hours,
+    }
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("app:app", host="0.0.0.0", port=port)
