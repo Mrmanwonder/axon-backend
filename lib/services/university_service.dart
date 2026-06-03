@@ -12,7 +12,7 @@ class UniversityService {
   factory UniversityService() => _instance;
   UniversityService._internal();
 
-  static const String _backendUrl = 'https://bhavu.up.railway.app';
+  static const String _backendUrl = 'https://axon-ml.onrender.com';
 
   Future<List<University>> searchUniversities(String query) async {
     try {

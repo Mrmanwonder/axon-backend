@@ -41,7 +41,7 @@ class AxonScheduleResult {
 class BoardExamService {
   BoardExamService({http.Client? client}) : _client = client ?? http.Client();
 
-  static String _backendUrl = 'https://bhavu.up.railway.app';
+  static String _backendUrl = 'https://axon-ml.onrender.com';
   static bool _initialized = false;
 
   static Future<void> setBackendUrl(String url) async {

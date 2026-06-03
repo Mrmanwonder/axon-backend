@@ -37,7 +37,7 @@ class HandwritingFeedbackService {
   HandwritingFeedbackService({http.Client? client})
       : _client = client ?? http.Client();
 
-  static const String _backendUrl = 'https://bhavu.up.railway.app';
+  static const String _backendUrl = 'https://axon-ml.onrender.com';
   final http.Client _client;
   final CloudinaryService _cloudinary = CloudinaryService();
 

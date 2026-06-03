@@ -27,7 +27,7 @@ class LeaderboardEntry {
 }
 
 class LeaderboardService {
-  static const String _backendUrl = 'https://bhavu.up.railway.app';
+  static const String _backendUrl = 'https://axon-ml.onrender.com';
   final FirebaseFirestore _firestore = AxonFirestore.instance;
 
   Future<List<LeaderboardEntry>> getLeaderboard({int limit = 20}) async {

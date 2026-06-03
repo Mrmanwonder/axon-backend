@@ -2697,7 +2697,7 @@ class TimerNotifier extends StateNotifier<TimerState> {
       if (token != null && token.isNotEmpty) {
         await http
             .post(
-              Uri.parse('https://bhavu.up.railway.app/analyze-study-pulse'),
+              Uri.parse('https://axon-ml.onrender.com/analyze-study-pulse'),
               headers: {
                 'Content-Type': 'application/json',
                 'Authorization': 'Bearer $token',
