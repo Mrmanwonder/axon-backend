@@ -50,6 +50,10 @@ app.add_middleware(
 
 @app.middleware("http")
 async def rate_limit_middleware(request, call_next):
+    # Log all incoming requests
+    if request.url.path.startswith("/api/"):
+        print(f">>> {request.method} {request.url.path} from {request.client.host}")
+    
     if request.url.path == "/health":
         return await call_next(request)
 
