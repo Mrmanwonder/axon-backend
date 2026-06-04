@@ -15,7 +15,7 @@ import '../screens/dashboard/dashboard_screen.dart';
 import '../screens/analysis/analysis_screen.dart';
 import '../screens/analysis/admissions_tracker_screen.dart';
 import '../screens/exam_calendar_screen.dart';
-import '../screens/pdf/pdf_viewer_screen.dart';
+
 import '../screens/study/feynman_technique_screen.dart';
 import '../screens/study/leitner_system_screen.dart';
 import '../screens/study/interleaved_practice_screen.dart';
@@ -64,8 +64,7 @@ class AppRoutes {
   static const analysis = '/analysis';
   static const analytics = '/analytics';
   static const admissions = '/analysis/admissions';
-  static const pdfLibrary = '/pdf';
-  static const pdfViewer = '/pdf-viewer';
+
   static const videoPlayer = '/video-player';
   static const study = '/study';
   static const studyTimer = '/study/timer';
@@ -210,13 +209,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               child: const AnalysisScreen(),
             ),
           ),
-          GoRoute(
-            path: AppRoutes.pdfLibrary,
-            pageBuilder: (context, state) => NoTransitionPage(
-              key: state.pageKey,
-              child: const ExamPlannerScreen(),
-            ),
-          ),
+
           GoRoute(
             path: AppRoutes.study,
             pageBuilder: (context, state) => NoTransitionPage(
@@ -254,16 +247,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
         ],
       ),
-      GoRoute(
-        path: AppRoutes.pdfViewer,
-        pageBuilder: (context, state) => NoTransitionPage(
-          key: state.pageKey,
-          child: PdfViewerScreen(
-            url: state.uri.queryParameters['url'],
-            title: state.uri.queryParameters['title'],
-          ),
-        ),
-      ),
+
       GoRoute(
         path: AppRoutes.videoPlayer,
         pageBuilder: (context, state) => NoTransitionPage(

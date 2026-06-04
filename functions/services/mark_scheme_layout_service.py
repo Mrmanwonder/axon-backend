@@ -40,26 +40,9 @@ class LayoutLine:
 
 class MarkSchemeLayoutService:
     def analyze_pdf_bytes(self, pdf_bytes: bytes) -> list[dict[str, Any]]:
-        if fitz is None:
-            raise RuntimeError("PyMuPDF is required for backend mark-scheme layout analysis.")
-
-        document = fitz.open(stream=pdf_bytes, filetype="pdf")
-        pages: list[dict[str, Any]] = []
-        try:
-            for page_index in range(len(document)):
-                page = document[page_index]
-                lines = self._extract_lines(page, page_index + 1)
-                pages.append(
-                    {
-                        "page_number": page_index + 1,
-                        "width": float(page.rect.width),
-                        "height": float(page.rect.height),
-                        "lines": [line.to_dict() for line in lines],
-                    }
-                )
-        finally:
-            document.close()
-        return pages
+        # PDF functionality has been removed as per user request
+        # Return empty list to maintain compatibility but disable PDF processing
+        return []
 
     def segment_batch(
         self,

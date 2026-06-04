@@ -1,17 +1,14 @@
 import 'package:flutter/foundation.dart';
-import 'supabase_proxy_service.dart';
+import 'supabase_service.dart';
 
 class SupabaseDataService {
-  static final SupabaseDataService _instance = SupabaseDataService._();
-  static SupabaseDataService get instance => _instance;
-
-  final _proxy = SupabaseProxyService.instance;
+  final _supabase = SupabaseService.instance;
 
   SupabaseDataService._();
 
   Future<List<Map<String, dynamic>>> getBoards() async {
     try {
-      return await _proxy.query('boards', params: {'order': 'name.asc'});
+      return await _supabase.query('boards', params: {'order': 'name.asc'});
     } catch (e) {
       debugPrint('Error fetching boards: $e');
       return [];
@@ -20,7 +17,7 @@ class SupabaseDataService {
 
   Future<List<Map<String, dynamic>>> getAllGlobalSubjects() async {
     try {
-      return await _proxy.query('subjects', params: {'order': 'name.asc'});
+      return await _supabase.query('subjects', params: {'order': 'name.asc'});
     } catch (e) {
       debugPrint('Error fetching all subjects: $e');
       return [];
@@ -29,7 +26,7 @@ class SupabaseDataService {
 
   Future<List<Map<String, dynamic>>> getSubjectsByBoard(String boardId) async {
     try {
-      return await _proxy.query('subjects', params: {
+      return await _supabase.query('subjects', params: {
         'board_id': 'eq.$boardId',
         'order': 'name.asc',
       });
@@ -42,7 +39,7 @@ class SupabaseDataService {
   Future<List<Map<String, dynamic>>> getGlobalChapters(
       String subjectCode) async {
     try {
-      return await _proxy.query('chapters', params: {
+      return await _supabase.query('chapters', params: {
         'subject_code': 'eq.$subjectCode',
         'order': 'order_index.asc',
       });
@@ -54,7 +51,7 @@ class SupabaseDataService {
 
   Future<List<Map<String, dynamic>>> getAllGlobalChapters() async {
     try {
-      return await _proxy.query('chapters', params: {
+      return await _supabase.query('chapters', params: {
         'order': 'subject_code.asc,order_index.asc',
       });
     } catch (e) {
@@ -65,7 +62,7 @@ class SupabaseDataService {
 
   Future<List<Map<String, dynamic>>> getNotesByChapter(String chapterId) async {
     try {
-      return await _proxy.query('user_notes', params: {
+      return await _supabase.query('user_notes', params: {
         'chapter_id': 'eq.$chapterId',
         'deleted': 'eq.false',
         'order': 'updated_at.desc',
@@ -78,7 +75,7 @@ class SupabaseDataService {
 
   Future<List<Map<String, dynamic>>> getUserAllNotes() async {
     try {
-      return await _proxy.query('user_notes', params: {
+      return await _supabase.query('user_notes', params: {
         'deleted': 'eq.false',
         'order': 'updated_at.desc',
       });
@@ -98,7 +95,7 @@ class SupabaseDataService {
   }) async {
     final now = DateTime.now().toIso8601String();
     try {
-      await _proxy.mutate('user_notes',
+      await _supabase.mutate('user_notes',
           method: 'upsert',
           body: {
             'id': id,
@@ -118,7 +115,7 @@ class SupabaseDataService {
 
   Future<void> deleteUserNote(String noteId) async {
     try {
-      await _proxy.mutate('user_notes',
+      await _supabase.mutate('user_notes',
           method: 'update',
           body: {'deleted': true, 'updated_at': DateTime.now().toIso8601String()},
           params: {'id': 'eq.$noteId'});
@@ -130,7 +127,7 @@ class SupabaseDataService {
   Future<List<Map<String, dynamic>>> getGlobalNotes(
       String subjectCode, String chapterName) async {
     try {
-      final data = await _proxy.query('global_notes', params: {
+      final data = await _supabase.query('global_notes', params: {
         'subject_code': 'eq.$subjectCode',
         'chapter_id': 'eq.${_normalizeChapterName(chapterName)}',
         'order': 'created_at.desc',
@@ -138,7 +135,7 @@ class SupabaseDataService {
 
       if (data.isNotEmpty) return data;
 
-      final allNotes = await _proxy.query('global_notes', params: {
+      final allNotes = await _supabase.query('global_notes', params: {
         'subject_code': 'eq.$subjectCode',
         'order': 'created_at.desc',
       });
@@ -167,7 +164,7 @@ class SupabaseDataService {
 
   Future<List<Map<String, dynamic>>> getAllGlobalNotes() async {
     try {
-      return await _proxy.query('global_notes', params: {
+      return await _supabase.query('global_notes', params: {
         'order': 'subject_code.asc,created_at.desc',
       });
     } catch (e) {
@@ -179,7 +176,7 @@ class SupabaseDataService {
   Future<List<Map<String, dynamic>>> getChaptersBySubjectCode(
       String subjectCode) async {
     try {
-      return await _proxy.query('chapters', params: {
+      return await _supabase.query('chapters', params: {
         'subject_code': 'eq.$subjectCode',
         'order': 'order_index.asc',
       });
@@ -191,7 +188,7 @@ class SupabaseDataService {
 
   Future<List<Map<String, dynamic>>> getUserSubjects(String userId) async {
     try {
-      return await _proxy.query('user_subjects', params: {
+      return await _supabase.query('user_subjects', params: {
         'user_id': 'eq.$userId',
         'order': 'created_at.asc',
       });
@@ -209,7 +206,7 @@ class SupabaseDataService {
     required String subjectName,
   }) async {
     try {
-      await _proxy.mutate('user_subjects', method: 'upsert', body: {
+      await _supabase.mutate('user_subjects', method: 'upsert', body: {
         'id': id,
         'user_id': userId,
         'board_id': boardId,
@@ -224,7 +221,7 @@ class SupabaseDataService {
 
   Future<void> removeUserSubject(String id, String userId) async {
     try {
-      await _proxy.mutate('user_subjects',
+      await _supabase.mutate('user_subjects',
           method: 'delete', params: {'id': 'eq.$id', 'user_id': 'eq.$userId'});
     } catch (e) {
       debugPrint('Error removing user subject: $e');

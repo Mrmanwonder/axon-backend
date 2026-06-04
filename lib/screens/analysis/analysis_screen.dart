@@ -498,13 +498,16 @@ class _ReadinessCard extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(
-                '${(score * 100).round()}',
-                style: GoogleFonts.inter(
-                  color: color,
-                  fontSize: 52,
-                  fontWeight: FontWeight.w900,
-                  height: 0.95,
+              Flexible(
+                child: Text(
+                  '${(score * 100).round()}',
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.inter(
+                    color: color,
+                    fontSize: 52,
+                    fontWeight: FontWeight.w900,
+                    height: 0.95,
+                  ),
                 ),
               ),
               const SizedBox(width: 8),

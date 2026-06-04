@@ -2,36 +2,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/exam_event_model.dart';
 import 'curriculum_catalog_service.dart';
-import 'supabase_proxy_service.dart';
-
-class UserExamDateProfile {
-  final String curriculum;
-  final List<String> subjectCodes;
-  final Map<String, String> subjectNamesByCode;
-
-  UserExamDateProfile({
-    required this.curriculum,
-    required this.subjectCodes,
-    required this.subjectNamesByCode,
-  });
-}
-
-// ── Column name detection ────────────────────────────────────────────
-const _codeCols = ['subject_code', 'code', 'Code', 'SubjectCode', 'Subject_Code', 'subject code', 'Subject Code', 'Subject code'];
-const _boardCols = ['Curriculum', 'curriculum', 'board', 'Board', 'Level', 'level'];
-const _subjectCols = ['Subject', 'subject', 'subject_name', 'SubjectName', 'Subject Name'];
-const _componentCols = ['component', 'Component', 'Paper', 'paper', 'PaperNo', 'ComponentCode'];
-const _dateCols = ['exam_date', 'Date', 'date', 'ExamDate', 'Exam_Date', 'StartDate'];
-const _startCols = ['start_time', 'Start', 'time', 'Time', 'Session', 'session'];
+import 'supabase_service.dart';
 
 class SupabaseExamDatesService {
-  SupabaseExamDatesService._();
-
-  static final SupabaseExamDatesService instance = SupabaseExamDatesService._();
-
-  static const String _examDatesTable = 'Datesheet';
-
-  final _proxy = SupabaseProxyService.instance;
+  final _supabase = SupabaseService.instance;
   final Map<String, List<ExamEventModel>> _cache = {};
   final Map<String, Future<List<ExamEventModel>>> _inFlight = {};
 
@@ -85,7 +59,7 @@ class SupabaseExamDatesService {
           .map((c) => 'subject_code.like.$c%')
           .join(',');
 
-      final response = await _proxy.query(_examDatesTable, params: {
+      final response = await _supabase.query(_examDatesTable, params: {
         'or': filterString,
       });
 

@@ -3,7 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
+
 import 'package:url_launcher/url_launcher.dart';
 import '../../services/media_viewer_service.dart';
 import '../../utils/nav_utils.dart';
@@ -27,14 +27,10 @@ class MediaViewerScreen extends ConsumerStatefulWidget {
 }
 
 class _MediaViewerScreenState extends ConsumerState<MediaViewerScreen> {
-  final PdfViewerController _pdfController = PdfViewerController();
+
 
   bool _isLoading = true;
   String? _error;
-  int _targetPage = 0;
-
-  // Annotation State
-  PdfAnnotationMode _annotationMode = PdfAnnotationMode.none;
 
   @override
   void initState() {
@@ -50,46 +46,12 @@ class _MediaViewerScreenState extends ConsumerState<MediaViewerScreen> {
 
     final detectedType = widget.mediaType ?? MediaViewerService.detectType(widget.url!);
 
-    // Pre-fetch the saved position, but wait to apply it until document loads
-    if (detectedType == MediaType.pdf && widget.resumeKey != null) {
-      final position = await PdfResumeService.getPosition(widget.resumeKey!);
-      if (position != null) {
-        _targetPage = position.page;
-      }
-    }
-
     if (mounted) setState(() => _isLoading = false);
-  }
-
-  Future<void> _savePosition() async {
-    if (widget.resumeKey != null && _pdfController.pageNumber > 0) {
-      await PdfResumeService.savePosition(
-        widget.resumeKey!, 
-        _pdfController.pageNumber, 
-        _pdfController.scrollOffset.dy,
-      );
-    }
   }
 
   @override
   void dispose() {
-    _savePosition();
-    _pdfController.dispose();
     super.dispose();
-  }
-
-  void _onDocumentLoaded(PdfDocumentLoadedDetails details) {
-    if (_targetPage > 1) {
-      // Jump to the saved page only after the PDF engine has rendered the file
-      _pdfController.jumpToPage(_targetPage);
-    }
-  }
-
-  void _toggleAnnotation(PdfAnnotationMode mode) {
-    HapticFeedback.selectionClick();
-    setState(() {
-      _annotationMode = _annotationMode == mode ? PdfAnnotationMode.none : mode;
-    });
   }
 
   @override
@@ -115,29 +77,13 @@ class _MediaViewerScreenState extends ConsumerState<MediaViewerScreen> {
             top: 0, left: 0, right: 0,
             child: _buildGlassHeader(title),
           ),
-
-          // 3. Floating Annotation Dock (Only for PDFs)
-          if (type == MediaType.pdf && !_isLoading && _error == null)
-            Positioned(
-              bottom: 32, left: 0, right: 0,
-              child: _buildAnnotationDock(),
-            ),
         ],
       ),
     );
   }
 
   Widget _buildViewer(MediaType type) {
-    if (type == MediaType.pdf) {
-      return SfPdfViewer.network(
-        widget.url!,
-        controller: _pdfController,
-        canShowScrollHead: false, // Cleaner UI
-        pageSpacing: 8,
-        onDocumentLoaded: _onDocumentLoaded,
-        onPageChanged: (details) => _savePosition(), // Auto-save on page turn
-      );
-    } else if (type == MediaType.youtube) {
+    if (type == MediaType.youtube) {
       return Center(
         child: FilledButton.tonalIcon(
           onPressed: _openExternalMedia,
@@ -180,7 +126,6 @@ class _MediaViewerScreenState extends ConsumerState<MediaViewerScreen> {
                 GestureDetector(
                   onTap: () {
                     HapticFeedback.lightImpact();
-                    _savePosition();
                     popOrGo(context, '/home');
                   },
                   child: Container(
@@ -217,63 +162,7 @@ class _MediaViewerScreenState extends ConsumerState<MediaViewerScreen> {
     );
   }
 
-  Widget _buildAnnotationDock() {
-    return Center(
-      child: RepaintBoundary(
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: Container(
-              height: 56,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.05),
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.1), width: 0.5),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _ToolButton(
-                    icon: Icons.pan_tool_outlined,
-                    isActive: _annotationMode == PdfAnnotationMode.none,
-                    onTap: () => _toggleAnnotation(PdfAnnotationMode.none),
-                  ),
-                  Container(width: 1, height: 24, color: Colors.white.withValues(alpha: 0.1), margin: const EdgeInsets.symmetric(horizontal: 4)),
-                  _ToolButton(
-                    icon: Icons.format_color_text,
-                    isActive: _annotationMode == PdfAnnotationMode.highlight,
-                    onTap: () => _toggleAnnotation(PdfAnnotationMode.highlight),
-                  ),
-                  _ToolButton(
-                    icon: Icons.format_underlined,
-                    isActive: _annotationMode == PdfAnnotationMode.underline,
-                    onTap: () => _toggleAnnotation(PdfAnnotationMode.underline),
-                  ),
-                  _ToolButton(
-                    icon: Icons.format_strikethrough,
-                    isActive: _annotationMode == PdfAnnotationMode.strikethrough,
-                    onTap: () => _toggleAnnotation(PdfAnnotationMode.strikethrough),
-                  ),
-                  Container(width: 1, height: 24, color: Colors.white.withValues(alpha: 0.1), margin: const EdgeInsets.symmetric(horizontal: 4)),
-                  _ToolButton(
-                    icon: Icons.undo,
-                    isActive: false,
-                    onTap: () {
-                      HapticFeedback.lightImpact();
-                      // Syncfusion doesn't expose a direct 'undo' without managing the annotation collection, 
-                      // but we can clear selections or rely on the user tapping an annotation to delete it.
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+
 
   Widget _buildErrorState([String? explicitError]) {
     return Center(
@@ -292,31 +181,4 @@ class _MediaViewerScreenState extends ConsumerState<MediaViewerScreen> {
   }
 }
 
-class _ToolButton extends StatelessWidget {
-  final IconData icon;
-  final bool isActive;
-  final VoidCallback onTap;
 
-  const _ToolButton({required this.icon, required this.isActive, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        margin: const EdgeInsets.symmetric(horizontal: 4),
-        decoration: BoxDecoration(
-          color: isActive ? Colors.white.withValues(alpha: 0.1) : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Icon(
-          icon,
-          size: 20,
-          color: isActive ? Colors.white : Colors.white38,
-        ),
-      ),
-    );
-  }
-}

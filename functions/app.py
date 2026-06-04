@@ -360,6 +360,7 @@ ALLOWED_SUPABASE_TABLES = {
     "user_notes", "user_subjects", "global_notes",
     "subchapter_notes", "user_subchapter_progress",
     "user_pyqs", "user_mocks", "study_progress",
+    "papers", "topics", "user_bookmarks", "user_recent_papers",
 }
 
 

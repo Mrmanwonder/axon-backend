@@ -481,7 +481,7 @@ class DailyPlanService {
 
       // ── Try Firestore (may fail on device due to DNS block) ──
       try {
-        final batch = FirebaseFirestore.instance.batch();
+        final batch = AxonFirestore.instance.batch();
         for (final task in tasks) {
           final docRef = _dailyPlanCollection(uid).doc(task.id);
           batch.set(docRef, task.toJson(), SetOptions(merge: true));

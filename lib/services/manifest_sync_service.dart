@@ -1,8 +1,9 @@
 import 'dart:developer' as dev;
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'firestore_service.dart';
 
 class ManifestSyncService {
-  static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  static final FirebaseFirestore _firestore = AxonFirestore.instance;
 
   static Future<void> syncManifest() async {
     try {

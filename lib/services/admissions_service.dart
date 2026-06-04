@@ -441,13 +441,23 @@ class AdmissionsService {
 
   Future<bool> _targetExists(String uid, String universityName, String courseName) async {
     try {
+      // Use single-field query + in-memory filter to avoid composite index dependency.
+      // Firestore requires composite index for dual where() queries; fall back to a
+      // single where() + in-memory filter to prevent silent failures that cause
+      // duplicate targets and their milestone cascades.
       final snapshot = await _targets(uid)
           .where('university_name', isEqualTo: universityName)
-          .where('course_name', isEqualTo: courseName)
           .get();
-      return snapshot.docs.isNotEmpty;
+      final normalizedCourse = courseName.toLowerCase().trim();
+      return snapshot.docs.any((doc) {
+        final data = doc.data();
+        final existingCourse = (data['course_name'] as String? ?? '').toLowerCase().trim();
+        return existingCourse == normalizedCourse;
+      });
     } catch (_) {
-      return false;
+      // If query fails entirely, do NOT silently proceed — treat as "exists" to prevent
+      // accidental duplicate creation. The user can manually remove any real duplicate.
+      return true;
     }
   }
 

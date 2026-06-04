@@ -329,22 +329,21 @@ class _TimerScreenState extends State<TimerScreen> {
             behavior: HitTestBehavior.opaque,
             child: Stack(
               children: [
-                // 1. Dynamic Rising Liquid Background
+                // 1. Dynamic Rising Liquid Background (smooth fade at top)
                 Positioned(
                   left: 0,
                   right: 0,
                   bottom: 0,
                   height: MediaQuery.of(context).size.height * progress,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 1000),
-                    curve: const ElasticInCurve(0.9),
+                  child: Container(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                         colors: _isNightMode
-                            ? [const Color(0xFF400000), const Color(0xFF110000)]
-                            : [const Color(0xFF76ABFF), const Color(0xFF2A66C9)],
+                            ? [const Color(0x00400000), const Color(0xFF400000), const Color(0xFF110000)]
+                            : [const Color(0x0076ABFF), const Color(0xFF76ABFF), const Color(0xFF2A66C9)],
+                        stops: const [0.0, 0.15, 1.0],
                       ),
                     ),
                   ),
@@ -421,7 +420,7 @@ class _TimerScreenState extends State<TimerScreen> {
 
   Widget _buildDigitsGrid(List<String> displayDigits, {required bool active}) {
     return Padding(
-      padding: const EdgeInsets.all(8.0),
+      padding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 4.0),
       child: Column(
         children: [
           Expanded(
@@ -432,7 +431,7 @@ class _TimerScreenState extends State<TimerScreen> {
               ],
             ),
           ),
-          const SizedBox(height: 8.0),
+          const SizedBox(height: 4.0),
           Expanded(
             child: Row(
               children: [
@@ -457,19 +456,18 @@ class _TimerScreenState extends State<TimerScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         return Center(
-          // FittedBox forces the font horizontally to maximize standard screen space
           child: FittedBox(
             fit: BoxFit.fill,
             child: Transform(
               alignment: Alignment.center,
-              transform: Matrix4.identity()..scale(0.93, 1.35), 
+              transform: Matrix4.identity()..scale(1.0, 1.5),
               child: Text(
                 val,
                 style: TextStyle(
                   fontWeight: FontWeight.w800,
                   color: textColor,
                   fontFamily: 'Montserrat',
-                  height: 0.7,
+                  height: 0.65,
                 ),
               ),
             ),
@@ -532,11 +530,23 @@ class _TimerScreenState extends State<TimerScreen> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              IconButton(
-                icon: Icon(_isRunning ? Icons.pause : Icons.play_arrow),
-                iconSize: 24,
-                color: _isNightMode ? const Color(0xFFFF3B30) : Colors.white,
-                onPressed: _handlePlayPause,
+              AnimatedScale(
+                scale: _isRunning ? 1.0 : 1.1,
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOutBack,
+                child: IconButton(
+                  icon: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 250),
+                    transitionBuilder: (child, anim) => ScaleTransition(scale: anim, child: child),
+                    child: Icon(
+                      _isRunning ? Icons.pause : Icons.play_arrow,
+                      key: ValueKey(_isRunning),
+                    ),
+                  ),
+                  iconSize: 28,
+                  color: _isNightMode ? const Color(0xFFFF3B30) : Colors.white,
+                  onPressed: _handlePlayPause,
+                ),
               ),
               IconButton(
                 icon: const Icon(Icons.refresh),
@@ -549,24 +559,59 @@ class _TimerScreenState extends State<TimerScreen> {
                 indent: 18,
                 endIndent: 18,
               ),
-              IconButton(
-                icon: const Icon(Icons.timer_outlined),
-                iconSize: 22,
-                color: _mode == TimerMode.stopwatch
-                    ? (_isNightMode ? const Color(0xFFFF3B30) : Colors.white)
-                    : (_isNightMode ? const Color(0xFFFF3B30).withOpacity(0.4) : Colors.white30),
-                onPressed: _isRunning ? null : () => _handleModeSwitch(TimerMode.stopwatch),
+              AnimatedScale(
+                scale: _mode == TimerMode.stopwatch ? 1.15 : 1.0,
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeOutBack,
+                child: IconButton(
+                  icon: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 250),
+                    transitionBuilder: (child, anim) => RotationTransition(turns: anim, child: child),
+                    child: Icon(
+                      _mode == TimerMode.stopwatch ? Icons.timer : Icons.timer_outlined,
+                      key: ValueKey(_mode == TimerMode.stopwatch),
+                    ),
+                  ),
+                  iconSize: 22,
+                  color: _mode == TimerMode.stopwatch
+                      ? (_isNightMode ? const Color(0xFFFF3B30) : Colors.white)
+                      : (_isNightMode ? const Color(0xFFFF3B30).withOpacity(0.4) : Colors.white30),
+                  onPressed: _isRunning ? null : () => _handleModeSwitch(
+                    _mode == TimerMode.stopwatch ? TimerMode.timer : TimerMode.stopwatch,
+                  ),
+                ),
+              ),
+              AnimatedScale(
+                scale: _mode == TimerMode.pomodoro ? 1.15 : 1.0,
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeOutBack,
+                child: IconButton(
+                  icon: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 250),
+                    transitionBuilder: (child, anim) => RotationTransition(turns: anim, child: child),
+                    child: Icon(
+                      _mode == TimerMode.pomodoro ? Icons.coffee : Icons.coffee_outlined,
+                      key: ValueKey(_mode == TimerMode.pomodoro),
+                    ),
+                  ),
+                  iconSize: 22,
+                  color: _mode == TimerMode.pomodoro
+                      ? (_isNightMode ? const Color(0xFFFF3B30) : Colors.white)
+                      : (_isNightMode ? const Color(0xFFFF3B30).withOpacity(0.4) : Colors.white30),
+                  onPressed: _isRunning ? null : () => _handleModeSwitch(
+                    _mode == TimerMode.pomodoro ? TimerMode.timer : TimerMode.pomodoro,
+                  ),
+                ),
               ),
               IconButton(
-                icon: const Icon(Icons.coffee_outlined),
-                iconSize: 22,
-                color: _mode == TimerMode.pomodoro
-                    ? (_isNightMode ? const Color(0xFFFF3B30) : Colors.white)
-                    : (_isNightMode ? const Color(0xFFFF3B30).withOpacity(0.4) : Colors.white30),
-                onPressed: _isRunning ? null : () => _handleModeSwitch(TimerMode.pomodoro),
-              ),
-              IconButton(
-                icon: const Icon(Icons.visibility_off_outlined),
+                icon: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 300),
+                  transitionBuilder: (child, anim) => FadeTransition(opacity: anim, child: child),
+                  child: Icon(
+                    Icons.visibility_off_outlined,
+                    key: ValueKey('zen'),
+                  ),
+                ),
                 iconSize: 22,
                 color: _isNightMode ? const Color(0xFFFF3B30).withOpacity(0.4) : Colors.white30,
                 onPressed: () => setState(() => _zenMode = true),

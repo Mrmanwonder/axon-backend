@@ -1,189 +1,10 @@
 import 'dart:convert';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter/foundation.dart';
-import 'supabase_proxy_service.dart';
-import 'firestore_service.dart';
-
-class ExamBoardOption {
-  final String id;
-  final String label;
-  final String fullName;
-  final String description;
-  final String regions;
-  final List<String> supportedLevels;
-
-  const ExamBoardOption({
-    required this.id,
-    required this.label,
-    required this.fullName,
-    required this.description,
-    required this.regions,
-    required this.supportedLevels,
-  });
-}
-
-class QualificationLevel {
-  final String id;
-  final String label;
-  final String description;
-
-  const QualificationLevel({
-    required this.id,
-    required this.label,
-    required this.description,
-  });
-
-  static const igcse = QualificationLevel(
-    id: 'igcse',
-    label: 'IGCSE',
-    description: 'International General Certificate of Secondary Education',
-  );
-
-  static const asLevel = QualificationLevel(
-    id: 'as_level',
-    label: 'AS Level',
-    description: 'Advanced Subsidiary Level (first half of A Level)',
-  );
-
-  static const aLevel = QualificationLevel(
-    id: 'a_level',
-    label: 'A Level',
-    description: 'Advanced Level (full qualification)',
-  );
-
-  static const List<QualificationLevel> all = [igcse, asLevel, aLevel];
-}
-
-class SupportedBoardOption {
-  final String id;
-  final String label;
-  final String description;
-  final String regions;
-
-  const SupportedBoardOption({
-    required this.id,
-    required this.label,
-    required this.description,
-    required this.regions,
-  });
-}
-
-class CurriculumChapter {
-  final String id;
-  final String title;
-  final List<String> subchapters;
-
-  const CurriculumChapter({
-    required this.id,
-    required this.title,
-    required this.subchapters,
-  });
-
-  factory CurriculumChapter.fromJson(Map<String, dynamic> json) {
-    // Support both old format (subchapters: List<String>) and new format (topics: List)
-    final topicsList = json['topics'] as List?;
-    final subchaptersList = json['subchapters'] as List?;
-
-    List<String> subs;
-    if (subchaptersList != null) {
-      subs = subchaptersList.map((item) => item.toString()).toList();
-    } else if (topicsList != null) {
-      // Extract topic names from new format
-      subs = topicsList.map((item) {
-        final topicMap = item is Map ? item : {};
-        return (topicMap['name'] ?? topicMap['title'] ?? 'Topic').toString();
-      }).toList();
-    } else {
-      subs = [];
-    }
-
-    return CurriculumChapter(
-      id: (json['id'] ?? json['chapter'] ?? '').toString(),
-      title: (json['name'] ?? json['title'] ?? '').toString(),
-      subchapters: subs,
-    );
-  }
-}
-
-class CurriculumPaper {
-  final String code;
-  final String name;
-  final List<CurriculumChapter> chapters;
-
-  const CurriculumPaper({
-    required this.code,
-    required this.name,
-    required this.chapters,
-  });
-}
-
-class CurriculumSubject {
-  final String code;
-  final String name;
-  final List<CurriculumChapter> chapters;
-  final List<String> aliases;
-  final List<CurriculumPaper> papers;
-
-  const CurriculumSubject({
-    required this.code,
-    required this.name,
-    required this.chapters,
-    this.aliases = const [],
-    this.papers = const [],
-  });
-
-  factory CurriculumSubject.fromJson(Map<String, dynamic> json) {
-    return CurriculumSubject(
-      code: (json['code'] ?? json['subject_code'] ?? '').toString(),
-      name: (json['name'] ?? '').toString(),
-      chapters: (json['chapters'] as List? ?? const [])
-          .map((item) =>
-              CurriculumChapter.fromJson(Map<String, dynamic>.from(item)))
-          .toList(),
-      aliases: (json['aliases'] as List? ?? const [])
-          .map((item) => item.toString())
-          .toList(),
-    );
-  }
-}
-
-class CurriculumBoard {
-  final String id;
-  final String label;
-  final List<CurriculumSubject> subjects;
-  final List<String> aliases;
-
-  const CurriculumBoard({
-    required this.id,
-    required this.label,
-    required this.subjects,
-    this.aliases = const [],
-  });
-
-  factory CurriculumBoard.fromJson(Map<String, dynamic> json) {
-    return CurriculumBoard(
-      id: (json['id'] ?? '').toString(),
-      label: (json['label'] ?? '').toString(),
-      subjects: (json['subjects'] as List? ?? const [])
-          .map((item) =>
-              CurriculumSubject.fromJson(Map<String, dynamic>.from(item)))
-          .toList(),
-      aliases: (json['aliases'] as List? ?? const [])
-          .map((item) => item.toString())
-          .toList(),
-    );
-  }
-}
+import 'supabase_service.dart';
 
 class CurriculumCatalogService {
-  static final CurriculumCatalogService _instance =
-      CurriculumCatalogService._();
-  static CurriculumCatalogService get instance => _instance;
-
-  CurriculumCatalogService._();
-
-  List<CurriculumBoard>? _cache;
-  final _proxy = SupabaseProxyService.instance;
+  final _supabase = SupabaseService.instance;
 
   List<CurriculumSubject>? _subjectsCache;
   Map<String, List<CurriculumChapter>>? _chaptersCache;
@@ -430,7 +251,7 @@ class CurriculumCatalogService {
     try {
       debugPrint(
           'CurriculumCatalogService: Fetching subjects from Supabase...');
-      final data = await _proxy.query('subjects', params: {'order': 'name.asc'});
+      final data = await _supabase.query('subjects', params: {'order': 'name.asc'});
       _subjectsCache = data
           .map((item) =>
               CurriculumSubject.fromJson(Map<String, dynamic>.from(item)))
@@ -503,7 +324,7 @@ class CurriculumCatalogService {
         searchCode = codeMatch.group(0);
       } else {
         // Search by name
-        final data = await _proxy.query('subjects', params: {
+        final data = await _supabase.query('subjects', params: {
           'name': 'ilike.*$normalizedSubject*',
           'limit': '1',
         });
@@ -515,7 +336,7 @@ class CurriculumCatalogService {
 
       if (searchCode != null) {
         // Get chapters from Supabase
-        final chapterData = await _proxy.query('chapters', params: {
+        final chapterData = await _supabase.query('chapters', params: {
           'subject_code': 'eq.$searchCode',
           'order': 'order_index.asc',
         });
@@ -524,7 +345,7 @@ class CurriculumCatalogService {
                 (c) => CurriculumChapter.fromJson(Map<String, dynamic>.from(c)))
             .toList();
 
-        final subjData = await _proxy.query('subjects', params: {
+        final subjData = await _supabase.query('subjects', params: {
           'code': 'eq.$searchCode',
           'limit': '1',
         });
