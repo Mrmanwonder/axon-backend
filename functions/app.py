@@ -15,6 +15,7 @@ import uvicorn
 import time
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -44,6 +45,45 @@ app = FastAPI(
     version="2.1.0",
     description="ASGI backend for Axon document analysis, grading, and trust-safe sync.",
 )
+
+
+def custom_openapi() -> dict[str, Any]:
+    """Return OpenAPI schema; fall back to route-only schema if Pydantic schema generation fails."""
+    if app.openapi_schema:
+        return app.openapi_schema
+    try:
+        app.openapi_schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+        )
+    except Exception as exc:
+        paths: dict[str, Any] = {}
+        for route in app.routes:
+            path = getattr(route, "path", None)
+            methods = getattr(route, "methods", None)
+            if not path or not methods:
+                continue
+            paths[path] = {
+                method.lower(): {
+                    "summary": getattr(route, "name", path),
+                    "responses": {"200": {"description": "Successful Response"}},
+                }
+                for method in sorted(methods)
+                if method not in {"HEAD", "OPTIONS"}
+            }
+        app.openapi_schema = {
+            "openapi": "3.1.0",
+            "info": {"title": app.title, "version": app.version, "description": app.description},
+            "paths": paths,
+            "x-openapi-fallback": True,
+            "x-openapi-error": str(exc)[:500],
+        }
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 # Security: CORS (configure via CORS_ALLOWED_ORIGINS)
 app.add_middleware(
