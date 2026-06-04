@@ -1,6 +1,5 @@
 import 'dart:developer' as dev;
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'firestore_service.dart';
 
 const String kPublicResourcesCollection = 'public_resources';
 
@@ -29,7 +28,7 @@ class PublicResourceEntry {
 }
 
 class PublicResourceService {
-  static final FirebaseFirestore _firestore = AxonFirestore.instance;
+  static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   static Future<List<PublicResourceEntry>> fetchPublicResources() async {
     try {

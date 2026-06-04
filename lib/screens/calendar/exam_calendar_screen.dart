@@ -6,7 +6,6 @@ import '../../services/exam_schedule_generator.dart';
 import '../../services/daily_plan_service.dart';
 import '../../services/app_state.dart';
 import '../../models/daily_plan_task.dart';
-import '../../models/exam_event_model.dart';
 
 class ExamCalendarScreen extends ConsumerStatefulWidget {
   const ExamCalendarScreen({super.key});

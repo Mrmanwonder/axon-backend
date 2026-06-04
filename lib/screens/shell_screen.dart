@@ -30,7 +30,13 @@ const List<_NavDestinationData> _kDestinations = [
     title: 'Performance Analysis',
     subtitle: 'Inspect trends, weak spots, and exam readiness.',
   ),
-
+  _NavDestinationData(
+    route: '/pdf',
+    label: 'Exam Planner',
+    icon: Icons.event_note_rounded,
+    title: 'Exam Planning',
+    subtitle: 'Organize exams, past papers, and schedule pressure.',
+  ),
   _NavDestinationData(
     route: '/study',
     label: 'Study',
@@ -114,7 +120,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen>
     if (loc == _lastLocation) return;
     _lastLocation = loc;
 
-    final isExamRoute = loc.startsWith('/exam/');
+    final isExamRoute = loc == '/pdf' || loc.startsWith('/exam/');
     if (isExamRoute) {
       if (!_flipAnimController.isCompleted) _flipAnimController.forward();
     } else {
@@ -140,25 +146,6 @@ class _ShellScreenState extends ConsumerState<ShellScreen>
   Widget build(BuildContext context) {
     ref.listen(metricsProvider.select((m) => m.streak), (prev, next) {
       if (next > (prev ?? 0)) AxonHaptics.success();
-    });
-
-    ref.listen(blockedAppProvider, (prev, next) {
-      if (next != null && prev == null) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              fullscreenDialog: true,
-              builder: (_) => LockedAppScreen(
-                appName: next.appName,
-                packageName: next.packageName,
-              ),
-            ),
-          ).then((_) {
-            BlockedAppOverlay.dismiss(ref);
-          });
-        });
-      }
     });
 
     final idx = _currentIndex(context);
@@ -228,6 +215,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen>
             child: _buildAxonInputBarContent(),
           ),
         _buildStreakOverlay(),
+        _buildBlockedAppOverlay(),
       ],
     );
   }
@@ -266,6 +254,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen>
             ),
           ),
         _buildStreakOverlay(),
+        _buildBlockedAppOverlay(),
       ],
     );
   }
@@ -325,6 +314,16 @@ class _ShellScreenState extends ConsumerState<ShellScreen>
       streak: metrics.streak,
       onDismiss: () => ref.read(metricsProvider.notifier).setShowStreakHighlight(false),
     );
+  }
+
+  Widget _buildBlockedAppOverlay() {
+    final blockedApp = ref.watch(blockedAppProvider);
+    return blockedApp != null
+        ? LockedAppScreen(
+            appName: blockedApp.appName,
+            packageName: blockedApp.packageName,
+          )
+        : const SizedBox.shrink();
   }
 }
 

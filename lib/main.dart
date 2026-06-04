@@ -16,7 +16,6 @@ import 'services/notification_service.dart';
 import 'services/secure_credentials_service.dart';
 import 'services/app_state.dart';
 import 'services/board_exam_service.dart';
-import 'services/supabase_service.dart';
 import 'services/smart_reminder_service.dart';
 import 'services/google_drive_downloader.dart';
 import 'services/grok_service.dart';
@@ -64,20 +63,12 @@ void main() async {
   }
 
   try {
-    await SupabaseService.instance.init();
-  } catch (e) {
-    debugPrint('SupabaseService init failed: $e');
-  }
-
-  try {
     // Initialize secure credentials first
     final credentials = SecureCredentialsService();
     await credentials.initialize().timeout(const Duration(seconds: 2));
     final allCreds = await credentials.getAllCredentials();
 
     debugPrint('Axon: keys are server-side only');
-  } catch (e) {
-    debugPrint('SecureCredentials init failed: $e');
   }
 
   runApp(

@@ -139,21 +139,21 @@ class _AskAxonWidgetState extends ConsumerState<AskAxonWidget> {
   }
 
   Future<void> _stopListening() async {
+    if (!mounted) return;
+    setState(() => _isListening = false);
     _smoothedLevel = 0.0;
-    _transcriptSub?.cancel();
-    _transcriptSub = null;
-    _levelSub?.cancel();
-    _levelSub = null;
 
     try {
+      _transcriptSub?.cancel();
+      _transcriptSub = null;
+      _levelSub?.cancel();
+      _levelSub = null;
+
       await HybridSpeechService.instance.stopListening();
     } catch (error) {
       if (!mounted) return;
       AlertService.showError(context, 'Voice input failed', error.toString());
-      return;
     }
-    if (!mounted) return;
-    setState(() => _isListening = false);
   }
 
   void _onTranscript(HybridTranscript transcript) {

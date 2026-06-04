@@ -1,12 +1,11 @@
+// lib/screens/study/locked_app_screen.dart
 import 'dart:math' as math;
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../services/study_lock_service.dart';
-import '../../theme/app_theme.dart';
 
 class LockedAppScreen extends ConsumerStatefulWidget {
   final String appName;
@@ -27,30 +26,57 @@ class _LockedAppScreenState extends ConsumerState<LockedAppScreen>
   late AnimationController _pulseController;
   late AnimationController _orbitController;
   late AnimationController _shimmerController;
-  late AnimationController _entryController;
+  late AnimationController _particleController;
+  late AnimationController _breathController;
+
+  late Animation<double> _pulseAnimation;
+  late Animation<double> _orbitAnimation;
+  late Animation<double> _shimmerAnimation;
+  late Animation<double> _breathAnimation;
 
   @override
   void initState() {
     super.initState();
+
+    // Pulse animation for lock icon
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2000),
     )..repeat(reverse: true);
+    _pulseAnimation = Tween<double>(begin: 0.9, end: 1.1).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
 
+    // Orbit animation for particles
     _orbitController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 4000),
     )..repeat();
+    _orbitAnimation = Tween<double>(begin: 0, end: 2 * math.pi).animate(
+      CurvedAnimation(parent: _orbitController, curve: Curves.linear),
+    );
 
+    // Shimmer animation for glow effects
     _shimmerController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 3000),
     )..repeat();
+    _shimmerAnimation = Tween<double>(begin: 0, end: 1).animate(
+      CurvedAnimation(parent: _shimmerController, curve: Curves.easeInOut),
+    );
 
-    _entryController = AnimationController(
+    // Particle animation
+    _particleController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 800),
-    )..forward();
+      duration: const Duration(milliseconds: 6000),
+    )..repeat();
+    _breathController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 4000),
+    )..repeat(reverse: true);
+    _breathAnimation = Tween<double>(begin: 0.95, end: 1.05).animate(
+      CurvedAnimation(parent: _breathController, curve: Curves.easeInOut),
+    );
   }
 
   @override
@@ -58,56 +84,78 @@ class _LockedAppScreenState extends ConsumerState<LockedAppScreen>
     _pulseController.dispose();
     _orbitController.dispose();
     _shimmerController.dispose();
-    _entryController.dispose();
+    _particleController.dispose();
+    _breathController.dispose();
     super.dispose();
-  }
-
-  void _dismiss() {
-    if (mounted) {
-      BlockedAppOverlay.dismiss(ref);
-    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _dismiss();
-      },
-      child: Scaffold(
-        backgroundColor: AxonColors.oxfordBlueDark,
-        body: Stack(
+    return Scaffold(
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              const Color(0xFF1A0A0A),
+              const Color(0xFF0D0D0D),
+              const Color(0xFF050505),
+            ],
+          ),
+        ),
+        child: Stack(
           children: [
-            // Glow orb (exam planner style)
-            Positioned(
-              top: -120,
-              right: -60,
-              child: Container(
-                width: 320,
-                height: 320,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AxonColors.accent.withValues(alpha: 0.12),
-                ),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 80, sigmaY: 80),
-                  child: Container(),
-                ),
-              ),
+            // Animated background particles
+            _AnimatedBackground(
+              orbitAnimation: _orbitAnimation,
+              breathAnimation: _breathAnimation,
+              particleController: _particleController,
             ),
+
+            // Main content
             SafeArea(
-              child: FadeTransition(
-                opacity: _entryController,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.92, end: 1.0).animate(
-                    CurvedAnimation(
-                      parent: _entryController,
-                      curve: Curves.easeOutCubic,
-                    ),
+              child: Column(
+                children: [
+                  const Spacer(flex: 1),
+
+                  // Lock icon with animations
+                  _AnimatedLockIcon(
+                    pulseAnimation: _pulseAnimation,
+                    shimmerAnimation: _shimmerAnimation,
+                    appName: widget.appName,
                   ),
-                  child: _buildContent(),
-                ),
+
+                  const SizedBox(height: 48),
+
+                  // Title
+                  _buildTitle(),
+
+                  const SizedBox(height: 20),
+
+                  // Subtitle message
+                  _buildSubtitle(),
+
+                  const SizedBox(height: 48),
+
+                  // Progress indicator
+                  _ProgressRing(
+                    orbitAnimation: _orbitAnimation,
+                    pulseAnimation: _pulseAnimation,
+                  ),
+
+                  const SizedBox(height: 32),
+
+                  // Stats row
+                  _StatsRow(),
+
+                  const Spacer(flex: 2),
+
+                  // Motivational quote
+                  _MotivationalQuote(),
+
+                  const SizedBox(height: 40),
+                ],
               ),
             ),
           ],
@@ -116,155 +164,168 @@ class _LockedAppScreenState extends ConsumerState<LockedAppScreen>
     );
   }
 
-  Widget _buildContent() {
+  Widget _buildTitle() {
+    return Text(
+      'Stay Focused',
+      style: GoogleFonts.orbitron(
+        fontSize: 32,
+        fontWeight: FontWeight.w800,
+        color: Colors.white,
+        letterSpacing: 2,
+      ),
+    )
+        .animate()
+        .fadeIn(duration: 800.ms, curve: Curves.easeOut)
+        .scale(
+          begin: const Offset(0.8, 0.8),
+          end: const Offset(1, 1),
+          duration: 800.ms,
+          curve: Curves.easeOutBack,
+        )
+        .then()
+        .shimmer(
+          delay: 1200.ms,
+          duration: 2000.ms,
+          color: const Color(0xFF3A86FF).withValues(alpha: 0.3),
+        );
+  }
+
+  Widget _buildSubtitle() {
     return Column(
       children: [
-        // Header with back button
-        Padding(
-          padding: const EdgeInsets.fromLTRB(8, 8, 16, 0),
-          child: Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new_rounded,
-                    color: Colors.white, size: 20),
-                onPressed: _dismiss,
-              ),
-              const Spacer(),
-              Text(
-                'FOCUS LOCK',
-                style: GoogleFonts.googleSans(
-                  color: AxonColors.textSecondary,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 2,
-                ),
-              ),
-              const SizedBox(width: 48),
-            ],
+        Text(
+          '${widget.appName} is locked until you',
+          style: GoogleFonts.googleSans(
+            fontSize: 16,
+            color: Colors.grey[400],
           ),
         ),
-        const Spacer(flex: 1),
-
-        // Lock icon with glow
-        _AnimatedLockIcon(
-          pulseController: _pulseController,
-          shimmerController: _shimmerController,
-        ).animate().fadeIn(duration: 600.ms).scale(
-              begin: const Offset(0.6, 0.6),
-              end: const Offset(1, 1),
-              duration: 600.ms,
-              curve: Curves.easeOutBack,
-            ),
-
-        const SizedBox(height: 32),
-
-        // Title
+        const SizedBox(height: 4),
         Text(
-          'Stay Focused',
+          'complete your study session',
           style: GoogleFonts.googleSans(
-            fontSize: 28,
-            fontWeight: FontWeight.w800,
-            color: Colors.white,
-            letterSpacing: 0,
+            fontSize: 16,
+            color: Colors.grey[400],
           ),
-        ).animate().fadeIn(delay: 200.ms, duration: 500.ms).slideY(
-              begin: 0.1,
-              end: 0,
-              delay: 200.ms,
-              duration: 500.ms,
-            ),
-
-        const SizedBox(height: 12),
-
-        // Subtitle
-        Column(
-          children: [
-            Text(
-              '${widget.appName} is locked while you',
-              style: GoogleFonts.googleSans(
-                fontSize: 14,
-                color: AxonColors.textSecondary,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              'complete your study session',
-              style: GoogleFonts.googleSans(
-                fontSize: 14,
-                color: AxonColors.textSecondary,
-              ),
-            ),
-          ],
-        ).animate().fadeIn(delay: 400.ms, duration: 500.ms),
-
-        const SizedBox(height: 40),
-
-        // Glass card with progress
-        _ProgressCard(
-          pulseController: _pulseController,
-          orbitController: _orbitController,
-        ).animate().fadeIn(delay: 300.ms, duration: 600.ms).slideY(
-              begin: 0.15,
-              end: 0,
-              delay: 300.ms,
-              duration: 600.ms,
-              curve: Curves.easeOutCubic,
-            ),
-
-        const SizedBox(height: 32),
-
-        // Stats row
-        _StatsRow().animate().fadeIn(delay: 500.ms, duration: 500.ms),
-
-        const Spacer(flex: 2),
-
-        // Dismiss hint
-        GestureDetector(
-          onTap: _dismiss,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.05),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.1),
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.keyboard_backspace_rounded,
-                  color: AxonColors.textSecondary,
-                  size: 16,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'Back to study session',
-                  style: GoogleFonts.googleSans(
-                    color: AxonColors.textSecondary,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ).animate().fadeIn(delay: 700.ms, duration: 500.ms),
-
-        const SizedBox(height: 24),
+        ),
       ],
+    )
+        .animate()
+        .fadeIn(delay: 400.ms, duration: 600.ms)
+        .slideY(begin: 0.2, end: 0, delay: 400.ms, duration: 600.ms);
+  }
+}
+
+class _AnimatedBackground extends StatelessWidget {
+  final Animation<double> orbitAnimation;
+  final Animation<double> breathAnimation;
+  final AnimationController particleController;
+
+  const _AnimatedBackground({
+    required this.orbitAnimation,
+    required this.breathAnimation,
+    required this.particleController,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: Listenable.merge(
+          [orbitAnimation, breathAnimation, particleController]),
+      builder: (context, child) {
+        return CustomPaint(
+          painter: _ParticlePainter(
+            orbitValue: orbitAnimation.value,
+            breathValue: breathAnimation.value,
+            particleValue: particleController.value,
+          ),
+          size: Size.infinite,
+        );
+      },
     );
   }
 }
 
+class _ParticlePainter extends CustomPainter {
+  final double orbitValue;
+  final double breathValue;
+  final double particleValue;
+
+  _ParticlePainter({
+    required this.orbitValue,
+    required this.breathValue,
+    required this.particleValue,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+
+    // Draw orbit rings
+    for (int i = 0; i < 3; i++) {
+      final radius = (size.width * 0.3) + (i * 40) * breathValue;
+      final paint = Paint()
+        ..color = const Color(0xFF3A86FF).withValues(alpha: 0.05 + (i * 0.02))
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1;
+
+      canvas.drawCircle(center, radius, paint);
+    }
+
+    // Draw orbiting particles
+    final particlePaint = Paint()
+      ..color = const Color(0xFF3A86FF).withValues(alpha: 0.6)
+      ..style = PaintingStyle.fill;
+
+    for (int i = 0; i < 8; i++) {
+      final angle = orbitValue + (i * math.pi / 4);
+      final radius = size.width * 0.35;
+      final x = center.dx + radius * math.cos(angle);
+      final y = center.dy + radius * math.sin(angle);
+
+      // Particle glow
+      final glowPaint = Paint()
+        ..color = const Color(0xFF3A86FF).withValues(alpha: 0.2)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+      canvas.drawCircle(Offset(x, y), 6, glowPaint);
+      canvas.drawCircle(Offset(x, y), 3, particlePaint);
+    }
+
+    // Draw floating particles
+    for (int i = 0; i < 12; i++) {
+      final baseAngle = (i / 12) * 2 * math.pi;
+      final drift = math.sin(particleValue * 2 * math.pi + i) * 20;
+      final radius = size.width * (0.4 + (i % 3) * 0.1) + drift;
+      final angle = baseAngle + orbitValue * 0.5;
+
+      final x = center.dx + radius * math.cos(angle);
+      final y = center.dy + radius * math.sin(angle) * breathValue;
+
+      final floatingPaint = Paint()
+        ..color = Colors.white.withValues(alpha: 0.1 + (i % 4) * 0.05)
+        ..style = PaintingStyle.fill;
+
+      canvas.drawCircle(Offset(x, y), 2 + (i % 3), floatingPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ParticlePainter oldDelegate) {
+    return oldDelegate.orbitValue != orbitValue ||
+        oldDelegate.breathValue != breathValue ||
+        oldDelegate.particleValue != particleValue;
+  }
+}
+
 class _AnimatedLockIcon extends StatelessWidget {
-  final AnimationController pulseController;
-  final AnimationController shimmerController;
+  final Animation<double> pulseAnimation;
+  final Animation<double> shimmerAnimation;
+  final String appName;
 
   const _AnimatedLockIcon({
-    required this.pulseController,
-    required this.shimmerController,
+    required this.pulseAnimation,
+    required this.shimmerAnimation,
+    required this.appName,
   });
 
   @override
@@ -272,100 +333,145 @@ class _AnimatedLockIcon extends StatelessWidget {
     return Stack(
       alignment: Alignment.center,
       children: [
-        // Glow rings
-        ...List.generate(3, (i) {
-          return AnimatedBuilder(
-            animation: pulseController,
-            builder: (context, child) {
-              return Container(
-                width: 130 + (i * 28),
-                height: 130 + (i * 28),
+        // Outer glow rings
+        _GlowRing(delay: 0, pulseAnimation: pulseAnimation),
+        _GlowRing(delay: 200, pulseAnimation: pulseAnimation),
+        _GlowRing(delay: 400, pulseAnimation: pulseAnimation),
+
+        // Main lock container
+        Container(
+          width: 140,
+          height: 140,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              colors: [
+                const Color(0xFF3A86FF).withValues(alpha: 0.3),
+                const Color(0xFF3A86FF).withValues(alpha: 0.1),
+                Colors.transparent,
+              ],
+            ),
+          ),
+          child: Center(
+            child: Transform.scale(
+              scale: pulseAnimation.value,
+              child: Container(
+                width: 100,
+                height: 100,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      const Color(0xFF3A86FF).withValues(alpha: 0.4),
+                      const Color(0xFF3A86FF).withValues(alpha: 0.15),
+                    ],
+                  ),
                   border: Border.all(
-                    color: AxonColors.accent.withValues(
-                      alpha: 0.12 - (i * 0.03),
+                    color: const Color(0xFF3A86FF).withValues(alpha: 0.5),
+                    width: 2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF3A86FF).withValues(alpha: 0.4),
+                      blurRadius: 30,
+                      spreadRadius: 5,
                     ),
-                    width: 1,
-                  ),
-                ),
-              ).animate(onPlay: (c) => c.repeat(reverse: true)).scale(
-                    begin: const Offset(0.97, 0.97),
-                    end: const Offset(1.03, 1.03),
-                    duration: Duration(milliseconds: 1800 + (i * 300)),
-                  );
-            },
-          );
-        }),
-        // Main icon container
-        AnimatedBuilder(
-          animation: pulseController,
-          builder: (context, child) {
-            return Container(
-              width: 100,
-              height: 100,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: RadialGradient(
-                  colors: [
-                    AxonColors.accent.withValues(alpha: 0.35 * pulseController.value),
-                    AxonColors.accent.withValues(alpha: 0.08),
                   ],
                 ),
-                border: Border.all(
-                  color: AxonColors.accent.withValues(alpha: 0.5),
-                  width: 1.5,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: AxonColors.accent.withValues(alpha: 0.3),
-                    blurRadius: 30,
-                    spreadRadius: pulseController.value * 3,
-                  ),
-                ],
+                child: Icon(
+                  Icons.lock_rounded,
+                  size: 50,
+                  color: Colors.white,
+                )
+                    .animate(
+                      onPlay: (c) => c.repeat(reverse: true),
+                    )
+                    .scale(
+                      begin: const Offset(0.95, 0.95),
+                      end: const Offset(1.05, 1.05),
+                      duration: 1500.ms,
+                    )
+                    .then()
+                    .shimmer(
+                      delay: 500.ms,
+                      duration: 1000.ms,
+                      color: Colors.white24,
+                    ),
               ),
-              child: Icon(
-                Icons.lock_rounded,
-                size: 44,
+            ),
+          ),
+        ).animate().fadeIn(duration: 1000.ms).scale(
+              begin: const Offset(0.5, 0.5),
+              end: const Offset(1, 1),
+              duration: 1000.ms,
+              curve: Curves.easeOutBack,
+            ),
+
+        // App name badge
+        Positioned(
+          bottom: 0,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF3A86FF).withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: const Color(0xFF3A86FF).withValues(alpha: 0.4),
+              ),
+            ),
+            child: Text(
+              appName,
+              style: GoogleFonts.googleSans(
                 color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
               ),
-            );
-          },
-        ),
-        // Shimmer overlay
-        AnimatedBuilder(
-          animation: shimmerController,
-          builder: (context, child) {
-            return Container(
-              width: 100,
-              height: 100,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  begin: Alignment(-1 + shimmerController.value * 2, -1),
-                  end: Alignment(1 - shimmerController.value * 2, 1),
-                  colors: [
-                    Colors.transparent,
-                    Colors.white.withValues(alpha: 0.08),
-                    Colors.transparent,
-                  ],
-                ),
-              ),
-            );
-          },
+            ),
+          )
+              .animate()
+              .fadeIn(delay: 600.ms, duration: 400.ms)
+              .slideY(begin: 0.5, end: 0, delay: 600.ms, duration: 400.ms),
         ),
       ],
     );
   }
 }
 
-class _ProgressCard extends StatelessWidget {
-  final AnimationController pulseController;
-  final AnimationController orbitController;
+class _GlowRing extends StatelessWidget {
+  final int delay;
+  final Animation<double> pulseAnimation;
 
-  const _ProgressCard({
-    required this.pulseController,
-    required this.orbitController,
+  const _GlowRing({required this.delay, required this.pulseAnimation});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: pulseAnimation,
+      builder: (context, child) {
+        return Container(
+          width: 160 + (delay ~/ 2).toDouble(),
+          height: 160 + (delay ~/ 2).toDouble(),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: const Color(0xFF3A86FF)
+                  .withValues(alpha: 0.2 - (delay / 500).toDouble()),
+              width: 1,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ProgressRing extends StatelessWidget {
+  final Animation<double> orbitAnimation;
+  final Animation<double> pulseAnimation;
+
+  const _ProgressRing({
+    required this.orbitAnimation,
+    required this.pulseAnimation,
   });
 
   @override
@@ -375,96 +481,90 @@ class _ProgressCard extends StatelessWidget {
       builder: (context, snapshot) {
         final logged = snapshot.data?['loggedMinutes'] ?? 0;
         final required = snapshot.data?['requiredMinutes'] ?? 60;
-        final progress = required > 0 ? (logged / required).clamp(0.0, 1.0) : 0.0;
+        final progress =
+            required > 0 ? (logged / required).clamp(0.0, 1.0) : 0.0;
         final remaining = (required - logged).clamp(0, required);
 
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 40),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(24),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-              child: Container(
-                padding: const EdgeInsets.all(28),
-                decoration: BoxDecoration(
-                  color: AxonColors.surface.withValues(alpha: 0.06),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.06),
+        return Column(
+          children: [
+            SizedBox(
+              width: 160,
+              height: 160,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  // Background ring
+                  CustomPaint(
+                    size: const Size(160, 160),
+                    painter: _RingPainter(
+                      progress: 1.0,
+                      color: Colors.grey[900]!,
+                      strokeWidth: 8,
+                    ),
                   ),
-                ),
-                child: Column(
-                  children: [
-                    SizedBox(
-                      width: 140,
-                      height: 140,
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          // Background ring
-                          CustomPaint(
-                            size: const Size(140, 140),
-                            painter: _RingPainter(
-                              progress: 1.0,
-                              color: Colors.white.withValues(alpha: 0.06),
-                              strokeWidth: 6,
-                            ),
+                  // Progress ring with animation
+                  AnimatedBuilder(
+                    animation:
+                        Listenable.merge([orbitAnimation, pulseAnimation]),
+                    builder: (context, child) {
+                      return Transform.rotate(
+                        angle: orbitAnimation.value * 0.5,
+                        child: CustomPaint(
+                          size: const Size(160, 160),
+                          painter: _RingPainter(
+                            progress: progress,
+                            color: const Color(0xFF3A86FF),
+                            strokeWidth: 8,
+                            glowRadius: pulseAnimation.value * 5,
                           ),
-                          // Progress ring
-                          AnimatedBuilder(
-                            animation: pulseController,
-                            builder: (context, child) {
-                              return CustomPaint(
-                                size: const Size(140, 140),
-                                painter: _RingPainter(
-                                  progress: progress,
-                                  color: AxonColors.accent,
-                                  strokeWidth: 6,
-                                  glowRadius: pulseController.value * 3,
-                                ),
-                              );
-                            },
+                        ),
+                      );
+                    },
+                  ),
+                  // Center content
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '$remaining',
+                        style: GoogleFonts.orbitron(
+                          fontSize: 40,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                        ),
+                      ).animate().fadeIn(delay: 800.ms, duration: 400.ms).scale(
+                            begin: const Offset(0.8, 0.8),
+                            end: const Offset(1, 1),
+                            delay: 800.ms,
+                            duration: 400.ms,
                           ),
-                          // Center text
-                          Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                '$remaining',
-                                style: GoogleFonts.orbitron(
-                                  fontSize: 36,
-                                  fontWeight: FontWeight.w800,
-                                  color: Colors.white,
-                                  height: 1,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                'min left',
-                                style: GoogleFonts.googleSans(
-                                  fontSize: 12,
-                                  color: AxonColors.textSecondary,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
+                      Text(
+                        'min left',
+                        style: GoogleFonts.googleSans(
+                          fontSize: 14,
+                          color: Colors.grey[500],
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      '$logged of $required minutes completed',
-                      style: GoogleFonts.googleSans(
-                        fontSize: 12,
-                        color: AxonColors.textTertiary,
-                      ),
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
+                ],
               ),
-            ),
-          ),
+            ).animate().fadeIn(delay: 600.ms, duration: 800.ms).scale(
+                  begin: const Offset(0.8, 0.8),
+                  end: const Offset(1, 1),
+                  delay: 600.ms,
+                  duration: 600.ms,
+                  curve: Curves.easeOutBack,
+                ),
+            const SizedBox(height: 16),
+            Text(
+              '$logged of $required minutes completed',
+              style: GoogleFonts.googleSans(
+                fontSize: 13,
+                color: Colors.grey[500],
+              ),
+            ).animate().fadeIn(delay: 900.ms, duration: 400.ms),
+          ],
         );
       },
     );
@@ -489,15 +589,17 @@ class _RingPainter extends CustomPainter {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = (size.width - strokeWidth) / 2;
 
+    // Glow effect
     if (glowRadius > 0) {
       final glowPaint = Paint()
-        ..color = color.withValues(alpha: 0.25)
+        ..color = color.withValues(alpha: 0.3)
         ..style = PaintingStyle.stroke
         ..strokeWidth = strokeWidth + glowRadius
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, glowRadius);
       canvas.drawCircle(center, radius, glowPaint);
     }
 
+    // Main ring
     final paint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
@@ -528,7 +630,7 @@ class _StatsRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 48),
+      padding: const EdgeInsets.symmetric(horizontal: 40),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
@@ -536,27 +638,36 @@ class _StatsRow extends StatelessWidget {
             icon: Icons.timer_outlined,
             value: 'Focus',
             label: 'Mode',
-          ),
+          )
+              .animate()
+              .fadeIn(delay: 1000.ms, duration: 400.ms)
+              .slideX(begin: -0.2, end: 0, delay: 1000.ms, duration: 400.ms),
           Container(
             width: 1,
-            height: 28,
-            color: Colors.white.withValues(alpha: 0.08),
+            height: 40,
+            color: Colors.grey[800],
           ),
           _StatItem(
             icon: Icons.check_circle_outline,
             value: 'Locked',
             label: 'Until Done',
-          ),
+          )
+              .animate()
+              .fadeIn(delay: 1100.ms, duration: 400.ms)
+              .slideY(begin: 0.2, end: 0, delay: 1100.ms, duration: 400.ms),
           Container(
             width: 1,
-            height: 28,
-            color: Colors.white.withValues(alpha: 0.08),
+            height: 40,
+            color: Colors.grey[800],
           ),
           _StatItem(
             icon: Icons.auto_awesome,
             value: 'Stay',
             label: 'Strong',
-          ),
+          )
+              .animate()
+              .fadeIn(delay: 1200.ms, duration: 400.ms)
+              .slideX(begin: 0.2, end: 0, delay: 1200.ms, duration: 400.ms),
         ],
       ),
     );
@@ -578,21 +689,21 @@ class _StatItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Icon(icon, color: AxonColors.accent, size: 20),
-        const SizedBox(height: 4),
+        Icon(icon, color: const Color(0xFF3A86FF), size: 24),
+        const SizedBox(height: 6),
         Text(
           value,
           style: GoogleFonts.googleSans(
             color: Colors.white,
-            fontSize: 13,
+            fontSize: 14,
             fontWeight: FontWeight.w600,
           ),
         ),
         Text(
           label,
           style: GoogleFonts.googleSans(
-            color: AxonColors.textTertiary,
-            fontSize: 10,
+            color: Colors.grey[600],
+            fontSize: 11,
           ),
         ),
       ],
@@ -600,9 +711,44 @@ class _StatItem extends StatelessWidget {
   }
 }
 
+class _MotivationalQuote extends StatelessWidget {
+  static const _quotes = [
+    '"Focus is the key to success. Every minute spent here builds your future."',
+    '"Discipline is the bridge between goals and accomplishments."',
+    '"The secret of getting ahead is getting started."',
+    '"Your future self will thank you for staying focused today."',
+    '"Small daily improvements are the key to staggering long-term results."',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final quote = _quotes[DateTime.now().minute % _quotes.length];
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 32),
+      child: Text(
+        quote,
+        style: GoogleFonts.googleSans(
+          fontSize: 13,
+          color: Colors.grey[600],
+          fontStyle: FontStyle.italic,
+          height: 1.5,
+        ),
+        textAlign: TextAlign.center,
+      ),
+    ).animate().fadeIn(delay: 1400.ms, duration: 800.ms).then().shimmer(
+          delay: 3000.ms,
+          duration: 2000.ms,
+          color: const Color(0xFF3A86FF).withValues(alpha: 0.1),
+        );
+  }
+}
+
+// Riverpod provider for blocked app overlay state
 final blockedAppProvider =
     StateProvider<({String appName, String packageName})?>((ref) => null);
 
+// Manages blocked app overlay across the app
 class BlockedAppOverlay {
   static void init(WidgetRef ref) {
     StudyLockService.instance.onBlockedAppDetected = (appName, packageName) {

@@ -22,9 +22,13 @@ from typing import Optional
 
 logger = logging.getLogger("aari.validator")
 
-# PDF functionality has been removed as per user request
-_PYPDF_AVAILABLE = False
-logger.info("pypdf not available; PDF structure checks disabled")
+# Optional dependency — validate without crashing if not installed
+try:
+    import pypdf
+    _PYPDF_AVAILABLE = True
+except ImportError:
+    _PYPDF_AVAILABLE = False
+    logger.warning("pypdf not installed; PDF structure checks will be shallow")
 
 
 # ─── PDF Magic-Byte Check ─────────────────────────────────────────────────────
@@ -86,9 +90,34 @@ class PDFValidator:
             logger.warning("Invalid PDF from %s: %s", source_url, result.error)
             return result
 
-        # PDF functionality has been removed as per user request
-        # Perform basic validation only (magic bytes check)
-        result.is_valid  = True
-        result.page_count = None
-        result.metadata   = {}
+        if not _PYPDF_AVAILABLE:
+            # Shallow validation — magic bytes only
+            result.is_valid  = True
+            result.page_count = None
+            result.metadata   = {}
+            return result
+
+        try:
+            reader = pypdf.PdfReader(io.BytesIO(raw), strict=False)
+            result.page_count = len(reader.pages)
+            if result.page_count == 0:
+                result.error = "PDF has 0 pages"
+                return result
+
+            # Extract public metadata — purely informational, not altered
+            meta = reader.metadata or {}
+            result.metadata = {
+                "title":    meta.get("/Title"),
+                "author":   meta.get("/Author"),
+                "subject":  meta.get("/Subject"),
+                "creator":  meta.get("/Creator"),
+                "producer": meta.get("/Producer"),
+                "created":  str(meta.get("/CreationDate", "")),
+            }
+            result.is_valid = True
+
+        except Exception as exc:
+            result.error = f"pypdf parse error: {exc}"
+            logger.warning("PDF parse failed for %s: %s", source_url, exc)
+
         return result

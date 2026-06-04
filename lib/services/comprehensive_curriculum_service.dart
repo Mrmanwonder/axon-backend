@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'supabase_service.dart';
+import 'supabase_proxy_service.dart';
 
 class ComprehensiveCurriculumService {
   static final ComprehensiveCurriculumService _instance =
@@ -9,7 +9,7 @@ class ComprehensiveCurriculumService {
   static ComprehensiveCurriculumService get instance => _instance;
   ComprehensiveCurriculumService._();
 
-  final _supabase = SupabaseService.instance;
+  final _proxy = SupabaseProxyService.instance;
   bool _initialized = false;
   bool _supabaseAvailable = false;
 
@@ -50,7 +50,7 @@ class ComprehensiveCurriculumService {
   Future<void> _loadFromSupabase() async {
     try {
       // Fetch subjects
-      final subjectsResult = await _supabase.query('curriculum_subjects', params: {
+      final subjectsResult = await _proxy.query('curriculum_subjects', params: {
         'order': 'subject_name.asc',
       });
 
@@ -60,7 +60,7 @@ class ComprehensiveCurriculumService {
       }
 
       // Fetch chapters
-      final chaptersResult = await _supabase.query('curriculum_chapters', params: {
+      final chaptersResult = await _proxy.query('curriculum_chapters', params: {
         'order': 'chapter_number.asc',
       });
 
@@ -69,7 +69,7 @@ class ComprehensiveCurriculumService {
       }
 
       // Fetch subchapters
-      final subchaptersResult = await _supabase.query('curriculum_subchapters', params: {
+      final subchaptersResult = await _proxy.query('curriculum_subchapters', params: {
         'order': 'subchapter_number.asc',
       });
 
@@ -78,7 +78,7 @@ class ComprehensiveCurriculumService {
       }
 
       // Fetch syllabus URLs
-      final syllabiResult = await _supabase.query('curriculum_syllabi');
+      final syllabiResult = await _proxy.query('curriculum_syllabi');
 
       if (syllabiResult.isNotEmpty) {
         for (final s in syllabiResult) {
@@ -287,7 +287,7 @@ class UserProgressService {
   static UserProgressService get instance => _instance;
   UserProgressService._();
 
-  final _supabase = SupabaseService.instance;
+  final _proxy = SupabaseProxyService.instance;
   String _userId = '';
 
   void setUserId(String userId) {
@@ -307,7 +307,7 @@ class UserProgressService {
     if (!hasUserId) return;
 
     try {
-      await _supabase.mutate('user_subchapter_progress', method: 'upsert', body: {
+      await _proxy.mutate('user_subchapter_progress', method: 'upsert', body: {
         'user_id': _userId,
         'subject_code': subjectCode,
         'chapter_number': chapterNumber,
@@ -353,7 +353,7 @@ class UserProgressService {
     }
 
     try {
-      final result = await _supabase.query('user_subchapter_progress', params: {
+      final result = await _proxy.query('user_subchapter_progress', params: {
         'subject_code': 'eq.$subjectCode',
         'chapter_number': 'eq.$chapterNumber',
         'subchapter_number': 'eq.$subchapterNumber',
@@ -379,7 +379,7 @@ class UserProgressService {
     if (!hasUserId) return [];
 
     try {
-      return await _supabase.query('user_subchapter_progress', params: {
+      return await _proxy.query('user_subchapter_progress', params: {
         'user_id': 'eq.$_userId',
         'subject_code': 'eq.$subjectCode',
       });
@@ -424,7 +424,7 @@ class SubchapterNotesService {
   static SubchapterNotesService get instance => _instance;
   SubchapterNotesService._();
 
-  final _supabase = SupabaseService.instance;
+  final _proxy = SupabaseProxyService.instance;
 
   Future<String?> getNotes({
     required String subjectCode,
@@ -432,7 +432,7 @@ class SubchapterNotesService {
     required String subchapterNumber,
   }) async {
     try {
-      final result = await _supabase.query('subchapter_notes', params: {
+      final result = await _proxy.query('subchapter_notes', params: {
         'subject_code': 'eq.$subjectCode',
         'chapter_number': 'eq.$chapterNumber',
         'subchapter_number': 'eq.$subchapterNumber',
@@ -450,7 +450,7 @@ class SubchapterNotesService {
     required String notes,
   }) async {
     try {
-      await _supabase.mutate('subchapter_notes', method: 'upsert', body: {
+      await _proxy.mutate('subchapter_notes', method: 'upsert', body: {
         'subject_code': subjectCode,
         'chapter_number': chapterNumber,
         'subchapter_number': subchapterNumber,

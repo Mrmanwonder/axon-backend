@@ -2,10 +2,245 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
-import 'supabase_service.dart';
+import 'supabase_proxy_service.dart';
+
+class LocalDatabase {
+  static final LocalDatabase instance = LocalDatabase._init();
+  static Database? _database;
+
+  LocalDatabase._init();
+
+  Future<Database> get database async =>
+      _database ??= await _initDB('axon_sync.db');
+
+  Future<Database> _initDB(String filePath) async {
+    final dbPath = await getDatabasesPath();
+    return await openDatabase(
+      join(dbPath, filePath),
+      version: 1,
+      onCreate: _createDB,
+    );
+  }
+
+  Future<void> _createDB(Database db, int version) async {
+    await db.execute('''
+      CREATE TABLE sync_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at TEXT
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE user_notes (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        subject_code TEXT,
+        title TEXT,
+        content TEXT,
+        created_at TEXT,
+        updated_at TEXT,
+        synced INTEGER DEFAULT 0,
+        deleted INTEGER DEFAULT 0
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE user_pyqs (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        subject_code TEXT NOT NULL,
+        year INTEGER NOT NULL,
+        variant TEXT,
+        paper_type TEXT,
+        score REAL,
+        time_spent_seconds INTEGER,
+        completed_at TEXT,
+        updated_at TEXT,
+        synced INTEGER DEFAULT 0,
+        deleted INTEGER DEFAULT 0
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE user_mocks (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        subject_code TEXT NOT NULL,
+        paper_code TEXT,
+        title TEXT,
+        total_marks REAL,
+        obtained_marks REAL,
+        time_taken_seconds INTEGER,
+        attempt_date TEXT,
+        updated_at TEXT,
+        synced INTEGER DEFAULT 0,
+        deleted INTEGER DEFAULT 0
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE study_progress (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        subject_code TEXT NOT NULL,
+        chapter_id TEXT,
+        progress_percentage REAL DEFAULT 0,
+        last_accessed TEXT,
+        updated_at TEXT,
+        synced INTEGER DEFAULT 0
+      )
+    ''');
+  }
+
+  Future<void> upsertNote(Map<String, dynamic> note) async {
+    final db = await instance.database;
+    await db.insert(
+      'user_notes',
+      {
+        ...note,
+        'synced': 0,
+        'deleted': note['deleted'] ?? 0,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> upsertPyq(Map<String, dynamic> pyq) async {
+    final db = await instance.database;
+    await db.insert(
+      'user_pyqs',
+      {
+        ...pyq,
+        'synced': 0,
+        'deleted': pyq['deleted'] ?? 0,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> upsertMock(Map<String, dynamic> mock) async {
+    final db = await instance.database;
+    await db.insert(
+      'user_mocks',
+      {
+        ...mock,
+        'synced': 0,
+        'deleted': mock['deleted'] ?? 0,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> upsertStudyProgress(Map<String, dynamic> progress) async {
+    final db = await instance.database;
+    await db.insert(
+      'study_progress',
+      {
+        ...progress,
+        'synced': 0,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getUnsyncedNotes(String userId) async {
+    final db = await instance.database;
+    return await db.query('user_notes',
+        where: 'synced = 0 AND user_id = ?', whereArgs: [userId]);
+  }
+
+  Future<List<Map<String, dynamic>>> getUnsyncedPyqs(String userId) async {
+    final db = await instance.database;
+    return await db.query('user_pyqs',
+        where: 'synced = 0 AND user_id = ?', whereArgs: [userId]);
+  }
+
+  Future<List<Map<String, dynamic>>> getUnsyncedMocks(String userId) async {
+    final db = await instance.database;
+    return await db.query('user_mocks',
+        where: 'synced = 0 AND user_id = ?', whereArgs: [userId]);
+  }
+
+  Future<List<Map<String, dynamic>>> getUnsyncedStudyProgress(
+      String userId) async {
+    final db = await instance.database;
+    return await db.query('study_progress',
+        where: 'synced = 0 AND user_id = ?', whereArgs: [userId]);
+  }
+
+  Future<void> markNoteSynced(String id) async {
+    final db = await instance.database;
+    await db.update('user_notes', {'synced': 1},
+        where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> markPyqSynced(String id) async {
+    final db = await instance.database;
+    await db.update('user_pyqs', {'synced': 1},
+        where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> markMockSynced(String id) async {
+    final db = await instance.database;
+    await db.update('user_mocks', {'synced': 1},
+        where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> markStudyProgressSynced(String id) async {
+    final db = await instance.database;
+    await db.update('study_progress', {'synced': 1},
+        where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<List<Map<String, dynamic>>> getAllNotes(String userId) async {
+    final db = await instance.database;
+    return await db.query('user_notes',
+        where: 'user_id = ? AND deleted = 0', whereArgs: [userId]);
+  }
+
+  Future<List<Map<String, dynamic>>> getAllPyqs(String userId) async {
+    final db = await instance.database;
+    return await db.query('user_pyqs',
+        where: 'user_id = ? AND deleted = 0', whereArgs: [userId]);
+  }
+
+  Future<List<Map<String, dynamic>>> getAllMocks(String userId) async {
+    final db = await instance.database;
+    return await db.query('user_mocks',
+        where: 'user_id = ? AND deleted = 0', whereArgs: [userId]);
+  }
+
+  Future<List<Map<String, dynamic>>> getAllStudyProgress(String userId) async {
+    final db = await instance.database;
+    return await db
+        .query('study_progress', where: 'user_id = ?', whereArgs: [userId]);
+  }
+
+  Future<void> deleteNoteLocally(String id) async {
+    final db = await instance.database;
+    await db.update('user_notes', {'deleted': 1, 'synced': 0},
+        where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> deletePyqLocally(String id) async {
+    final db = await instance.database;
+    await db.update('user_pyqs', {'deleted': 1, 'synced': 0},
+        where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> deleteMockLocally(String id) async {
+    final db = await instance.database;
+    await db.update('user_mocks', {'deleted': 1, 'synced': 0},
+        where: 'id = ?', whereArgs: [id]);
+  }
+}
 
 class OfflineSyncService {
-  final _supabase = SupabaseService.instance;
+  static final OfflineSyncService _instance = OfflineSyncService._();
+  static OfflineSyncService get instance => _instance;
+
+  final _proxy = SupabaseProxyService.instance;
   Timer? _syncTimer;
   bool _isSyncing = false;
   String? _currentUserId;
@@ -86,7 +321,7 @@ class OfflineSyncService {
   Future<void> _syncNotesFromCloud() async {
     if (_currentUserId == null) return;
     try {
-      final cloudData = await _supabase.query('user_notes', params: {
+      final cloudData = await _proxy.query('user_notes', params: {
         'user_id': 'eq.${_currentUserId!}',
       });
 
@@ -137,7 +372,7 @@ class OfflineSyncService {
   Future<void> _syncPyqsFromCloud() async {
     if (_currentUserId == null) return;
     try {
-      final cloudData = await _supabase.query('user_pyqs', params: {
+      final cloudData = await _proxy.query('user_pyqs', params: {
         'user_id': 'eq.${_currentUserId!}',
       });
 
@@ -193,7 +428,7 @@ class OfflineSyncService {
   Future<void> _syncMocksFromCloud() async {
     if (_currentUserId == null) return;
     try {
-      final cloudData = await _supabase.query('user_mocks', params: {
+      final cloudData = await _proxy.query('user_mocks', params: {
         'user_id': 'eq.${_currentUserId!}',
       });
 
@@ -250,7 +485,7 @@ class OfflineSyncService {
   Future<void> _syncStudyProgressFromCloud() async {
     if (_currentUserId == null) return;
     try {
-      final cloudData = await _supabase.query('study_progress', params: {
+      final cloudData = await _proxy.query('study_progress', params: {
         'user_id': 'eq.${_currentUserId!}',
       });
 
@@ -300,13 +535,13 @@ class OfflineSyncService {
     final isDeleted = note['deleted'] == 1;
     if (isDeleted) {
       try {
-        await _supabase.mutate('user_notes', method: 'delete', params: {'id': 'eq.${note['id']}'});
+        await _proxy.mutate('user_notes', method: 'delete', params: {'id': 'eq.${note['id']}'});
       } catch (e) {
         debugPrint('[OfflineSyncService] Failed to delete note from cloud: $e');
       }
     } else {
       try {
-        await _supabase.mutate('user_notes', method: 'upsert', body: {
+        await _proxy.mutate('user_notes', method: 'upsert', body: {
           'id': note['id'],
           'user_id': note['user_id'],
           'subject_code': note['subject_code'],
@@ -326,13 +561,13 @@ class OfflineSyncService {
     final isDeleted = pyq['deleted'] == 1;
     if (isDeleted) {
       try {
-        await _supabase.mutate('user_pyqs', method: 'delete', params: {'id': 'eq.${pyq['id']}'});
+        await _proxy.mutate('user_pyqs', method: 'delete', params: {'id': 'eq.${pyq['id']}'});
       } catch (e) {
         debugPrint('[OfflineSyncService] Failed to delete PYQ from cloud: $e');
       }
     } else {
       try {
-        await _supabase.mutate('user_pyqs', method: 'upsert', body: {
+        await _proxy.mutate('user_pyqs', method: 'upsert', body: {
           'id': pyq['id'],
           'user_id': pyq['user_id'],
           'subject_code': pyq['subject_code'],
@@ -355,13 +590,13 @@ class OfflineSyncService {
     final isDeleted = mock['deleted'] == 1;
     if (isDeleted) {
       try {
-        await _supabase.mutate('user_mocks', method: 'delete', params: {'id': 'eq.${mock['id']}'});
+        await _proxy.mutate('user_mocks', method: 'delete', params: {'id': 'eq.${mock['id']}'});
       } catch (e) {
         debugPrint('[OfflineSyncService] Failed to delete mock from cloud: $e');
       }
     } else {
       try {
-        await _supabase.mutate('user_mocks', method: 'upsert', body: {
+        await _proxy.mutate('user_mocks', method: 'upsert', body: {
           'id': mock['id'],
           'user_id': mock['user_id'],
           'subject_code': mock['subject_code'],
@@ -383,7 +618,7 @@ class OfflineSyncService {
   Future<void> _uploadStudyProgressToCloud(
       Map<String, dynamic> progress) async {
     try {
-      await _supabase.mutate('study_progress', method: 'upsert', body: {
+      await _proxy.mutate('study_progress', method: 'upsert', body: {
         'id': progress['id'],
         'user_id': progress['user_id'],
         'subject_code': progress['subject_code'],
