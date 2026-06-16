@@ -396,7 +396,7 @@ class SupabaseQueryRequest(BaseModel):
 
 ALLOWED_SUPABASE_TABLES = {
     "boards", "subjects", "chapters", "Datesheet", "PYQs",
-    "curriculum_subjects", "curriculum_chapters", "curriculum_subchapters", "curriculum_syllabi",
+    "curriculum", "curriculum_subjects", "curriculum_chapters", "curriculum_subchapters", "curriculum_syllabi",
     "user_notes", "user_subjects", "global_notes",
     "subchapter_notes", "user_subchapter_progress",
     "user_pyqs", "user_mocks", "study_progress",
