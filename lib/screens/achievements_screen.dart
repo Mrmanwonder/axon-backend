@@ -69,8 +69,8 @@ class _AchievementBadgeState extends State<_AchievementBadge>
   void initState() {
     super.initState();
     _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 200));
-    _scale = Tween<double>(begin: 1.0, end: 1.08)
+        vsync: this, duration: const Duration(milliseconds: 150));
+    _scale = Tween<double>(begin: 1.0, end: 1.05)
         .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
   }
 
@@ -159,12 +159,7 @@ class _AchievementBadgeState extends State<_AchievementBadge>
         _showDetail(context);
       },
       onTapCancel: () => _ctrl.reverse(),
-      child: AnimatedBuilder(
-        animation: _ctrl,
-        builder: (context, child) =>
-            Transform.scale(scale: _scale.value, child: child),
-        child: _buildBody(),
-      ),
+      child: ScaleTransition(scale: _scale, child: _buildBody()),
     );
   }
 
@@ -248,74 +243,6 @@ class _DetailSheet extends StatelessWidget {
   }
 }
 
-// ─── Section ──────────────────────────────────────────────────────────────────
-
-class _AchievementSection extends StatelessWidget {
-  final String title;
-  final List<svc.Achievement> all;
-  final List<svc.Achievement> unlocked;
-
-  const _AchievementSection(
-      {required this.title, required this.all, required this.unlocked});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 4, bottom: 14),
-          child: Text(title,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: -0.3)),
-        ),
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 3,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 20,
-            childAspectRatio: 0.72,
-          ),
-          itemCount: all.length,
-          itemBuilder: (context, index) {
-            final a = all[index];
-            final isUnlocked = unlocked.any((u) => u.id == a.id);
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _AchievementBadge(
-                    achievement: a, unlocked: isUnlocked, size: 72),
-                const SizedBox(height: 8),
-                Text(a.name,
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        color:
-                            isUnlocked ? Colors.white : const Color(0xFF555555),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                        height: 1.3)),
-                Text(isUnlocked ? 'Unlocked' : 'Locked',
-                    style: TextStyle(
-                        color: isUnlocked
-                            ? const Color(0xFF32D74B)
-                            : const Color(0xFF555555),
-                        fontSize: 10)),
-              ],
-            );
-          },
-        ),
-      ],
-    );
-  }
-}
-
 // ─── Summary Bar ──────────────────────────────────────────────────────────────
 
 class _SummaryBar extends StatelessWidget {
@@ -326,7 +253,6 @@ class _SummaryBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 24),
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       decoration: BoxDecoration(
         color: const Color(0xFF1C1C1E),
@@ -427,6 +353,7 @@ class _AchievementsScreenState extends State<AchievementsScreen>
   Widget build(BuildContext context) {
     final total = svc.AchievementService.allAchievements.length;
     final unlockedCount = _unlocked.length;
+    const brandBlue = Color(0xFF3A86FF); // Sleek UI Brand Accent Color
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -437,21 +364,18 @@ class _AchievementsScreenState extends State<AchievementsScreen>
             pinned: true,
             expandedHeight: 120,
             elevation: 0,
-            leading: Padding(
-              padding: const EdgeInsets.only(left: 8),
-              child: TextButton(
-                onPressed: () => Navigator.maybePop(context),
-                child: const Text('< Back',
-                    style: TextStyle(color: Color(0xFF0A84FF), fontSize: 16)),
-              ),
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back_ios_new, color: brandBlue, size: 20),
+              onPressed: () => Navigator.maybePop(context),
             ),
             flexibleSpace: const FlexibleSpaceBar(
               titlePadding: EdgeInsets.only(left: 20, bottom: 16),
               title: Text('Achievements',
                   style: TextStyle(
                       color: Colors.white,
-                      fontSize: 28,
-                      fontWeight: FontWeight.w800)),
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.5)),
             ),
             bottom: PreferredSize(
               preferredSize: const Size.fromHeight(44),
@@ -485,19 +409,71 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                 children: List.generate(_tabs.length, (idx) {
                   final filtered = _filter(idx);
                   return CustomScrollView(
+                    key: PageStorageKey<String>(_tabs[idx]),
                     slivers: [
+                      // Summary Section Box
                       SliverPadding(
-                        padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
-                        sliver: SliverList(
-                          delegate: SliverChildListDelegate([
-                            _SummaryBar(total: total, unlocked: unlockedCount),
-                            const SizedBox(height: 8),
-                            _AchievementSection(
-                              title: idx == 0 ? 'All Achievements' : _tabs[idx],
-                              all: filtered,
-                              unlocked: _unlocked,
-                            ),
-                          ]),
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                        sliver: SliverToBoxAdapter(
+                          child: _SummaryBar(total: total, unlocked: unlockedCount),
+                        ),
+                      ),
+                      // Section Header Title
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(20, 12, 16, 12),
+                        sliver: SliverToBoxAdapter(
+                          child: Text(
+                            idx == 0 ? 'All Achievements' : _tabs[idx],
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: -0.2),
+                          ),
+                        ),
+                      ),
+                      // High-Performance Grid Native Layout
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                        sliver: SliverGrid(
+                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 3,
+                            crossAxisSpacing: 12,
+                            mainAxisSpacing: 20,
+                            childAspectRatio: 0.75,
+                          ),
+                          delegate: SliverChildBuilderDelegate(
+                            (context, index) {
+                              final a = filtered[index];
+                              final isUnlocked = _unlocked.any((u) => u.id == a.id);
+                              return Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _AchievementBadge(
+                                      achievement: a, unlocked: isUnlocked, size: 72),
+                                  const SizedBox(height: 8),
+                                  Text(a.name,
+                                      textAlign: TextAlign.center,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          color: isUnlocked ? Colors.white : const Color(0xFF555555),
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w500,
+                                          height: 1.2)),
+                                  const SizedBox(height: 2),
+                                  Text(isUnlocked ? 'Unlocked' : 'Locked',
+                                      style: TextStyle(
+                                          color: isUnlocked
+                                              ? const Color(0xFF32D74B)
+                                              : const Color(0xFF555555),
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w600)),
+                                ],
+                              );
+                            },
+                            childCount: filtered.length,
+                          ),
                         ),
                       ),
                     ],
@@ -505,7 +481,7 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                 }),
               )
             : const Center(
-                child: CircularProgressIndicator(color: Color(0xFF0A84FF))),
+                child: CircularProgressIndicator(color: brandBlue)),
       ),
     );
   }

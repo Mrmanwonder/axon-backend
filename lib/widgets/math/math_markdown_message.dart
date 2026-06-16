@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 
-class MathMessage extends StatelessWidget {
+class MathMessage extends StatefulWidget {
   final String text;
   final double fontSize;
 
@@ -12,10 +12,33 @@ class MathMessage extends StatelessWidget {
   });
 
   @override
+  State<MathMessage> createState() => _MathMessageState();
+}
+
+class _MathMessageState extends State<MathMessage> {
+  late String _cachedText;
+  late List<InlineSpan> _cachedSpans;
+
+  @override
+  void initState() {
+    super.initState();
+    _cachedText = widget.text;
+    _cachedSpans = _parse(widget.text);
+  }
+
+  @override
+  void didUpdateWidget(covariant MathMessage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.text != _cachedText) {
+      _cachedText = widget.text;
+      _cachedSpans = _parse(widget.text);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final spans = _parse(text);
     return RichText(
-      text: TextSpan(children: spans),
+      text: TextSpan(children: _cachedSpans),
     );
   }
 

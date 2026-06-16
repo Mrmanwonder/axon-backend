@@ -26,9 +26,15 @@ class DailyPlanCalendar extends StatefulWidget {
 class _DailyPlanCalendarState extends State<DailyPlanCalendar> {
   final CalendarController _controller = CalendarController();
   DateTime _displayDate = DateTime.now();
+  late Map<String, DailyPlanTask> _taskMap;
 
   @override
   Widget build(BuildContext context) {
+    _taskMap = {
+      for (var task in widget.tasks)
+        '${task.title}_${task.startTime.millisecondsSinceEpoch}': task,
+    };
+
     final appointments = widget.tasks.map((task) {
           return Appointment(
             startTime: task.startTime,
@@ -89,12 +95,8 @@ class _DailyPlanCalendarState extends State<DailyPlanCalendar> {
               ),
               appointmentBuilder: (context, details) {
                 final appointment = details.appointments.first as Appointment;
-                final task = widget.tasks.firstWhere(
-                  (item) =>
-                      item.title == appointment.subject &&
-                      item.startTime == appointment.startTime,
-                  orElse: () => widget.tasks.first,
-                );
+                final key = '${appointment.subject}_${appointment.startTime.millisecondsSinceEpoch}';
+                final task = _taskMap[key] ?? widget.tasks.first;
                 return _buildNotionAppointment(appointment, task);
               },
               onTap: (details) {
@@ -103,12 +105,8 @@ class _DailyPlanCalendarState extends State<DailyPlanCalendar> {
                   return;
                 }
                 final appointment = details.appointments!.first as Appointment;
-                final task = widget.tasks.firstWhere(
-                  (item) =>
-                      item.title == appointment.subject &&
-                      item.startTime == appointment.startTime,
-                  orElse: () => widget.tasks.first,
-                );
+                final key = '${appointment.subject}_${appointment.startTime.millisecondsSinceEpoch}';
+                final task = _taskMap[key] ?? widget.tasks.first;
                 widget.onTaskTap?.call(task);
               },
             ),

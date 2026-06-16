@@ -58,7 +58,6 @@ dependencies:
   sqflite: ^2.4.1
   googleapis: ^13.2.0
   googleapis_auth: ^1.6.0
-  google_generative_ai: ^0.4.0
   intl: any
   uuid: ^4.5.1
   flutter_blue_plus: ^1.35.2
