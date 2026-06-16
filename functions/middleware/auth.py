@@ -50,7 +50,6 @@ async def current_user(request: Request) -> dict[str, Any]:
     """Optional auth - returns placeholder if no token, doesn't block requests"""
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
-        # Return a placeholder instead of blocking
         return {"uid": "anonymous", "email": "anonymous@example.com"}
 
     token = auth_header.split(" ", 1)[1].strip()
@@ -64,3 +63,22 @@ async def current_user(request: Request) -> dict[str, Any]:
         return decoded_token
     except Exception:
         return {"uid": "anonymous", "email": "anonymous@example.com"}
+
+
+async def optional_current_user(request: Request) -> dict[str, Any] | None:
+    """Optional auth - returns None if no valid token, otherwise returns user dict"""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+
+    token = auth_header.split(" ", 1)[1].strip()
+    if not token:
+        return None
+
+    try:
+        decoded_token = auth.verify_id_token(token)
+        if "uid" not in decoded_token and "sub" in decoded_token:
+            decoded_token["uid"] = decoded_token["sub"]
+        return decoded_token
+    except Exception:
+        return None

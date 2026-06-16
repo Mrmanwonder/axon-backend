@@ -19,7 +19,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from middleware.auth import current_user, initialize_firebase
+from middleware.auth import current_user, optional_current_user, initialize_firebase
 from middleware.supabase_scope import apply_user_scope, assert_table_access
 from middleware.url_safety import assert_safe_https_url
 from services.exam_dates_service import OfficialExamDatesService
@@ -394,24 +394,41 @@ class SupabaseQueryRequest(BaseModel):
     params: dict[str, Any] = {}
 
 
-ALLOWED_SUPABASE_TABLES = {
+# Public tables - accessible without auth
+PUBLIC_SUPABASE_TABLES = {
     "boards", "subjects", "chapters", "Datesheet", "PYQs",
-    "curriculum",  # Unified table (replaces curriculum_subjects/chapters/subchapters/syllabi)
-    "user_notes", "user_subjects", "global_notes",
-    "subchapter_notes", "user_subchapter_progress",
+    "curriculum",  # Unified table
+    "global_notes", "subchapter_notes", "papers", "topics",
+}
+
+# User-scoped tables - require auth
+USER_SCOPED_TABLES = {
+    "user_notes", "user_subjects", "user_subchapter_progress",
     "user_pyqs", "user_mocks", "study_progress",
-    "papers", "topics", "user_bookmarks", "user_recent_papers",
+    "user_bookmarks", "user_recent_papers",
     "user_personal_index",
 }
 
+ALLOWED_SUPABASE_TABLES = PUBLIC_SUPABASE_TABLES | USER_SCOPED_TABLES
 
+
+# Public endpoint - no auth required for public tables
 @app.post("/supabase/query")
 async def supabase_query(
     payload: SupabaseQueryRequest,
-    user: dict[str, Any] = Depends(current_user),
+    user: dict[str, Any] | None = Depends(optional_current_user),
 ):
     if payload.table not in ALLOWED_SUPABASE_TABLES:
         raise HTTPException(status_code=403, detail=f"Table '{payload.table}' not allowed")
+    
+    # Check if public table - no auth needed
+    is_public = payload.table in PUBLIC_SUPABASE_TABLES
+    
+    if not is_public and user is None:
+        raise HTTPException(status_code=401, detail="Authentication required for user-scoped tables")
+    
+    # Get user_id safely (None for anonymous on public tables)
+    user_id = user.get("uid") if user else None
 
     try:
         assert_table_access(payload.table, payload.method)
@@ -422,7 +439,7 @@ async def supabase_query(
         payload.table,
         payload.method,
         payload.params,
-        user["uid"],
+        user_id,
     )
 
     supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
