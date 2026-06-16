@@ -49,45 +49,61 @@ class ComprehensiveCurriculumService {
 
   Future<void> _loadFromSupabase() async {
     try {
-      // Fetch subjects
-      final subjectsResult = await _proxy.query('curriculum_subjects', params: {
+      // Fetch from unified curriculum table
+      final curriculumResult = await _proxy.query('curriculum', params: {
+        'select': '*,chapters(subchapters(*))',
         'order': 'subject_name.asc',
       });
 
-      if (subjectsResult.isNotEmpty) {
-        _subjects = List<Map<String, dynamic>>.from(subjectsResult);
+      if (curriculumResult.isNotEmpty) {
         _supabaseAvailable = true;
-      }
-
-      // Fetch chapters
-      final chaptersResult = await _proxy.query('curriculum_chapters', params: {
-        'order': 'chapter_number.asc',
-      });
-
-      if (chaptersResult.isNotEmpty) {
-        _chapters = List<Map<String, dynamic>>.from(chaptersResult);
-      }
-
-      // Fetch subchapters
-      final subchaptersResult = await _proxy.query('curriculum_subchapters', params: {
-        'order': 'subchapter_number.asc',
-      });
-
-      if (subchaptersResult.isNotEmpty) {
-        _subchapters = List<Map<String, dynamic>>.from(subchaptersResult);
-      }
-
-      // Fetch syllabus URLs
-      final syllabiResult = await _proxy.query('curriculum_syllabi');
-
-      if (syllabiResult.isNotEmpty) {
-        for (final s in syllabiResult) {
-          _syllabusUrls[s['subject_code']] = s['syllabus_url'] ?? '';
+        
+        // Parse unified curriculum into separate lists for backward compatibility
+        _subjects = [];
+        _chapters = [];
+        _subchapters = [];
+        
+        for (final record in curriculumResult) {
+          // Add subject
+          _subjects.add({
+            'code': record['subject_code'],
+            'name': record['subject_name'],
+            'board': record['board'],
+            'level': record['level'],
+            'aliases': record['aliases'],
+          });
+          
+          // Parse chapters and subchapters
+          final chapters = record['chapters'] as List<dynamic>? ?? [];
+          for (final chapter in chapters) {
+            _chapters.add({
+              'id': '${record['subject_code']}_${chapter['id']}',
+              'subject_code': record['subject_code'],
+              'chapter_number': chapter['id'],
+              'title': chapter['title'],
+              'order_index': chapter['order_index'],
+            });
+            
+            final subchapters = chapter['subchapters'] as List<dynamic>? ?? [];
+            for (final sub in subchapters) {
+              _subchapters.add({
+                'id': '${record['subject_code']}_${chapter['id']}_${sub['id']}',
+                'subject_code': record['subject_code'],
+                'chapter_number': chapter['id'],
+                'subchapter_number': sub['id'],
+                'title': sub['title'],
+                'content': sub['content'],
+                'order_index': sub['order_index'],
+              });
+            }
+          }
         }
       }
 
       // Cache locally for offline
-      await _cacheToLocal();
+      if (_subjects.isNotEmpty || _chapters.isNotEmpty || _subchapters.isNotEmpty) {
+        await _cacheToLocal();
+      }
     } catch (e) {
       _lastError = 'Supabase error: $e';
       debugPrint('Supabase load failed: $e');
@@ -314,7 +330,7 @@ class UserProgressService {
         'subchapter_number': subchapterNumber,
         'scroll_percentage': scrollPercentage,
         'time_spent_seconds': timeSpentSeconds,
-        'last_accessed': DateTime.now().toIso8601String(),
+        'last_accessed': DateTime.now().toIso8601String()
       });
 
       // Also save locally
