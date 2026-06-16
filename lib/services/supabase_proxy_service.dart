@@ -16,17 +16,21 @@ class SupabaseProxyService {
     String method = 'select',
     Map<String, dynamic> params = const {},
   }) async {
+    // Try to get token, but proceed without it (public tables don't need auth)
     final token = await AuthService.instance.getIdToken();
-    if (token == null) return [];
 
     try {
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+      };
+      if (token != null) {
+        headers['Authorization'] = 'Bearer $token';
+      }
+      
       final resp = await http
           .post(
             Uri.parse('$_baseUrl/supabase/query'),
-            headers: {
-              'Authorization': 'Bearer $token',
-              'Content-Type': 'application/json',
-            },
+            headers: headers,
             body: jsonEncode({
               'table': table,
               'method': method,
