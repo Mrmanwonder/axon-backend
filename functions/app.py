@@ -42,7 +42,7 @@ async def optional_user():
 
 app = FastAPI(
     title="Axon Backend",
-    version="2.1.0",
+    version="2.1.2",
     description="ASGI backend for Axon document analysis, grading, and trust-safe sync.",
 )
 
