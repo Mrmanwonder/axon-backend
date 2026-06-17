@@ -1540,6 +1540,7 @@ async def get_sme_questions(
 ):
     """Get saved questions from SaveMyExams."""
     import requests
+    import traceback
     SUPABASE_URL = "https://anmfwzxyvqxyxxeobxti.supabase.co"
     SUPABASE_KEY = "sb_publishable_fIbfGtT5yyFaogq4DQAuxw_tZ54kolM"
     
@@ -1549,14 +1550,17 @@ async def get_sme_questions(
     if topic:
         params["topic"] = f"eq.{topic}"
     
-    resp = requests.get(
-        f"{SUPABASE_URL}/rest/v1/sme_questions",
-        headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-        params=params,
-        timeout=15
-    )
+    try:
+        resp = requests.get(
+            f"{SUPABASE_URL}/rest/v1/sme_questions",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params=params,
+            timeout=15
+        )
+        questions = resp.json() if resp.status_code == 200 else []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Supabase error: {str(e)}")
     
-    questions = resp.json() if resp.status_code == 200 else []
     return {
         "questions": questions,
         "total": len(questions),
