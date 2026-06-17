@@ -1587,6 +1587,14 @@ async def debug_test():
     return {"debug": "ok", "version": "2.1.3"}
 
 
+
+
+@app.get("/sme/quick")
+async def sme_quick():
+    """Quick test - minimal."""
+    return {"quick": "ok"}
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("app:app", host="0.0.0.0", port=port)
