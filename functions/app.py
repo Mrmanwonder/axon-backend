@@ -1539,7 +1539,7 @@ async def get_sme_questions(
     user: dict[str, Any] | None = Depends(optional_current_user),
 ):
     """Get saved questions from SaveMyExams."""
-    import httpx
+    import requests
     SUPABASE_URL = "https://anmfwzxyvqxyxxeobxti.supabase.co"
     SUPABASE_KEY = "sb_publishable_fIbfGtT5yyFaogq4DQAuxw_tZ54kolM"
     
@@ -1549,12 +1549,12 @@ async def get_sme_questions(
     if topic:
         params["topic"] = f"eq.{topic}"
     
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(
-            f"{SUPABASE_URL}/rest/v1/sme_questions",
-            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-            params=params
-        )
+    resp = requests.get(
+        f"{SUPABASE_URL}/rest/v1/sme_questions",
+        headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+        params=params,
+        timeout=15
+    )
     
     questions = resp.json() if resp.status_code == 200 else []
     return {
