@@ -237,7 +237,7 @@ class DatesheetParser {
     // Method 2: Try Python script directly
     try {
       final safePath = pdfFile.path;
-      if (RegExp(r'[;\'"|`$]').hasMatch(safePath)) {
+      if (RegExp(r'''[;'"|`$]''').hasMatch(safePath)) {
         debugPrint('Python GLM OCR skipped: unsafe characters in path');
         return '';
       }
@@ -263,7 +263,7 @@ class DatesheetParser {
     // Method 3: Try using pdftotext command if available
     try {
       final safePath = pdfFile.path;
-      if (RegExp(r'[;\'"|`$]').hasMatch(safePath)) {
+      if (RegExp(r'''[;'"|`$]''').hasMatch(safePath)) {
         debugPrint('pdftotext skipped: unsafe characters in path');
         return '';
       }

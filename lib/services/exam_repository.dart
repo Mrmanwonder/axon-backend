@@ -3,10 +3,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart' as models_exam;
 import '../models/exam_event_model.dart';
 import 'local_database_service.dart';
-import 'board_exam_service.dart';
+import 'exam_service.dart';
 import 'exam_data_service.dart' as exam_data;
 import 'exam_zone_service.dart';
-import 'supabase_exam_dates_service.dart';
 import 'local_exam_dates_service.dart';
 
 import '../services/curriculum_catalog_service.dart';
@@ -17,7 +16,7 @@ class ExamRepository {
 
   static const String _userSubjectsKey = 'userSubjects';
 
-  static final BoardExamService _boardExamService = BoardExamService();
+  static final ExamService _examService = ExamService();
   static final exam_data.ExamDataService _examDataService =
       exam_data.ExamDataService();
 
@@ -209,7 +208,7 @@ class ExamRepository {
 
     print(
         'ExamRepository: Calling SupabaseExamDatesService (curriculum: $targetCurriculum, subjects: $targetSubjects)...');
-    var exams = await SupabaseExamDatesService.instance.fetchUserExamDates(
+    var exams = await ExamService().fetchUserExamDates(
       userId: _userId!,
       curriculum: targetCurriculum,
       subjects: targetSubjects,
@@ -231,7 +230,7 @@ class ExamRepository {
     if (exams.isEmpty && targetCodes.isNotEmpty) {
       print('ExamRepository: No exams from CSV, trying Firestore fallback...');
       try {
-        final firestoreData = await _boardExamService.getDeadlines(_userId!);
+        final firestoreData = await _examService.getDeadlines(_userId!);
         if (firestoreData.isNotEmpty) {
           print(
               'ExamRepository: Found ${firestoreData.length} exams in Firestore');
@@ -349,7 +348,7 @@ class ExamRepository {
     String? administrativeZone,
     bool persist = false,
   }) async {
-    return _boardExamService.fetchBoardDates(
+    return _examService.fetchBoardDates(
       board,
       subjects: subjects,
       year: year,
@@ -363,7 +362,7 @@ class ExamRepository {
     required List<models_exam.ExamEvent> events,
     required Map<String, dynamic> metrics,
   }) async {
-    return _boardExamService.generateSchedule(
+    return _examService.generateSchedule(
       events: events,
       metrics: metrics,
     );
@@ -376,7 +375,7 @@ class ExamRepository {
     String? series,
     String? administrativeZone,
   }) async {
-    return _boardExamService.syncOfficialDeadlines(
+    return _examService.syncOfficialDeadlines(
       board: board,
       subjects: subjects,
       year: year,

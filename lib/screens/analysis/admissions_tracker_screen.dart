@@ -386,7 +386,7 @@ class AdmissionsTrackerScreen extends ConsumerWidget {
                     Text(_formatDeadline(target.deadlineAt!),
                         style: GoogleFonts.googleSans(
                             color: _isDeadlineNear(target.deadlineAt!)
-                                ? const Color(0xFFEE6C4D)
+                                ? AxonColors.error
                                 : AxonColors.textTertiary,
                             fontSize: 10,
                             fontWeight: FontWeight.w500)),
@@ -437,7 +437,7 @@ class AdmissionsTrackerScreen extends ConsumerWidget {
                   width: 36,
                   height: 4,
                   decoration: BoxDecoration(
-                      color: Colors.white24,
+                      color: AxonColors.divider,
                       borderRadius: BorderRadius.circular(2))),
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
@@ -529,7 +529,7 @@ class AdmissionsTrackerScreen extends ConsumerWidget {
                     child: Center(
                         child: Text('CLOSE',
                             style: GoogleFonts.googleSans(
-                                color: Colors.white,
+                                color: AxonColors.textPrimary,
                                 fontSize: 12,
                                 letterSpacing: 1,
                                 fontWeight: FontWeight.w600))),
@@ -637,7 +637,7 @@ class AdmissionsTrackerScreen extends ConsumerWidget {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                        color: Colors.orange.withValues(alpha: 0.15),
+                        color: AxonColors.warning.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(6)),
                     child: Text('Blocked: ${node.blockerTitles.join(', ')}',
                         style: GoogleFonts.googleSans(
@@ -655,7 +655,7 @@ class AdmissionsTrackerScreen extends ConsumerWidget {
               Text(_formatDate(node.milestone.dueAt),
                   style: GoogleFonts.googleSans(
                       color: _isDeadlineNear(node.milestone.dueAt)
-                          ? const Color(0xFFEE6C4D)
+                          ? AxonColors.error
                           : AxonColors.textTertiary,
                       fontSize: 9,
                       fontWeight: FontWeight.w500)),
@@ -796,7 +796,7 @@ class AdmissionsTrackerScreen extends ConsumerWidget {
                       width: 36,
                       height: 4,
                       decoration: BoxDecoration(
-                          color: Colors.white24,
+                          color: AxonColors.divider,
                           borderRadius: BorderRadius.circular(2))),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
@@ -1006,7 +1006,7 @@ class AdmissionsTrackerScreen extends ConsumerWidget {
                           child: Center(
                               child: Text('GENERATE FIT',
                                   style: GoogleFonts.googleSans(
-                                      color: Colors.white,
+                                      color: AxonColors.textPrimary,
                                       fontSize: 12,
                                       letterSpacing: 1,
                                       fontWeight: FontWeight.w600))),
@@ -1117,7 +1117,7 @@ class AdmissionsTrackerScreen extends ConsumerWidget {
                       width: 36,
                       height: 4,
                       decoration: BoxDecoration(
-                          color: Colors.white24,
+                          color: AxonColors.divider,
                           borderRadius: BorderRadius.circular(2))),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
@@ -1309,7 +1309,7 @@ class AdmissionsTrackerScreen extends ConsumerWidget {
                           child: Center(
                               child: Text('SAVE',
                                   style: GoogleFonts.googleSans(
-                                      color: Colors.white,
+                                      color: AxonColors.textPrimary,
                                       fontSize: 12,
                                       letterSpacing: 1,
                                       fontWeight: FontWeight.w600))),
@@ -1329,18 +1329,18 @@ class AdmissionsTrackerScreen extends ConsumerWidget {
   Color _bucketColor(String bucket) {
     final l = bucket.toLowerCase();
     if (l == 'dream') return AxonColors.accent;
-    if (l == 'reach') return const Color(0xFFF59E0B);
-    if (l == 'safety') return const Color(0xFF10B981);
+    if (l == 'reach') return AxonColors.warning;
+    if (l == 'safety') return AxonColors.success;
     return AxonColors.textTertiary;
   }
 
   Color _getFitBandColor(String fitBand) {
     final lower = fitBand.toLowerCase();
     if (lower.contains('reach')) {
-      return const Color(0xFFEE6C4D);
+      return AxonColors.warning;
     }
     if (lower.contains('target') || lower.contains('match')) {
-      return const Color(0xFF06D6A0);
+      return AxonColors.success;
     }
     if (lower.contains('safety')) {
       return AxonColors.accent;
@@ -1351,10 +1351,10 @@ class AdmissionsTrackerScreen extends ConsumerWidget {
   Color _getStatusColor(String status) {
     final lower = status.toLowerCase();
     if (lower.contains('submitted') || lower.contains('complete')) {
-      return const Color(0xFF06D6A0);
+      return AxonColors.success;
     }
     if (lower.contains('rejected')) {
-      return const Color(0xFFEE6C4D);
+      return AxonColors.error;
     }
     if (lower.contains('waitlist')) {
       return AxonColors.warning;
@@ -1483,12 +1483,12 @@ class _UniversityDiscoveryPanelState extends State<_UniversityDiscoveryPanel> {
         // Search field
         Container(
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.04),
+            color: AxonColors.surfaceHighlight.withValues(alpha: 0.6),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
                 color: _searchFocus.hasFocus
                     ? AxonColors.accent
-                    : Colors.white.withValues(alpha: 0.1)),
+                    : AxonColors.divider.withValues(alpha: 0.5)),
           ),
           child: TextField(
             controller: _searchCtrl,
@@ -1604,15 +1604,15 @@ class _UniversityDiscoveryPanelState extends State<_UniversityDiscoveryPanel> {
     return Container(
       height: 44,
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
+        color: AxonColors.surfaceHighlight.withValues(alpha: 0.6),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+        border: Border.all(color: AxonColors.divider.withValues(alpha: 0.5)),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           value: value.isEmpty ? null : value,
           isExpanded: true,
-          dropdownColor: const Color(0xFF1A1D21),
+          dropdownColor: AxonColors.surfaceElevated,
           borderRadius: BorderRadius.circular(12),
           padding: const EdgeInsets.symmetric(horizontal: 12),
           hint: Text(label,
@@ -1741,13 +1741,13 @@ class _UniversityProgramCardState extends State<_UniversityProgramCard> {
                   height: 30,
                   decoration: BoxDecoration(
                     color: _showingBuckets
-                        ? Colors.white.withValues(alpha: 0.9)
-                        : Colors.black.withValues(alpha: 0.3),
+                        ? AxonColors.accent
+                        : AxonColors.surfaceElevated.withValues(alpha: 0.8),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Icon(
                       _showingBuckets ? Icons.close_rounded : Icons.add_rounded,
-                      color: _showingBuckets ? Colors.black87 : Colors.white,
+                      color: _showingBuckets ? AxonColors.textPrimary : AxonColors.textSecondary,
                       size: 18),
                 ),
               ),
@@ -1821,8 +1821,8 @@ class _UniversityProgramCardState extends State<_UniversityProgramCard> {
 
   Color _bucketColor2(String b) {
     if (b == 'Dream') return AxonColors.accent;
-    if (b == 'Reach') return const Color(0xFFF59E0B);
-    return const Color(0xFF10B981);
+    if (b == 'Reach') return AxonColors.warning;
+    return AxonColors.success;
   }
 
   void _showDetailSheet(BuildContext context) {
@@ -1870,10 +1870,10 @@ class _UniversityProgramCardState extends State<_UniversityProgramCard> {
                           width: 34,
                           height: 34,
                           decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.3),
+                              color: AxonColors.surfaceElevated.withValues(alpha: 0.8),
                               borderRadius: BorderRadius.circular(10)),
-                          child: const Icon(Icons.arrow_back_rounded,
-                              color: Colors.white, size: 18)),
+                          child: Icon(Icons.arrow_back_rounded,
+                              color: AxonColors.textPrimary, size: 18)),
                     )),
               ]),
             ),
@@ -2077,7 +2077,7 @@ class _MarksDashboardState extends State<_MarksDashboard> {
             hintStyle: GoogleFonts.googleSans(color: AxonColors.textTertiary),
             isDense: true,
             filled: true,
-            fillColor: Colors.white.withValues(alpha: 0.04),
+            fillColor: AxonColors.surfaceHighlight.withValues(alpha: 0.6),
             border:
                 OutlineInputBorder(borderRadius: BorderRadius.circular(12))));
   }
@@ -2294,7 +2294,7 @@ class FilterChipMenu extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.06),
+          color: AxonColors.surfaceHighlight.withValues(alpha: 0.6),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: AxonColors.divider)),
       child: DropdownButtonHideUnderline(
@@ -2373,7 +2373,7 @@ class _TrajectoryBanner extends StatelessWidget {
     final color = score >= 0.7
         ? AxonColors.success
         : score >= 0.4
-            ? const Color(0xFFF59E0B)
+            ? AxonColors.warning
             : AxonColors.error;
     return Container(
       padding: const EdgeInsets.all(16),
@@ -2395,11 +2395,11 @@ class _TrajectoryBanner extends StatelessWidget {
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('TRAJECTORY',
               style: GoogleFonts.googleSans(
-                  color: Colors.white38, fontSize: 9, letterSpacing: 1)),
+                  color: AxonColors.textTertiary, fontSize: 9, letterSpacing: 1)),
           const SizedBox(height: 4),
           Text('${(score * 100).round()}% Readiness',
               style: GoogleFonts.googleSans(
-                  color: Colors.white,
+                  color: AxonColors.textPrimary,
                   fontSize: 13,
                   fontWeight: FontWeight.w600)),
         ])),

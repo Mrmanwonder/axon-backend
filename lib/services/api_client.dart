@@ -37,9 +37,21 @@ class ApiResult<T> {
 
 class ApiClient {
   final Dio _dio;
-  final FirebaseAuth _auth;
+  final FirebaseAuth? _auth;
 
   static const Duration _requestTimeout = Duration(seconds: 45);
+
+  /// Shared Dio instance for services that don't need the full ApiClient wrapper.
+  static Dio get sharedDio => _sharedDio;
+  static final Dio _sharedDio = Dio(BaseOptions(
+    connectTimeout: const Duration(seconds: 15),
+    receiveTimeout: _requestTimeout,
+    sendTimeout: const Duration(seconds: 15),
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+  ));
 
   ApiClient({
     required String baseUrl,
@@ -64,6 +76,22 @@ class ApiClient {
       _RetryInterceptor(),
       _LoggingInterceptor(),
     ]);
+  }
+
+  /// Creates an ApiClient without Firebase auth interceptor.
+  ApiClient.anonymous({required String baseUrl})
+      : _dio = Dio(BaseOptions(
+          baseUrl: baseUrl,
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: _requestTimeout,
+          sendTimeout: const Duration(seconds: 15),
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+        )),
+        _auth = null {
+    _dio.interceptors.addAll([_RetryInterceptor(), _LoggingInterceptor()]);
   }
 
   Future<ApiResult<Map<String, dynamic>>> post(
@@ -210,7 +238,11 @@ class ApiClient {
   }
 
   Future<String> _getValidToken() async {
-    final user = _auth.currentUser;
+    final auth = _auth;
+    if (auth == null) {
+      throw ApiAuthException('Not authenticated');
+    }
+    final user = auth.currentUser;
     if (user == null) {
       throw ApiAuthException('Not authenticated');
     }
@@ -301,7 +333,7 @@ class ApiAuthException implements Exception {
 class _StreamDoneException implements Exception {}
 
 class _AuthInterceptor extends Interceptor {
-  final FirebaseAuth _auth;
+  final FirebaseAuth? _auth;
 
   _AuthInterceptor(this._auth, _);
 
@@ -312,7 +344,9 @@ class _AuthInterceptor extends Interceptor {
   ) async {
     if (options.path.startsWith('/api/')) {
       try {
-        final user = _auth.currentUser;
+        final auth = _auth;
+        if (auth == null) { handler.next(options); return; }
+        final user = auth.currentUser;
         if (user != null) {
           final token = await user.getIdToken();
           if (token != null && token.isNotEmpty) {

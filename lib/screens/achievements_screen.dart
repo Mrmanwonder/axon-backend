@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../services/achievement_service.dart' as svc;
+import '../theme/app_theme.dart';
 
 // ─── Badge Painters ───────────────────────────────────────────────────────────
 
@@ -85,8 +86,8 @@ class _AchievementBadgeState extends State<_AchievementBadge>
     final sz = widget.size;
     final colors = widget.unlocked
         ? [a.categoryColor, a.categoryColor.withValues(alpha: 0.6)]
-        : [const Color(0xFF2C2C2E), const Color(0xFF1C1C1E)];
-    final iconColor = widget.unlocked ? Colors.white : const Color(0xFF555555);
+        : [AxonColors.surfaceElevated, AxonColors.surfaceHighlight];
+    final iconColor = widget.unlocked ? AxonColors.textPrimary : AxonColors.textTertiary;
 
     final cat = a.category;
     final shape = cat == svc.BadgeCategory.streak
@@ -144,7 +145,7 @@ class _AchievementBadgeState extends State<_AchievementBadge>
     if (!widget.unlocked) {
       inner = ColorFiltered(
           colorFilter:
-              const ColorFilter.mode(Color(0xFF1C1C1E), BlendMode.saturation),
+              const ColorFilter.mode(Color(0xFF808080), BlendMode.saturation),
           child: inner);
     }
     return inner;
@@ -186,7 +187,7 @@ class _DetailSheet extends StatelessWidget {
       margin: const EdgeInsets.all(16),
       padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 24),
       decoration: BoxDecoration(
-        color: const Color(0xFF1C1C1E),
+        color: AxonColors.surfaceHighlight,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: const Color(0xFF3A3A3C), width: 0.5),
       ),
@@ -197,27 +198,25 @@ class _DetailSheet extends StatelessWidget {
               achievement: achievement, unlocked: unlocked, size: 88),
           const SizedBox(height: 16),
           Text(achievement.name,
-              style: const TextStyle(
-                  color: Colors.white,
+              style: TextStyle(
+                  color: AxonColors.textPrimary,
                   fontSize: 20,
                   fontWeight: FontWeight.w700),
               textAlign: TextAlign.center),
           const SizedBox(height: 6),
           Text(achievement.description,
-              style: const TextStyle(color: Color(0xFFAAAAAA), fontSize: 15),
+              style: TextStyle(color: AxonColors.textSecondary, fontSize: 15),
               textAlign: TextAlign.center),
           const SizedBox(height: 6),
           Text('+${achievement.xpReward} XP',
-              style: const TextStyle(
-                  color: Color(0xFF32D74B),
+              style: TextStyle(
+                  color: AxonColors.good,
                   fontSize: 13,
                   fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
           Text(unlocked ? 'Unlocked' : 'Not yet earned',
               style: TextStyle(
-                  color: unlocked
-                      ? const Color(0xFF32D74B)
-                      : const Color(0xFF888888),
+                  color: unlocked ? AxonColors.good : AxonColors.textTertiary,
                   fontSize: 13)),
           const SizedBox(height: 20),
           SizedBox(
@@ -225,14 +224,14 @@ class _DetailSheet extends StatelessWidget {
             child: TextButton(
               onPressed: () => Navigator.pop(context),
               style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFF2C2C2E),
+                backgroundColor: AxonColors.surfaceElevated,
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),
               ),
-              child: const Text('Done',
+              child: Text('Done',
                   style: TextStyle(
-                      color: Colors.white,
+                      color: AxonColors.textPrimary,
                       fontWeight: FontWeight.w600,
                       fontSize: 16)),
             ),
@@ -255,24 +254,24 @@ class _SummaryBar extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       decoration: BoxDecoration(
-        color: const Color(0xFF1C1C1E),
+        color: AxonColors.surfaceHighlight,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF3A3A3C), width: 0.5),
+        border: Border.all(color: AxonColors.divider, width: 0.5),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
           _Stat(label: 'Total', value: '$total'),
-          Container(width: 0.5, height: 32, color: const Color(0xFF3A3A3C)),
+          Container(width: 0.5, height: 32, color: AxonColors.divider),
           _Stat(
               label: 'Unlocked',
               value: '$unlocked',
-              color: const Color(0xFF32D74B)),
-          Container(width: 0.5, height: 32, color: const Color(0xFF3A3A3C)),
+              color: AxonColors.good),
+          Container(width: 0.5, height: 32, color: AxonColors.divider),
           _Stat(
               label: 'Remaining',
               value: '${total - unlocked}',
-              color: const Color(0xFF8E8E93)),
+              color: AxonColors.textTertiary),
         ],
       ),
     );
@@ -284,16 +283,18 @@ class _Stat extends StatelessWidget {
   final String value;
   final Color color;
   const _Stat(
-      {required this.label, required this.value, this.color = Colors.white});
+      {required this.label, required this.value, Color? color})
+      : color = color ?? const Color(0xFFFFFFFF); // Will be overridden at runtime
   @override
   Widget build(BuildContext context) {
     return Column(children: [
       Text(value,
           style: TextStyle(
-              color: color, fontSize: 22, fontWeight: FontWeight.w700)),
+              color: color == const Color(0xFFFFFFFF) ? AxonColors.textPrimary : color,
+              fontSize: 22, fontWeight: FontWeight.w700)),
       const SizedBox(height: 2),
       Text(label,
-          style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 12)),
+          style: TextStyle(color: AxonColors.textTertiary, fontSize: 12)),
     ]);
   }
 }
@@ -356,11 +357,11 @@ class _AchievementsScreenState extends State<AchievementsScreen>
     const brandBlue = Color(0xFF3A86FF); // Sleek UI Brand Accent Color
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: AxonColors.background,
       body: NestedScrollView(
         headerSliverBuilder: (context, inner) => [
           SliverAppBar(
-            backgroundColor: Colors.black,
+            backgroundColor: AxonColors.background,
             pinned: true,
             expandedHeight: 120,
             elevation: 0,
@@ -368,11 +369,11 @@ class _AchievementsScreenState extends State<AchievementsScreen>
               icon: const Icon(Icons.arrow_back_ios_new, color: brandBlue, size: 20),
               onPressed: () => Navigator.maybePop(context),
             ),
-            flexibleSpace: const FlexibleSpaceBar(
-              titlePadding: EdgeInsets.only(left: 20, bottom: 16),
+            flexibleSpace: FlexibleSpaceBar(
+              titlePadding: const EdgeInsets.only(left: 20, bottom: 16),
               title: Text('Achievements',
                   style: TextStyle(
-                      color: Colors.white,
+                      color: AxonColors.textPrimary,
                       fontSize: 26,
                       fontWeight: FontWeight.w800,
                       letterSpacing: -0.5)),
@@ -383,17 +384,17 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                 margin: const EdgeInsets.symmetric(horizontal: 16),
                 height: 36,
                 decoration: BoxDecoration(
-                    color: const Color(0xFF1C1C1E),
+                    color: AxonColors.surfaceHighlight,
                     borderRadius: BorderRadius.circular(10)),
                 child: TabBar(
                   controller: _tabController,
                   indicator: BoxDecoration(
-                      color: const Color(0xFF3A3A3C),
+                      color: AxonColors.surfaceElevated,
                       borderRadius: BorderRadius.circular(8)),
                   indicatorSize: TabBarIndicatorSize.tab,
                   dividerColor: Colors.transparent,
-                  labelColor: Colors.white,
-                  unselectedLabelColor: const Color(0xFF8E8E93),
+                  labelColor: AxonColors.textPrimary,
+                  unselectedLabelColor: AxonColors.textTertiary,
                   labelStyle: const TextStyle(
                       fontSize: 12, fontWeight: FontWeight.w600),
                   tabs: _tabs.map((t) => Tab(text: t)).toList(),
@@ -424,8 +425,8 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                         sliver: SliverToBoxAdapter(
                           child: Text(
                             idx == 0 ? 'All Achievements' : _tabs[idx],
-                            style: const TextStyle(
-                                color: Colors.white,
+                            style: TextStyle(
+                                color: AxonColors.textPrimary,
                                 fontSize: 18,
                                 fontWeight: FontWeight.w700,
                                 letterSpacing: -0.2),
@@ -457,7 +458,7 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                                       maxLines: 2,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
-                                          color: isUnlocked ? Colors.white : const Color(0xFF555555),
+                                          color: isUnlocked ? AxonColors.textPrimary : AxonColors.textTertiary,
                                           fontSize: 11,
                                           fontWeight: FontWeight.w500,
                                           height: 1.2)),
@@ -465,8 +466,8 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                                   Text(isUnlocked ? 'Unlocked' : 'Locked',
                                       style: TextStyle(
                                           color: isUnlocked
-                                              ? const Color(0xFF32D74B)
-                                              : const Color(0xFF555555),
+                                              ? AxonColors.good
+                                              : AxonColors.textTertiary,
                                           fontSize: 10,
                                           fontWeight: FontWeight.w600)),
                                 ],
@@ -480,8 +481,8 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                   );
                 }),
               )
-            : const Center(
-                child: CircularProgressIndicator(color: brandBlue)),
+            : Center(
+                child: CircularProgressIndicator(color: AxonColors.electricCyan)),
       ),
     );
   }

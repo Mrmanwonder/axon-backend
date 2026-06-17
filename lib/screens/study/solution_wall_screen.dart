@@ -37,7 +37,7 @@ class _SolutionWallScreenState extends State<SolutionWallScreen> {
   Widget build(BuildContext context) {
     final currentUid = FirebaseAuth.instance.currentUser?.uid ?? '';
     return Scaffold(
-      backgroundColor: const Color(0xFF050505),
+      backgroundColor: AxonColors.background,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         title: const Text('Solution Wall'),

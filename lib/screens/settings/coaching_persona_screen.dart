@@ -62,7 +62,7 @@ class _CoachingPersonaScreenState extends ConsumerState<CoachingPersonaScreen> {
         Text(
           subtitle,
           style: GoogleFonts.googleSans(
-            color: Colors.white,
+            color: AxonColors.textPrimary,
             fontSize: 28,
             fontWeight: FontWeight.w900,
           ),
@@ -206,7 +206,7 @@ class _CoachingPersonaScreenState extends ConsumerState<CoachingPersonaScreen> {
                   child: Text(
                     persona.displayName.toUpperCase(),
                     style: GoogleFonts.googleSans(
-                      color: Colors.white,
+                      color: AxonColors.textPrimary,
                       fontWeight: FontWeight.w800,
                       letterSpacing: 1.5,
                     ),

@@ -15,7 +15,9 @@ import 'secure_credentials_service.dart';
 class GoogleDriveDownloader {
   GoogleDriveDownloader._();
 
-  static final GoogleDriveDownloader instance = GoogleDriveDownloader._();
+  static GoogleDriveDownloader? mockInstance;
+  static GoogleDriveDownloader get instance => mockInstance ?? _realInstance;
+  static final GoogleDriveDownloader _realInstance = GoogleDriveDownloader._();
 
   static const String _prefsKey = 'gemma_model_downloaded';
   static const String _modelVersionKey = 'gemma_model_version';

@@ -22,19 +22,29 @@ class CatalogScreen extends StatefulWidget {
 
 class _CatalogScreenState extends State<CatalogScreen>
     with TickerProviderStateMixin {
+  CatalogController? _controller;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<CatalogController>().initialize(this);
+      if (mounted) {
+        _controller = context.read<CatalogController>();
+        _controller?.initialize(this);
+      }
     });
+  }
+
+  @override
+  void dispose() {
+    _controller?.reset();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF09090E),
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: Consumer<CatalogController>(
         builder: (context, ctrl, _) {
           return Stack(

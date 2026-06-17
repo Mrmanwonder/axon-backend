@@ -1,7 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 
+import 'api_client.dart';
 import 'firestore_service.dart';
 import 'backend_config.dart';
 
@@ -33,9 +34,10 @@ class BackendHealthService {
   void _startKeepAlive() {
     Future.doWhile(() async {
       try {
-        await http.get(Uri.parse('$_backendUrl/health')).timeout(
-              const Duration(seconds: 10),
-            );
+        await ApiClient.sharedDio.get(
+          '$_backendUrl/health',
+          options: Options(receiveTimeout: const Duration(seconds: 10)),
+        );
       } catch (e) {
         debugPrint('[BackendHealthService] Health check failed: $e');
       }

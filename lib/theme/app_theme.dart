@@ -13,6 +13,12 @@ class AxonBrandColors {
       Color(0xFF003B95); // Dark variant for hover/pressed states
   static const Color softSky =
       Color(0xFFEBF2FF); // Subtle backgrounds for badges
+
+  // Neon fluorescent brand colors for Obsidian-Neon (dark mode)
+  static const Color neonCyan = Color(0xFF00F0FF);
+  static const Color neonPurple = Color(0xFFBD00FF);
+  static const Color neonPink = Color(0xFFFF007F);
+  static const Color neonGreen = Color(0xFF39FF14);
 }
 
 class AxonThemeMode {
@@ -29,39 +35,73 @@ class AxonThemeMode {
 }
 
 class AxonAccentScheme {
-  final Color accent;
-  final Color accentBlue;
-  final Color accentPurple;
-  final Color warning;
+  final Color _accent;
+  final Color _accentBlue;
+  final Color _accentPurple;
+  final Color _warning;
+
+  final Color? _darkAccent;
+  final Color? _darkAccentBlue;
+  final Color? _darkAccentPurple;
+  final Color? _darkWarning;
 
   const AxonAccentScheme({
-    required this.accent,
-    required this.accentBlue,
-    required this.accentPurple,
-    required this.warning,
-  });
+    required Color accent,
+    required Color accentBlue,
+    required Color accentPurple,
+    required Color warning,
+    Color? darkAccent,
+    Color? darkAccentBlue,
+    Color? darkAccentPurple,
+    Color? darkWarning,
+  })  : _accent = accent,
+        _accentBlue = accentBlue,
+        _accentPurple = accentPurple,
+        _warning = warning,
+        _darkAccent = darkAccent,
+        _darkAccentBlue = darkAccentBlue,
+        _darkAccentPurple = darkAccentPurple,
+        _darkWarning = darkWarning;
 
-  static const Color _accent = AxonBrandColors.electricCyan;
+  Color get accent => AxonThemeMode.isDark ? (_darkAccent ?? _accent) : _accent;
+  Color get accentBlue =>
+      AxonThemeMode.isDark ? (_darkAccentBlue ?? _accentBlue) : _accentBlue;
+  Color get accentPurple =>
+      AxonThemeMode.isDark ? (_darkAccentPurple ?? _accentPurple) : _accentPurple;
+  Color get warning =>
+      AxonThemeMode.isDark ? (_darkWarning ?? _warning) : _warning;
 
   static const calm = AxonAccentScheme(
-    accent: _accent,
+    accent: AxonBrandColors.electricCyan,
     accentBlue: Color(0xFF6BA3FF),
     accentPurple: AxonBrandColors.deepMidnight,
     warning: Color(0xFF6B7280),
+    darkAccent: AxonBrandColors.neonGreen,
+    darkAccentBlue: AxonBrandColors.neonCyan,
+    darkAccentPurple: AxonBrandColors.neonPurple,
+    darkWarning: Color(0xFF6B7280),
   );
 
   static const focused = AxonAccentScheme(
-    accent: _accent,
+    accent: AxonBrandColors.electricCyan,
     accentBlue: Color(0xFF6BA3FF),
     accentPurple: AxonBrandColors.deepMidnight,
     warning: Color(0xFF9CA3AF),
+    darkAccent: AxonBrandColors.neonCyan,
+    darkAccentBlue: AxonBrandColors.neonPurple,
+    darkAccentPurple: AxonBrandColors.neonPink,
+    darkWarning: Color(0xFF9CA3AF),
   );
 
   static const urgent = AxonAccentScheme(
-    accent: _accent,
+    accent: AxonBrandColors.electricCyan,
     accentBlue: Color(0xFF6BA3FF),
     accentPurple: AxonBrandColors.deepMidnight,
     warning: Color(0xFF374151),
+    darkAccent: AxonBrandColors.neonPink,
+    darkAccentBlue: AxonBrandColors.neonPurple,
+    darkAccentPurple: AxonBrandColors.neonCyan,
+    darkWarning: Color(0xFF374151),
   );
 
   static AxonAccentScheme forDaysUntilExam(int? days) {
@@ -145,45 +185,45 @@ class SpatialColors {
 
   // Background - switches with theme (Onyx / Gallery profiles)
   static Color get background =>
-      _dark ? const Color(0xFF050505) : const Color(0xFFF8FAFC);
+      _dark ? const Color(0xFF020204) : const Color(0xFFEEF2FF);
   static Color get charcoal =>
-      _dark ? const Color(0xFF050505) : const Color(0xFFF8FAFC);
+      _dark ? const Color(0xFF020204) : const Color(0xFFEEF2FF);
   static Color get charcoalLight =>
-      _dark ? const Color(0xFF121214) : const Color(0xFFE2E8F0);
+      _dark ? const Color(0xFF0A0A10) : const Color(0x59FFFFFF); // 35% white in light mode
   static Color get charcoalElevated =>
-      _dark ? const Color(0xFF1C1C1E) : const Color(0xFFFFFFFF);
+      _dark ? const Color(0xFF161622) : const Color(0x80FFFFFF); // 50% white in light mode
 
   // Glass effect colors - dark physical glass, high blur, visible rim.
   static Color get glassWhite =>
-      _dark ? const Color(0xA60B0D0E) : const Color(0xCFFFFFFF);
+      _dark ? const Color(0xA60B0D0E) : const Color(0x59FFFFFF); // 35% white background for glass in light mode
   static Color get glassBorder =>
-      _dark ? const Color(0x33FFFFFF) : const Color(0x33FFFFFF);
+      _dark ? const Color(0x33FFFFFF) : const Color(0x9CFFFFFF); // 61% white border in light mode
   static Color get glassHighlight =>
-      _dark ? const Color(0x24FFFFFF) : const Color(0x66FFFFFF);
+      _dark ? const Color(0x24FFFFFF) : const Color(0xA6FFFFFF); // 65% white highlight
   static Color get glassLowlight =>
-      _dark ? const Color(0x66000000) : const Color(0x1A000000);
+      _dark ? const Color(0x66000000) : const Color(0x0F000000);
 
   // Glow intensity levels - Premium shadow (no pure black)
   static Color get glowSubtle =>
-      _dark ? const Color(0x0F0F172A) : const Color(0x0A000000);
+      _dark ? const Color(0x0F0F172A) : const Color(0x0D3A86FF); // 5% blue glow in light mode
   static Color get glowMedium =>
-      _dark ? const Color(0x140F172A) : const Color(0x14000000);
+      _dark ? const Color(0x140F172A) : const Color(0x143A86FF); // 8% blue glow in light mode
   static Color get glowStrong =>
-      _dark ? const Color(0x1F0F172A) : const Color(0x1F000000);
+      _dark ? const Color(0x1F0F172A) : const Color(0x1F3A86FF); // 12% blue glow in light mode
 
-  // Primary accent glow (Electric Cyan) - Subtle gradient feel
+  // Primary accent glow - Theme aware
   static Color get accentGlow =>
-      AxonBrandColors.electricCyan.withValues(alpha: 0.25);
+      (_dark ? AxonBrandColors.neonCyan : AxonBrandColors.electricCyan).withOpacity(0.25);
   static Color get accentGlowStrong =>
-      AxonBrandColors.electricCyan.withValues(alpha: 0.4);
+      (_dark ? AxonBrandColors.neonCyan : AxonBrandColors.electricCyan).withOpacity(0.4);
 
   // Warning/Alert glow - Polished colors
   static Color get warningGlow =>
-      const Color(0xFFF59E0B).withValues(alpha: 0.25);
+      (_dark ? AxonBrandColors.neonPurple : const Color(0xFFF59E0B)).withOpacity(0.25);
 
   // Success glow
   static Color get successGlow =>
-      const Color(0xFF10B981).withValues(alpha: 0.25);
+      (_dark ? AxonBrandColors.neonGreen : const Color(0xFF10B981)).withOpacity(0.25);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -193,69 +233,122 @@ class SpatialColors {
 
 class SpatialGlow {
   // Subtle glow for cards (lowest elevation)
-  static List<BoxShadow> subtle(Color color) => [
+  static List<BoxShadow> subtle(Color color) {
+    if (AxonThemeMode.isDark) {
+      return [
         BoxShadow(
-          color: color.withValues(alpha: 0.08),
+          color: color.withOpacity(0.2),
+          blurRadius: 4,
+          offset: const Offset(0, 1),
+        ),
+        BoxShadow(
+          color: color.withOpacity(0.08),
           blurRadius: 16,
           offset: const Offset(0, 4),
         ),
       ];
+    } else {
+      return [
+        BoxShadow(
+          color: color.withOpacity(0.05),
+          blurRadius: 16,
+          offset: const Offset(0, 4),
+        ),
+      ];
+    }
+  }
 
   // Medium glow for active/focused cards
-  static List<BoxShadow> medium(Color color) => [
+  static List<BoxShadow> medium(Color color) {
+    if (AxonThemeMode.isDark) {
+      return [
         BoxShadow(
-          color: color.withValues(alpha: 0.12),
+          color: color.withOpacity(0.25),
+          blurRadius: 8,
+          offset: const Offset(0, 2),
+        ),
+        BoxShadow(
+          color: color.withOpacity(0.12),
+          blurRadius: 32,
+          offset: const Offset(0, 8),
+        ),
+      ];
+    } else {
+      return [
+        BoxShadow(
+          color: color.withOpacity(0.08),
           blurRadius: 24,
           offset: const Offset(0, 8),
         ),
+      ];
+    }
+  }
+
+  // Strong glow for premium/featured cards (floating effect)
+  static List<BoxShadow> strong(Color color) {
+    if (AxonThemeMode.isDark) {
+      return [
         BoxShadow(
-          color: color.withValues(alpha: 0.06),
+          color: color.withOpacity(0.35),
+          blurRadius: 12,
+          offset: const Offset(0, 3),
+        ),
+        BoxShadow(
+          color: color.withOpacity(0.18),
+          blurRadius: 48,
+          offset: const Offset(0, 12),
+        ),
+      ];
+    } else {
+      return [
+        BoxShadow(
+          color: color.withOpacity(0.12),
+          blurRadius: 32,
+          offset: const Offset(0, 12),
+        ),
+      ];
+    }
+  }
+
+  // Extra strong for hero/premium elements
+  static List<BoxShadow> hero(Color color) {
+    if (AxonThemeMode.isDark) {
+      return [
+        BoxShadow(
+          color: color.withOpacity(0.4),
+          blurRadius: 16,
+          offset: const Offset(0, 4),
+        ),
+        BoxShadow(
+          color: color.withOpacity(0.25),
+          blurRadius: 64,
+          offset: const Offset(0, 16),
+        ),
+      ];
+    } else {
+      return [
+        BoxShadow(
+          color: color.withOpacity(0.16),
           blurRadius: 40,
           offset: const Offset(0, 16),
         ),
       ];
-
-  // Strong glow for premium/featured cards (floating effect)
-  static List<BoxShadow> strong(Color color) => [
-        BoxShadow(
-          color: color.withValues(alpha: 0.18),
-          blurRadius: 30,
-          offset: const Offset(0, 10),
-        ),
-        BoxShadow(
-          color: color.withValues(alpha: 0.10),
-          blurRadius: 50,
-          offset: const Offset(0, 20),
-        ),
-      ];
-
-  // Extra strong for hero/premium elements
-  static List<BoxShadow> hero(Color color) => [
-        BoxShadow(
-          color: color.withValues(alpha: 0.22),
-          blurRadius: 40,
-          offset: const Offset(0, 14),
-        ),
-        BoxShadow(
-          color: color.withValues(alpha: 0.14),
-          blurRadius: 60,
-          offset: const Offset(0, 28),
-        ),
-      ];
+    }
+  }
 
   // Glass morphism navbar shadow
   static List<BoxShadow> get glassDock => [
         BoxShadow(
           color: AxonThemeMode.isDark
-              ? Colors.black.withValues(alpha: 0.55)
-              : Colors.black.withValues(alpha: 0.18),
+              ? Colors.black.withOpacity(0.55)
+              : const Color(0xFF3A86FF).withOpacity(0.08),
           blurRadius: 34,
           offset: const Offset(0, 18),
         ),
         BoxShadow(
           color: AxonThemeMode.isDark
-              ? Colors.white.withValues(alpha: 0.05)
-              : Colors.white.withValues(alpha: 0.45),
+              ? Colors.white.withOpacity(0.05)
+              : Colors.white.withOpacity(0.65),
           blurRadius: 1,
           offset: const Offset(0, -1),
         ),
@@ -286,7 +379,7 @@ class SpatialContainer {
     EdgeInsets padding = const EdgeInsets.all(AppSpacing.s),
     double borderRadius = 24,
   }) {
-    final color = glowColor ?? Colors.white;
+    final color = glowColor ?? AxonColors.accent;
     final shadows = glowIntensity <= 0.5
         ? SpatialGlow.subtle(color)
         : glowIntensity <= 1.0
@@ -322,10 +415,10 @@ class SpatialContainer {
         child: Container(
           padding: padding,
           decoration: BoxDecoration(
-            color: SpatialColors.charcoalLight.withValues(alpha: 0.86),
+            color: SpatialColors.glassWhite,
             borderRadius: BorderRadius.circular(borderRadius),
             border: Border.all(
-              color: Colors.white.withValues(alpha: 0.08),
+              color: SpatialColors.glassBorder,
               width: 1.1,
             ),
             boxShadow: SpatialGlow.glassDock,
@@ -346,11 +439,11 @@ class AxonDuration {
 
 // Premium Light Theme - Gallery Profile
 class _AxonLight {
-  static const oxfordBlue = Color(0xFFF8FAFC); // Clean, airy base
-  static const oxfordBlueDark = Color(0xFFF1F5F9); // Slightly darker background
-  static const oxfordBlueLight = Color(0xFFE2E8F0); // Surface border
+  static const oxfordBlue = Color(0xFFFFF0F5); // Pastel Lavender Pink base
+  static const oxfordBlueDark = Color(0xFFEEF2FF); // Periwinkle base
+  static const oxfordBlueLight = Color(0xFFE0F2FE); // Soft Ice Blue base
   static const electricCyan = AxonBrandColors.electricCyan;
-  static const electricCyanGlow = Color(0x203A86FF);
+  static const electricCyanGlow = Color(0x1F3A86FF);
   static const electricCyanDim = Color(0xFF2563EB);
   static const slateGray = Color(0xFF475569); // Professional gray
   static const slateGrayLight = Color(0xFF94A3B8); // Muted gray
@@ -362,40 +455,38 @@ class _AxonLight {
   static const excellent = AxonBrandColors.electricCyan;
   static const excellentGlow = Color(0x203A86FF);
   static const surface = Color(0xFFFFFFFF); // Clean white cards
-  static const surfaceElevated = Color(0xFFF8FAFC); // Elevated cards
+  static const surfaceElevated = Color(0xFFFFFFFF); // Clean white cards
   static const surfaceHighlight = Color(0xFFF1F5F9); // Active states
   static const textPrimary = Color(0xFF0F172A); // Deep navy-black
   static const textSecondary = Color(0xFF475569); // Professional gray
   static const textTertiary = Color(0xFF94A3B8); // Hints, placeholders
-  static const divider = Color(0xFFE2E8F0); // Ultra-thin borders
+  static const divider = Color(0x1A0F172A); // Ultra-thin border (10% navy)
 }
 
 // Premium Dark Theme - Onyx Profile
 class _AxonDark {
-  static const oxfordBlue = Color(0xFF050505); // Nearly black, retains detail
-  static const oxfordBlueDark = Color(0xFF050505); // Background
-  static const oxfordBlueLight = Color(0xFF121214); // Primary card layer
-  static const electricCyan = AxonBrandColors.electricCyan;
-  static const electricCyanGlow = Color(0x333A86FF);
-  static const electricCyanDim = Color(0xFF2563EB);
+  static const oxfordBlue = Color(0xFF020204); // Pure obsidian black
+  static const oxfordBlueDark = Color(0xFF020204); // Background
+  static const oxfordBlueLight = Color(0xFF0A0A10); // Elevated primary card layer
+  static const electricCyan = AxonBrandColors.neonCyan;
+  static const electricCyanGlow = Color(0x3300F0FF);
+  static const electricCyanDim = Color(0xFF00B0CC);
   static const slateGray = Color(0xFF94A3B8); // Muted slate for body text
   static const slateGrayLight = Color(0xFF64748B); // Tertiary text
-  static const poor = Color(0xFFE11D48); // Rose-tinted red
-  static const poorGlow = Color(0x20E11D48);
-  static const belowAverage = Color(0xFFF59E0B); // Amber
-  static const average = Color(0xFFFBBF24); // Yellow
-  static const good = Color(0xFF10B981); // Emerald green
-  static const excellent = AxonBrandColors.electricCyan;
-  static const excellentGlow = Color(0x203A86FF);
-  static const surface = Color(0xFF050505); // Background
-  static const surfaceElevated = Color(0xFF121214); // Primary cards
-  static const surfaceHighlight =
-      Color(0xFF1C1C1E); // Modals, floating elements
+  static const poor = AxonBrandColors.neonPink; // Neon Pink for alert/error
+  static const poorGlow = Color(0x20FF007F);
+  static const belowAverage = Color(0xFFFFA500); // Vibrant orange
+  static const average = Color(0xFFFFFF00); // Neon yellow
+  static const good = AxonBrandColors.neonGreen; // Neon green
+  static const excellent = AxonBrandColors.neonCyan;
+  static const excellentGlow = Color(0x2000F0FF);
+  static const surface = Color(0xFF020204); // Background
+  static const surfaceElevated = Color(0xFF0A0A10); // Primary cards
+  static const surfaceHighlight = Color(0xFF161622); // Modals, floating elements
   static const textPrimary = Color(0xFFFFFFFF); // Crisp readability
-  static const textSecondary =
-      Color(0xFF94A3B8); // Muted slate (reduces eye strain)
+  static const textSecondary = Color(0xFF94A3B8); // Muted slate
   static const textTertiary = Color(0xFF64748B);
-  static const divider = Color(0xFF1E1E22); // Subtle divider
+  static const divider = Color(0xFF1E1E2C); // Subtle divider
 }
 
 class AxonColors {
@@ -456,8 +547,7 @@ class AxonColors {
   static Color get accentPrimary => accent;
 
   // Enhanced vibrant accent colors
-  static Color get accent =>
-      _dark ? vibrantBlue : AxonAccentPalette.scheme.accent;
+  static Color get accent => AxonAccentPalette.scheme.accent;
   static Color get accentBlue => AxonAccentPalette.scheme.accentBlue;
   static Color get accentPurple => AxonAccentPalette.scheme.accentPurple;
   static const Color accentPink = Color(0xFFF43F5E);
@@ -470,27 +560,27 @@ class AxonColors {
   static const Color info = AxonBrandColors.electricCyan; // Brand primary
 
   // Glow colors
-  static Color get accentGlow => accent.withValues(alpha: 0.25);
-  static Color get warningGlow => warning.withValues(alpha: 0.25);
-  static Color get errorGlow => error.withValues(alpha: 0.25);
+  static Color get accentGlow => accent.withOpacity(0.25);
+  static Color get warningGlow => warning.withOpacity(0.25);
+  static Color get errorGlow => error.withOpacity(0.25);
 
   static Color performanceColor(double score) {
-    if (score < 0.3) return error;
+    if (score < 0.3) return poor;
     if (score < 0.5) return belowAverage;
     if (score < 0.7) return average;
     if (score < 0.85) return good;
-    return accent;
+    return excellent;
   }
 
   static Color performanceGlow(double score) {
-    return performanceColor(score).withValues(alpha: 0.2);
+    return performanceColor(score).withOpacity(0.2);
   }
 
   static String performanceLabel(double score) {
     if (score < 0.3) return 'Critical';
     if (score < 0.5) return 'Sub-optimal';
     if (score < 0.7) return 'Stable';
-    if (score < 0.85) return 'Optimal';
+    if (score < 0.9) return 'Optimal';
     return 'Peak Performance';
   }
 }
@@ -502,58 +592,62 @@ class AxonTheme {
       brightness: Brightness.light,
       scaffoldBackgroundColor: _AxonLight.oxfordBlueDark,
       colorScheme: ColorScheme.light(
-        primary: AxonColors.accent,
+        primary: _AxonLight.electricCyan,
         onPrimary: Colors.white,
         secondary: _AxonLight.poor,
         surface: _AxonLight.surface,
         onSurface: _AxonLight.textPrimary,
         error: _AxonLight.poor,
-        outline: AxonColors.divider,
+        outline: _AxonLight.divider,
       ),
-      textTheme: _buildTextTheme(),
+      textTheme: _buildTextTheme(
+        primary: _AxonLight.textPrimary,
+        secondary: _AxonLight.textSecondary,
+        tertiary: _AxonLight.textTertiary,
+      ),
       appBarTheme: AppBarTheme(
         backgroundColor: _AxonLight.oxfordBlueDark,
         elevation: 0,
         centerTitle: false,
         titleTextStyle: GoogleFonts.inter(
-          color: AxonColors.textPrimary,
+          color: _AxonLight.textPrimary,
           fontSize: 20,
           fontWeight: FontWeight.w700,
           letterSpacing: -0.2,
         ),
-        iconTheme: IconThemeData(color: AxonColors.textPrimary),
+        iconTheme: IconThemeData(color: _AxonLight.textPrimary),
       ),
       cardTheme: CardThemeData(
         color: _AxonLight.surfaceElevated,
         elevation: 0,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(color: AxonColors.divider, width: 1),
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: _AxonLight.divider, width: 0.5),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: _AxonLight.surface,
+        fillColor: const Color(0x1FEEF2FF), // Soft translucent periwinkle background
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: AxonColors.divider),
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: _AxonLight.divider),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: AxonColors.divider),
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: _AxonLight.divider),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: AxonColors.accent, width: 1.5),
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: _AxonLight.electricCyan, width: 1.5),
         ),
-        labelStyle: GoogleFonts.inter(color: AxonColors.textSecondary),
-        hintStyle: GoogleFonts.inter(color: AxonColors.textTertiary),
+        labelStyle: GoogleFonts.inter(color: _AxonLight.textSecondary),
+        hintStyle: GoogleFonts.inter(color: _AxonLight.textTertiary),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: AxonColors.accent,
+          backgroundColor: _AxonLight.electricCyan,
           foregroundColor: Colors.white,
           elevation: 0,
           padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
@@ -569,8 +663,8 @@ class AxonTheme {
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          foregroundColor: AxonColors.textPrimary,
-          side: BorderSide(color: AxonColors.divider, width: 1),
+          foregroundColor: _AxonLight.textPrimary,
+          side: BorderSide(color: _AxonLight.divider, width: 1),
           padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -584,6 +678,8 @@ class AxonTheme {
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
+          backgroundColor: _AxonLight.electricCyan,
+          foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -597,18 +693,20 @@ class AxonTheme {
       ),
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          foregroundColor: _AxonLight.electricCyan,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
           shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           textStyle: GoogleFonts.inter(
             fontWeight: FontWeight.w600,
             fontSize: 16,
             letterSpacing: 0,
           ),
+          minimumSize: const Size(0, 48),
         ),
       ),
       dividerTheme: DividerThemeData(
-        color: AxonColors.divider,
+        color: _AxonLight.divider,
         thickness: 1,
       ),
       canvasColor: _AxonLight.oxfordBlueDark,
@@ -616,8 +714,8 @@ class AxonTheme {
         backgroundColor: _AxonLight.surfaceElevated,
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(color: _AxonLight.divider),
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: _AxonLight.divider, width: 0.5),
         ),
       ),
       bottomSheetTheme: const BottomSheetThemeData(
@@ -629,15 +727,15 @@ class AxonTheme {
       ),
       bottomNavigationBarTheme: BottomNavigationBarThemeData(
         backgroundColor: _AxonLight.surface,
-        selectedItemColor: AxonColors.accent,
-        unselectedItemColor: AxonColors.textTertiary,
+        selectedItemColor: _AxonLight.electricCyan,
+        unselectedItemColor: _AxonLight.textTertiary,
         type: BottomNavigationBarType.fixed,
         elevation: 0,
       ),
       sliderTheme: SliderThemeData(
-        thumbColor: AxonColors.accent,
-        activeTrackColor: AxonColors.accent,
-        inactiveTrackColor: AxonColors.divider,
+        thumbColor: _AxonLight.electricCyan,
+        activeTrackColor: _AxonLight.electricCyan,
+        inactiveTrackColor: _AxonLight.divider,
         trackHeight: 4,
         thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 12),
         overlayShape: RoundSliderOverlayShape(overlayRadius: 20),
@@ -646,102 +744,106 @@ class AxonTheme {
     );
   }
 
-  static TextTheme _buildTextTheme() {
+  static TextTheme _buildTextTheme({
+    required Color primary,
+    required Color secondary,
+    required Color tertiary,
+  }) {
     return TextTheme(
       displayLarge: GoogleFonts.inter(
-        color: AxonColors.textPrimary,
+        color: primary,
         fontSize: 32,
         fontWeight: FontWeight.w700,
         letterSpacing: -0.4,
         height: 1.1,
       ),
       displayMedium: GoogleFonts.inter(
-        color: AxonColors.textPrimary,
+        color: primary,
         fontSize: 28,
         fontWeight: FontWeight.w700,
         letterSpacing: -0.3,
         height: 1.15,
       ),
       displaySmall: GoogleFonts.inter(
-        color: AxonColors.textPrimary,
+        color: primary,
         fontSize: 24,
         fontWeight: FontWeight.w700,
         letterSpacing: -0.2,
         height: 1.2,
       ),
       headlineLarge: GoogleFonts.inter(
-        color: AxonColors.textPrimary,
+        color: primary,
         fontSize: 32,
         fontWeight: FontWeight.w700,
         letterSpacing: -0.4,
         height: 1.25,
       ),
       headlineMedium: GoogleFonts.inter(
-        color: AxonColors.textPrimary,
+        color: primary,
         fontSize: 28,
         fontWeight: FontWeight.w700,
         letterSpacing: -0.3,
         height: 1.3,
       ),
       headlineSmall: GoogleFonts.inter(
-        color: AxonColors.textPrimary,
+        color: primary,
         fontSize: 24,
         fontWeight: FontWeight.w700,
         letterSpacing: -0.2,
         height: 1.35,
       ),
       titleLarge: GoogleFonts.inter(
-        color: AxonColors.textPrimary,
+        color: primary,
         fontSize: 20,
         fontWeight: FontWeight.w700,
         letterSpacing: 0,
       ),
       titleMedium: GoogleFonts.inter(
-        color: AxonColors.textPrimary,
+        color: primary,
         fontSize: 16,
         fontWeight: FontWeight.w600,
         letterSpacing: 0.1,
       ),
       titleSmall: GoogleFonts.inter(
-        color: AxonColors.textSecondary,
+        color: secondary,
         fontSize: 14,
         fontWeight: FontWeight.w600,
         letterSpacing: 0.1,
       ),
       bodyLarge: GoogleFonts.inter(
-        color: AxonColors.textPrimary,
+        color: primary,
         fontSize: 16,
         fontWeight: FontWeight.w400,
         height: 1.5,
         letterSpacing: 0,
       ),
       bodyMedium: GoogleFonts.inter(
-        color: AxonColors.textSecondary,
+        color: secondary,
         fontSize: 14,
         fontWeight: FontWeight.w400,
         height: 1.5,
         letterSpacing: 0.1,
       ),
       bodySmall: GoogleFonts.inter(
-        color: AxonColors.textTertiary,
+        color: tertiary,
         fontSize: 12,
         fontWeight: FontWeight.w400,
         height: 1.4,
       ),
       labelLarge: GoogleFonts.inter(
-        color: AxonColors.textPrimary,
+        color: primary,
         fontSize: 14,
         fontWeight: FontWeight.w700,
         letterSpacing: 0.2,
       ),
       labelMedium: GoogleFonts.inter(
-        color: AxonColors.textTertiary,
+        color: tertiary,
         fontSize: 12,
         fontWeight: FontWeight.w600,
         letterSpacing: 0.4,
       ),
       labelSmall: GoogleFonts.inter(
-        color: AxonColors.textTertiary,
+        color: tertiary,
         fontSize: 11,
         fontWeight: FontWeight.w600,
         letterSpacing: 0.3,
@@ -753,17 +855,21 @@ class AxonTheme {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
-      scaffoldBackgroundColor: AxonColors.background,
+      scaffoldBackgroundColor: _AxonDark.oxfordBlueDark,
       colorScheme: ColorScheme.dark(
-        primary: AxonColors.electricCyan,
+        primary: _AxonDark.electricCyan,
         onPrimary: Colors.black,
         secondary: _AxonDark.poor,
         surface: _AxonDark.surface,
         onSurface: _AxonDark.textPrimary,
         error: _AxonDark.poor,
-        outline: AxonColors.divider,
+        outline: _AxonDark.divider,
       ),
-      textTheme: _buildTextTheme(),
+      textTheme: _buildTextTheme(
+        primary: _AxonDark.textPrimary,
+        secondary: _AxonDark.textSecondary,
+        tertiary: _AxonDark.textTertiary,
+      ),
       appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -777,87 +883,124 @@ class AxonTheme {
         iconTheme: IconThemeData(color: _AxonDark.textPrimary),
       ),
       cardTheme: CardThemeData(
-        color: AxonColors.surface,
+        color: _AxonDark.surface,
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
-          side: BorderSide(color: AxonColors.divider, width: 0.5),
+          side: BorderSide(color: _AxonDark.divider, width: 0.5),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: _AxonDark.surface,
         contentPadding:
-            const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(16),
           borderSide: BorderSide(color: _AxonDark.divider),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(16),
           borderSide: BorderSide(color: _AxonDark.divider),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(20),
-          borderSide: BorderSide(color: AxonColors.accent, width: 1.5),
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: _AxonDark.electricCyan, width: 1.5),
         ),
         labelStyle: GoogleFonts.inter(color: _AxonDark.textSecondary),
         hintStyle: GoogleFonts.inter(color: _AxonDark.textTertiary),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: AxonColors.accent,
-          foregroundColor: Colors.white,
+          backgroundColor: _AxonDark.electricCyan,
+          foregroundColor: Colors.black,
           elevation: 0,
-          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 20),
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
           shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           textStyle: GoogleFonts.inter(
             fontWeight: FontWeight.w700,
             fontSize: 16,
-            letterSpacing: -0.1,
-            height: 1.0,
+            letterSpacing: 0,
           ),
+          minimumSize: const Size(0, 48),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           foregroundColor: _AxonDark.textPrimary,
-          side: BorderSide(color: _AxonDark.divider, width: 1.5),
-          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 20),
+          side: BorderSide(color: _AxonDark.divider, width: 1.0),
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
           shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           textStyle: GoogleFonts.inter(
             fontWeight: FontWeight.w600,
             fontSize: 16,
-            letterSpacing: -0.1,
-            height: 1.0,
+            letterSpacing: 0,
           ),
+          minimumSize: const Size(0, 48),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: _AxonDark.electricCyan,
+          foregroundColor: Colors.black,
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          textStyle: GoogleFonts.inter(
+            fontWeight: FontWeight.w700,
+            fontSize: 16,
+            letterSpacing: 0,
+          ),
+          minimumSize: const Size(0, 48),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          foregroundColor: _AxonDark.electricCyan,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          textStyle: GoogleFonts.inter(
+            fontWeight: FontWeight.w600,
+            fontSize: 16,
+            letterSpacing: 0,
+          ),
+          minimumSize: const Size(0, 48),
         ),
       ),
       dividerTheme: DividerThemeData(
         color: _AxonDark.divider,
         thickness: 1,
       ),
+      canvasColor: _AxonDark.oxfordBlueDark,
       dialogTheme: DialogThemeData(
         backgroundColor: _AxonDark.surfaceElevated,
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-          side: BorderSide(color: _AxonDark.divider),
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: _AxonDark.divider, width: 0.5),
+        ),
+      ),
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: _AxonDark.surfaceElevated,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
         ),
       ),
       bottomNavigationBarTheme: BottomNavigationBarThemeData(
         backgroundColor: _AxonDark.surface,
-        selectedItemColor: AxonColors.accent,
+        selectedItemColor: _AxonDark.electricCyan,
         unselectedItemColor: _AxonDark.textTertiary,
         type: BottomNavigationBarType.fixed,
         elevation: 0,
       ),
       sliderTheme: SliderThemeData(
-        thumbColor: AxonColors.accent,
-        activeTrackColor: AxonColors.accent,
-        inactiveTrackColor: AxonColors.divider,
+        thumbColor: _AxonDark.electricCyan,
+        activeTrackColor: _AxonDark.electricCyan,
+        inactiveTrackColor: _AxonDark.divider,
         trackHeight: 4,
         thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 12),
         overlayShape: RoundSliderOverlayShape(overlayRadius: 20),
@@ -871,8 +1014,8 @@ class AxonDecor {
   static List<BoxShadow> get axonShadow => [
         BoxShadow(
           color: AxonThemeMode.isDark
-              ? Colors.black.withValues(alpha: 0.3)
-              : Colors.black.withValues(alpha: 0.04),
+              ? Colors.black.withOpacity(0.3)
+              : Colors.black.withOpacity(0.04),
           offset: const Offset(0, 2),
           blurRadius: 6,
           spreadRadius: -2,
@@ -882,8 +1025,8 @@ class AxonDecor {
   static List<BoxShadow> get subtleShadow => [
         BoxShadow(
           color: AxonThemeMode.isDark
-              ? Colors.black.withValues(alpha: 0.4)
-              : Colors.black.withValues(alpha: 0.03),
+              ? Colors.black.withOpacity(0.4)
+              : Colors.black.withOpacity(0.03),
           offset: const Offset(0, 1),
           blurRadius: 4,
         ),
@@ -891,7 +1034,7 @@ class AxonDecor {
 
   static List<BoxShadow> glowShadow(Color color) => [
         BoxShadow(
-          color: color.withValues(alpha: 0.28),
+          color: color.withOpacity(0.28),
           blurRadius: 20,
           offset: const Offset(0, 0),
           spreadRadius: 2,
@@ -914,64 +1057,92 @@ class AxonGradients {
         end: Alignment.bottomCenter,
         colors: isDark
             ? [
-                const Color(0xFF050505),
-                const Color(0xFF050505),
-                const Color(0xFF121214),
+                const Color(0xFF020204),
+                const Color(0xFF020204),
+                const Color(0xFF0A0A10),
               ]
             : [
-                const Color(0xFFF8FAFC),
-                const Color(0xFFF1F5F9),
-                const Color(0xFFE2E8F0),
+                const Color(0xFFFFF0F5),
+                const Color(0xFFEEF2FF),
+                const Color(0xFFE0F2FE),
               ],
         stops: const [0.0, 0.5, 1.0],
       );
 
-  // Subtle gradient from #3A86FF to #2563EB (adds "weight" to buttons)
+  // Subtle gradient from primary accent to darker version (adds "weight" to buttons)
   static LinearGradient get cyanGradient => LinearGradient(
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
-        colors: [
-          AxonBrandColors.electricCyan,
-          const Color(0xFF2563EB),
-        ],
+        colors: AxonThemeMode.isDark
+            ? [
+                AxonBrandColors.neonCyan,
+                const Color(0xFF00B0CC),
+              ]
+            : [
+                AxonBrandColors.electricCyan,
+                const Color(0xFF2563EB),
+              ],
       );
 
   static LinearGradient get accentGradient => LinearGradient(
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
-        colors: [
-          AxonBrandColors.electricCyan,
-          const Color(0xFF2563EB),
-          AxonBrandColors.deepMidnight,
-        ],
+        colors: AxonThemeMode.isDark
+            ? [
+                AxonBrandColors.neonCyan,
+                AxonBrandColors.neonPurple,
+                AxonBrandColors.neonPink,
+              ]
+            : [
+                AxonBrandColors.electricCyan,
+                const Color(0xFF2563EB),
+                AxonBrandColors.deepMidnight,
+              ],
       );
 
   // Polished functional gradients
   static LinearGradient get successGradient => LinearGradient(
-        colors: [const Color(0xFF10B981), const Color(0xFF059669)],
+        colors: AxonThemeMode.isDark
+            ? [AxonBrandColors.neonGreen, const Color(0xFF00CC66)]
+            : [const Color(0xFF10B981), const Color(0xFF059669)],
       );
 
   static LinearGradient get errorGradient => LinearGradient(
-        colors: [const Color(0xFFE11D48), const Color(0xFFBE123C)],
+        colors: AxonThemeMode.isDark
+            ? [AxonBrandColors.neonPink, const Color(0xFFCC0066)]
+            : [const Color(0xFFE11D48), const Color(0xFFBE123C)],
       );
 
   static LinearGradient get warningGradient => LinearGradient(
-        colors: [const Color(0xFFF59E0B), const Color(0xFFB45309)],
+        colors: AxonThemeMode.isDark
+            ? [const Color(0xFFFFA500), const Color(0xFFCC8400)]
+            : [const Color(0xFFF59E0B), const Color(0xFFB45309)],
       );
 
   static LinearGradient get excellentGradient => LinearGradient(
-        colors: [AxonBrandColors.electricCyan, const Color(0xFF2563EB)],
+        colors: AxonThemeMode.isDark
+            ? [AxonBrandColors.neonCyan, const Color(0xFF00B0CC)]
+            : [AxonBrandColors.electricCyan, const Color(0xFF2563EB)],
       );
 
   static LinearGradient get purpleGradient => LinearGradient(
-        colors: [AxonBrandColors.electricCyan, AxonBrandColors.deepMidnight],
+        colors: AxonThemeMode.isDark
+            ? [AxonBrandColors.neonCyan, AxonBrandColors.neonPurple]
+            : [AxonBrandColors.electricCyan, AxonBrandColors.deepMidnight],
+      );
+
+  static LinearGradient get averageGradient => LinearGradient(
+        colors: AxonThemeMode.isDark
+            ? [const Color(0xFFFFFF00), const Color(0xFFD4D400)]
+            : [const Color(0xFFFBBF24), const Color(0xFFF59E0B)],
       );
 
   static LinearGradient performanceGradient(double score) {
     if (score < 0.3) return errorGradient;
     if (score < 0.5) return warningGradient;
-    if (score < 0.8) return excellentGradient;
-    return accentGradient;
+    if (score < 0.7) return averageGradient;
+    if (score < 0.85) return successGradient;
+    return excellentGradient;
   }
 
   static LinearGradient get poorGradient => errorGradient;

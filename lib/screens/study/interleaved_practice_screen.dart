@@ -99,12 +99,12 @@ class _InterleavedPracticeScreenState
     }
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: AxonColors.background,
       appBar: AppBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AxonColors.background,
         leading: IconButton(
           onPressed: () => popOrGo(context, '/timer'),
-          icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+          icon: Icon(Icons.arrow_back_rounded, color: AxonColors.textPrimary),
         ),
         title: Row(
           children: [
@@ -113,7 +113,7 @@ class _InterleavedPracticeScreenState
             Text(
               'Interleaved Practice',
               style: GoogleFonts.inter(
-                  color: Colors.white, fontWeight: FontWeight.bold),
+                  color: AxonColors.textPrimary, fontWeight: FontWeight.bold),
             ),
           ],
         ),
@@ -175,7 +175,7 @@ class _InterleavedPracticeScreenState
           const SizedBox(height: 12),
           Text(
             'Mixing different topics during practice improves your ability to discriminate between concepts and transfer learning to new situations.',
-            style: TextStyle(color: Colors.white70, height: 1.5),
+            style: TextStyle(color: AxonColors.textSecondary, height: 1.5),
           ),
           const SizedBox(height: 16),
           Row(
@@ -208,12 +208,12 @@ class _InterleavedPracticeScreenState
         Text(
           'Select Subjects',
           style: TextStyle(
-              color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+              color: AxonColors.textPrimary, fontSize: 18, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
         Text(
           'Choose at least 2 subjects to interleave',
-          style: TextStyle(color: Colors.white54, fontSize: 14),
+          style: TextStyle(color: AxonColors.textSecondary, fontSize: 14),
         ),
         const SizedBox(height: 16),
         Wrap(
@@ -284,19 +284,19 @@ class _InterleavedPracticeScreenState
         Text(
           'Recent Sessions',
           style: TextStyle(
-              color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+              color: AxonColors.textPrimary, fontSize: 18, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 16),
         ..._sessions.take(3).map((session) => Container(
               margin: const EdgeInsets.only(bottom: 12),
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.05),
+                color: AxonColors.textPrimary.withValues(alpha: 0.05),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
                 children: [
-                  Icon(Icons.history, color: Colors.white38),
+                  Icon(Icons.history, color: AxonColors.textTertiary),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -305,18 +305,18 @@ class _InterleavedPracticeScreenState
                         Text(
                           session.subjects.join(", "),
                           style: TextStyle(
-                              color: Colors.white, fontWeight: FontWeight.w600),
+                              color: AxonColors.textPrimary, fontWeight: FontWeight.w600),
                         ),
                         Text(
                           '${session.totalProblems} problems',
-                          style: TextStyle(color: Colors.white38, fontSize: 12),
+                          style: TextStyle(color: AxonColors.textTertiary, fontSize: 12),
                         ),
                       ],
                     ),
                   ),
                   Text(
                     _formatDate(session.startedAt),
-                    style: TextStyle(color: Colors.white54, fontSize: 12),
+                    style: TextStyle(color: AxonColors.textSecondary, fontSize: 12),
                   ),
                 ],
               ),
@@ -329,7 +329,7 @@ class _InterleavedPracticeScreenState
     if (_currentProblems.isEmpty ||
         _currentProblemIndex >= _currentProblems.length) {
       return Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: AxonColors.background,
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -337,10 +337,10 @@ class _InterleavedPracticeScreenState
               Icon(Icons.celebration, color: Color(0xFFA8E6CF), size: 64),
               const SizedBox(height: 16),
               Text('Session Complete!',
-                  style: TextStyle(color: Colors.white, fontSize: 24)),
+                  style: TextStyle(color: AxonColors.textPrimary, fontSize: 24)),
               const SizedBox(height: 8),
               Text('You practiced $_currentProblemIndex problems',
-                  style: TextStyle(color: Colors.white54)),
+                  style: TextStyle(color: AxonColors.textSecondary)),
               const SizedBox(height: 24),
               ElevatedButton(
                 onPressed: _endSession,
@@ -364,16 +364,16 @@ class _InterleavedPracticeScreenState
     final problem = _currentProblems[_currentProblemIndex];
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: AxonColors.background,
       appBar: AppBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AxonColors.background,
         leading: IconButton(
           onPressed: _endSession,
-          icon: Icon(Icons.close, color: Colors.white54),
+          icon: Icon(Icons.close, color: AxonColors.textSecondary),
         ),
         title: Text(
           '${_currentProblemIndex + 1} / ${_currentProblems.length}',
-          style: TextStyle(color: Colors.white),
+          style: TextStyle(color: AxonColors.textPrimary),
         ),
         actions: [
           Container(
@@ -407,12 +407,12 @@ class _InterleavedPracticeScreenState
                       padding: const EdgeInsets.symmetric(
                           horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.05),
+                        color: AxonColors.textPrimary.withValues(alpha: 0.05),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
                         problem.topic,
-                        style: TextStyle(color: Colors.white54, fontSize: 12),
+                        style: TextStyle(color: AxonColors.textSecondary, fontSize: 12),
                       ),
                     ),
                   const SizedBox(height: 24),
@@ -434,20 +434,20 @@ class _InterleavedPracticeScreenState
                                 problem.question,
                                 textAlign: TextAlign.center,
                                 style: GoogleFonts.inter(
-                                  color: Colors.white,
+                                  color: AxonColors.textPrimary,
                                   fontSize: 20,
                                 ),
                               ),
                               const SizedBox(height: 24),
                               Text(
                                 'Tap to reveal',
-                                style: TextStyle(color: Colors.white38),
+                                style: TextStyle(color: AxonColors.textTertiary),
                               ),
                             ] else ...[
                               Text(
                                 problem.question,
                                 style: TextStyle(
-                                    color: Colors.white54, fontSize: 14),
+                                    color: AxonColors.textSecondary, fontSize: 14),
                               ),
                               const SizedBox(height: 24),
                               Container(
@@ -470,7 +470,7 @@ class _InterleavedPracticeScreenState
                                   problem.explanation!,
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
-                                      color: Colors.white54, fontSize: 14),
+                                      color: AxonColors.textSecondary, fontSize: 14),
                                 ),
                               ],
                             ],
@@ -498,13 +498,13 @@ class _InterleavedPracticeScreenState
                     },
                     style: OutlinedButton.styleFrom(
                       side: BorderSide(
-                          color: Colors.white.withValues(alpha: 0.3)),
+                          color: AxonColors.textPrimary.withValues(alpha: 0.3)),
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12)),
                     ),
-                    child: const Text('Skip',
-                        style: TextStyle(color: Colors.white54)),
+                    child: Text('Skip',
+                        style: TextStyle(color: AxonColors.textSecondary)),
                   ),
                 ),
                 const SizedBox(width: 16),

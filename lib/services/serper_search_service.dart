@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'board_exam_service.dart';
+import 'exam_service.dart';
 
 class SerperSearchService {
   SerperSearchService._();
@@ -11,7 +11,7 @@ class SerperSearchService {
 
   final http.Client _client = http.Client();
 
-  String get _backendUrl => BoardExamService.backendUrl;
+  String get _backendUrl => ExamService.backendUrl;
 
   Future<List<SerperSearchResult>> _proxySearch(
       Map<String, dynamic> body) async {

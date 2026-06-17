@@ -762,14 +762,7 @@ class _StudyLockSetupScreenState extends ConsumerState<StudyLockSetupScreen> {
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              const Color(0xFF0A0A0A),
-              const Color(0xFF050505),
-            ],
-          ),
+          gradient: AxonGradients.backgroundGradient,
         ),
         child: SafeArea(
           child: Column(

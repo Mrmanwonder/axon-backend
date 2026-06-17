@@ -1,42 +1,42 @@
-import 'dart:convert';
-
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:http/http.dart' as http;
-
 import '../models/command_word_drill_models.dart';
+import 'api_client.dart';
 import 'backend_config.dart';
 
 class CommandWordDrillService {
-  CommandWordDrillService({http.Client? client})
-      : _client = client ?? http.Client();
+  CommandWordDrillService({ApiClient? apiClient})
+      : _apiClient = apiClient ?? ApiClient(baseUrl: BackendConfig.baseUrl);
 
-  static const String _backendUrl = BackendConfig.baseUrl;
-  final http.Client _client;
+  final ApiClient _apiClient;
 
   Future<CommandWordDrillBundle> generateDrill({
     required String objectiveId,
     List<String> commandWords = const [],
   }) async {
-    final token = await FirebaseAuth.instance.currentUser?.getIdToken();
-    final response = await _client.post(
-      Uri.parse('$_backendUrl/generate/command-word-drill'),
-      headers: {
-        'Content-Type': 'application/json',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
-      body: jsonEncode({
+    final result = await _apiClient.post(
+      '/generate/command-word-drill',
+      body: {
         'objective_id': objectiveId,
         'command_words': commandWords,
-      }),
+      },
     );
 
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception('Failed to generate drill (${response.statusCode})');
+    if (result.isError) {
+      throw Exception(
+          'Failed to generate drill: ${result.message} (${result.statusCode})');
     }
 
-    final payload = jsonDecode(response.body) as Map<String, dynamic>;
+    final data = result.data;
+    if (data == null) {
+      throw Exception('Failed to generate drill: empty response');
+    }
+
+    final drill = data['drill'] as Map<String, dynamic>?;
+    if (drill == null) {
+      throw Exception('Failed to generate drill: missing drill data');
+    }
+
     return CommandWordDrillBundle.fromJson(
-      Map<String, dynamic>.from(payload['drill'] as Map),
+      Map<String, dynamic>.from(drill),
     );
   }
 
@@ -45,14 +45,9 @@ class CommandWordDrillService {
     required List<CommandWordDrillCard> cards,
     required Map<String, String> responses,
   }) async {
-    final token = await FirebaseAuth.instance.currentUser?.getIdToken();
-    final response = await _client.post(
-      Uri.parse('$_backendUrl/generate/evaluate-command-word-drill'),
-      headers: {
-        'Content-Type': 'application/json',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
-      body: jsonEncode({
+    final result = await _apiClient.post(
+      '/generate/evaluate-command-word-drill',
+      body: {
         'objective_id': objectiveId,
         'prompt_cards': cards.map((item) => item.toJson()).toList(),
         'responses': responses.entries
@@ -61,16 +56,26 @@ class CommandWordDrillService {
                   'response': entry.value,
                 })
             .toList(),
-      }),
+      },
     );
 
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception('Failed to evaluate drill (${response.statusCode})');
+    if (result.isError) {
+      throw Exception(
+          'Failed to evaluate drill: ${result.message} (${result.statusCode})');
     }
 
-    final payload = jsonDecode(response.body) as Map<String, dynamic>;
+    final data = result.data;
+    if (data == null) {
+      throw Exception('Failed to evaluate drill: empty response');
+    }
+
+    final evaluation = data['evaluation'] as Map<String, dynamic>?;
+    if (evaluation == null) {
+      throw Exception('Failed to evaluate drill: missing evaluation data');
+    }
+
     return CommandWordDrillEvaluation.fromJson(
-      Map<String, dynamic>.from(payload['evaluation'] as Map),
+      Map<String, dynamic>.from(evaluation),
     );
   }
 }

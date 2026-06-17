@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../models/models.dart';
+import '../../theme/app_theme.dart';
 import '../../services/ask_axon_context_service.dart';
 import '../../services/chat_history_service.dart';
 import '../../services/grok_service.dart';
@@ -137,7 +138,7 @@ class _AxonAiScreenState extends ConsumerState<AxonAiScreen> {
             fontSize: 14,
             fontWeight: FontWeight.bold,
             letterSpacing: 1.2,
-            color: Colors.white,
+            color: AxonColors.textPrimary,
           ),
         ),
       ),
@@ -174,10 +175,13 @@ class _AxonAiScreenState extends ConsumerState<AxonAiScreen> {
       itemCount: state.messages.length + (state.isSending ? 1 : 0),
       itemBuilder: (context, i) {
         if (state.isSending && i == state.messages.length) {
-          return const _ThinkingIndicator();
+          return const _ThinkingIndicator(key: ValueKey('thinking'));
         }
         return RepaintBoundary(
-          child: _AiMessageBubble(message: state.messages[i]),
+          child: _AiMessageBubble(
+            key: ValueKey('msg-$i'),
+            message: state.messages[i],
+          ),
         );
       },
     );
@@ -231,7 +235,7 @@ class _AxonAiScreenState extends ConsumerState<AxonAiScreen> {
 
 class _AiMessageBubble extends StatelessWidget {
   final _AiMessage message;
-  const _AiMessageBubble({required this.message});
+  const _AiMessageBubble({required this.message, super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -253,7 +257,7 @@ class _AiMessageBubble extends StatelessWidget {
 }
 
 class _ThinkingIndicator extends StatelessWidget {
-  const _ThinkingIndicator();
+  const _ThinkingIndicator({super.key});
   @override
   Widget build(BuildContext context) => Align(
     alignment: Alignment.centerLeft,

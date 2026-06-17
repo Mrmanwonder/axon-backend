@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'board_exam_service.dart';
+import 'exam_service.dart';
 import 'package:http/http.dart' as http;
 
 class ApiCredentials {
@@ -83,7 +83,7 @@ class SecureCredentialsService {
     try {
       final token = await FirebaseAuth.instance.currentUser?.getIdToken();
       if (token != null) {
-        final backendUrl = BoardExamService.backendUrl;
+        final backendUrl = ExamService.backendUrl;
         final resp = await http
             .post(
               Uri.parse('$backendUrl/api/credentials'),

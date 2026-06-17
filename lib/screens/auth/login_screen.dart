@@ -142,7 +142,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 success
                     ? 'Password reset link sent to ${emailCtrl.text.trim()}'
                     : 'Failed to send reset email',
-                style: GoogleFonts.googleSans(color: Colors.white),
+                style: GoogleFonts.googleSans(color: AxonColors.textPrimary),
               ),
               backgroundColor: (success ? AxonColors.success : AxonColors.error)
                   .withValues(alpha: 0.9),
@@ -158,7 +158,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             SnackBar(
               content: Text(
                 'Failed to send reset email',
-                style: GoogleFonts.googleSans(color: Colors.white),
+                style: GoogleFonts.googleSans(color: AxonColors.textPrimary),
               ),
               backgroundColor: AxonColors.error.withValues(alpha: 0.9),
               behavior: SnackBarBehavior.floating,
@@ -215,7 +215,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF050505),
+      backgroundColor: AxonColors.background,
       body: Stack(
         children: [
           Positioned(
@@ -251,7 +251,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   Text(
                     "AXON_ACCESS_PROTOCOL",
                     style: GoogleFonts.robotoMono(
-                      color: Colors.white24,
+                      color: AxonColors.textTertiary,
                       fontSize: 10,
                       letterSpacing: 2.0,
                     ),
@@ -334,7 +334,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                 "WINDOWS BUILD: USE EMAIL/PASSWORD AUTH",
                                 textAlign: TextAlign.center,
                                 style: GoogleFonts.robotoMono(
-                                  color: Colors.white24,
+                                  color: AxonColors.textTertiary,
                                   fontSize: 10,
                                   letterSpacing: 1.0,
                                 ),
@@ -352,7 +352,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       Text(
                         "No credentials? ",
                         style: GoogleFonts.robotoMono(
-                          color: Colors.white38,
+                          color: AxonColors.textTertiary,
                           fontSize: 10,
                           letterSpacing: 1.0,
                         ),
@@ -428,7 +428,7 @@ class _AuthInputField extends StatelessWidget {
           Text(
             label,
             style: GoogleFonts.robotoMono(
-                color: Colors.white38, fontSize: 8, letterSpacing: 1.5),
+                color: AxonColors.textTertiary, fontSize: 8, letterSpacing: 1.5),
           ),
           const SizedBox(height: 8),
           AnimatedContainer(
@@ -448,13 +448,13 @@ class _AuthInputField extends StatelessWidget {
             child: TextField(
               controller: controller,
               obscureText: isPassword,
-              style: GoogleFonts.robotoMono(color: Colors.white, fontSize: 14),
+              style: GoogleFonts.robotoMono(color: AxonColors.textPrimary, fontSize: 14),
               cursorColor: const Color(0xFF3A86FF),
               decoration: InputDecoration(
                 hintText: hint,
                 hintStyle:
                     GoogleFonts.robotoMono(color: Colors.white10, fontSize: 14),
-                prefixIcon: Icon(icon, color: Colors.white24, size: 18),
+                prefixIcon: Icon(icon, color: AxonColors.textTertiary, size: 18),
                 filled: true,
                 fillColor: Colors.white.withValues(alpha: 0.02),
                 enabledBorder: OutlineInputBorder(
@@ -522,7 +522,7 @@ class _PrimaryAuthButtonState extends State<_PrimaryAuthButton> {
           child: Text(
             widget.label,
             style: GoogleFonts.robotoMono(
-              color: Colors.white,
+              color: AxonColors.textPrimary,
               fontWeight: FontWeight.bold,
               fontSize: 12,
               letterSpacing: 1.2,
@@ -579,12 +579,12 @@ class _SecondaryAuthButtonState extends State<_SecondaryAuthButton> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(widget.icon, color: Colors.white54, size: 20),
+              Icon(widget.icon, color: AxonColors.textSecondary, size: 20),
               const SizedBox(width: 8),
               Text(
                 widget.label,
                 style: GoogleFonts.robotoMono(
-                  color: Colors.white54,
+                  color: AxonColors.textSecondary,
                   fontSize: 11,
                   letterSpacing: 1.0,
                 ),

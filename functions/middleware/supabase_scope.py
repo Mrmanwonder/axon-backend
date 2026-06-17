@@ -15,6 +15,7 @@ PUBLIC_READ_TABLES = {
     "subchapter_notes",
     "papers",
     "topics",
+    "sme_questions",  # SaveMyExams scraped questions
 }
 
 USER_SCOPED_TABLES = {

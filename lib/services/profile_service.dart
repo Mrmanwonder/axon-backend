@@ -13,7 +13,7 @@ import 'firestore_service.dart';
 import 'study_catalog.dart';
 import 'cloudinary_service.dart';
 import 'leaderboard_service.dart';
-import 'board_exam_service.dart';
+import 'exam_service.dart';
 
 class ProfileService {
   ProfileService({
@@ -25,7 +25,7 @@ class ProfileService {
   final FirebaseFirestore? _firestore;
   final StudyCatalog _catalog;
   final ImagePicker _imagePicker = ImagePicker();
-  final BoardExamService _boardExamService = BoardExamService();
+  final ExamService _examService = ExamService();
 
   DocumentReference<Map<String, dynamic>> _doc(String uid) =>
       (_firestore ?? AxonFirestore.instance)
@@ -64,7 +64,7 @@ class ProfileService {
       return;
     }
     try {
-      await _boardExamService.syncOfficialDeadlines(
+      await _examService.syncOfficialDeadlines(
         board: board,
         subjects: subjects,
         administrativeZone: administrativeZone,

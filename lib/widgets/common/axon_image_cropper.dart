@@ -103,7 +103,7 @@ class _AxonImageCropperState extends State<AxonImageCropper> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: AxonColors.background,
       body: Stack(
         children: [
           // Image with pan/zoom

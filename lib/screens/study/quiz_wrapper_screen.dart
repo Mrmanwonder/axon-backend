@@ -65,7 +65,7 @@ class _QuizWrapperScreenState extends ConsumerState<QuizWrapperScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF090A0B),
+      backgroundColor: AxonColors.background,
       appBar: AppBar(
         backgroundColor: AxonColors.surface,
         leading: IconButton(

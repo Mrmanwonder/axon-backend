@@ -275,7 +275,7 @@ class _SyncSettingsScreenState extends ConsumerState<SyncSettingsScreen> {
         child: AlertDialog(
           backgroundColor: AxonColors.surfaceElevated,
           title:
-              Text(title, style: GoogleFonts.googleSans(color: Colors.white)),
+              Text(title, style: GoogleFonts.googleSans(color: AxonColors.textPrimary)),
           content: TextField(
             controller: controller,
             decoration: InputDecoration(
@@ -290,7 +290,7 @@ class _SyncSettingsScreenState extends ConsumerState<SyncSettingsScreen> {
                 borderSide: BorderSide(color: Color(0xFF3A86FF), width: 2),
               ),
             ),
-            style: const TextStyle(color: Colors.white),
+            style: TextStyle(color: AxonColors.textPrimary),
           ),
           actions: [
             TextButton(
@@ -353,12 +353,12 @@ class _SyncSettingsScreenState extends ConsumerState<SyncSettingsScreen> {
         title: Text(
           'Sync Services',
           style: GoogleFonts.googleSans(
-            color: Colors.white,
+            color: AxonColors.textPrimary,
             fontWeight: FontWeight.w600,
           ),
         ),
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          icon: Icon(Icons.arrow_back, color: AxonColors.textPrimary),
           onPressed: () => popOrGo(context, '/settings'),
         ),
       ),
@@ -417,7 +417,7 @@ class _SyncSettingsScreenState extends ConsumerState<SyncSettingsScreen> {
                       Text(
                         _serviceName(service),
                         style: GoogleFonts.googleSans(
-                          color: Colors.white,
+                          color: AxonColors.textPrimary,
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
                         ),

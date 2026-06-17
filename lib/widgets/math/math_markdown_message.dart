@@ -67,7 +67,7 @@ class _MathMessageState extends State<MathMessage> {
                   scrollDirection: Axis.horizontal,
                   child: Math.tex(
                     formula,
-                    textStyle: TextStyle(color: Colors.white, fontSize: fontSize + 2),
+                    textStyle: TextStyle(color: Colors.white, fontSize: widget.fontSize + 2),
                     onErrorFallback: (_) => Text(formula,
                       style: const TextStyle(color: Colors.white54, fontFamily: 'monospace', fontSize: 14)),
                   ),
@@ -105,7 +105,7 @@ class _MathMessageState extends State<MathMessage> {
       if (chunk.isNotEmpty) {
         spans.add(TextSpan(
           text: chunk,
-          style: TextStyle(color: Colors.white.withValues(alpha: 0.88), fontSize: fontSize, height: 1.55),
+          style: TextStyle(color: Colors.white.withValues(alpha: 0.88), fontSize: widget.fontSize, height: 1.55),
         ));
       }
       i = next == -1 ? src.length : next;

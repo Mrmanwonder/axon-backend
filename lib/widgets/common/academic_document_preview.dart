@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../../theme/app_theme.dart';
 
 class AcademicDocumentPreview extends StatefulWidget {
   final String documentCode;
@@ -34,13 +35,13 @@ class _AcademicDocumentPreviewState extends State<AcademicDocumentPreview> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: AxonColors.background,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+          icon: Icon(Icons.arrow_back_rounded, color: AxonColors.textPrimary),
           onPressed: () => Navigator.pop(context),
         ),
       ),

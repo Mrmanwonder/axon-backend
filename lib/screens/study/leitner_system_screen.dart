@@ -92,7 +92,7 @@ class _LeitnerSystemScreenState extends ConsumerState<LeitnerSystemScreen>
                 Text(
                   'Add Flashcard',
                   style: GoogleFonts.inter(
-                    color: Colors.white,
+                    color: AxonColors.textPrimary,
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
                   ),
@@ -102,26 +102,26 @@ class _LeitnerSystemScreenState extends ConsumerState<LeitnerSystemScreen>
             const SizedBox(height: 24),
             TextField(
               controller: subjectController,
-              style: const TextStyle(color: Colors.white),
+              style: TextStyle(color: AxonColors.textPrimary),
               decoration: _inputDecoration('Subject', Icons.book),
             ),
             const SizedBox(height: 16),
             TextField(
               controller: topicController,
-              style: const TextStyle(color: Colors.white),
+              style: TextStyle(color: AxonColors.textPrimary),
               decoration: _inputDecoration('Topic', Icons.category),
             ),
             const SizedBox(height: 16),
             TextField(
               controller: frontController,
-              style: const TextStyle(color: Colors.white),
+              style: TextStyle(color: AxonColors.textPrimary),
               maxLines: 2,
               decoration: _inputDecoration('Front (Question)', Icons.flip),
             ),
             const SizedBox(height: 16),
             TextField(
               controller: backController,
-              style: const TextStyle(color: Colors.white),
+              style: TextStyle(color: AxonColors.textPrimary),
               maxLines: 2,
               decoration: _inputDecoration('Back (Answer)', Icons.check_circle),
             ),
@@ -173,10 +173,10 @@ class _LeitnerSystemScreenState extends ConsumerState<LeitnerSystemScreen>
   InputDecoration _inputDecoration(String label, IconData icon) {
     return InputDecoration(
       labelText: label,
-      labelStyle: const TextStyle(color: Colors.white54),
-      prefixIcon: Icon(icon, color: Colors.white38),
+      labelStyle: TextStyle(color: AxonColors.textSecondary),
+      prefixIcon: Icon(icon, color: AxonColors.textTertiary),
       filled: true,
-      fillColor: Colors.white.withValues(alpha: 0.05),
+      fillColor: AxonColors.textPrimary.withValues(alpha: 0.05),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
         borderSide: BorderSide.none,
@@ -191,12 +191,12 @@ class _LeitnerSystemScreenState extends ConsumerState<LeitnerSystemScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: AxonColors.background,
       appBar: AppBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AxonColors.background,
         leading: IconButton(
           onPressed: () => popOrGo(context, '/timer'),
-          icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+          icon: Icon(Icons.arrow_back_rounded, color: AxonColors.textPrimary),
         ),
         title: Row(
           children: [
@@ -205,7 +205,7 @@ class _LeitnerSystemScreenState extends ConsumerState<LeitnerSystemScreen>
             Text(
               'Leitner System',
               style: GoogleFonts.inter(
-                  color: Colors.white, fontWeight: FontWeight.bold),
+                  color: AxonColors.textPrimary, fontWeight: FontWeight.bold),
             ),
           ],
         ),
@@ -213,7 +213,7 @@ class _LeitnerSystemScreenState extends ConsumerState<LeitnerSystemScreen>
           controller: _tabController,
           indicatorColor: Color(0xFF95E1D3),
           labelColor: Color(0xFF95E1D3),
-          unselectedLabelColor: Colors.white54,
+          unselectedLabelColor: AxonColors.textSecondary,
           tabs: const [
             Tab(text: 'Boxes'),
             Tab(text: 'Study'),
@@ -245,9 +245,9 @@ class _LeitnerSystemScreenState extends ConsumerState<LeitnerSystemScreen>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.inbox_outlined, color: Colors.white24, size: 64),
+            Icon(Icons.inbox_outlined, color: AxonColors.textTertiary, size: 64),
             const SizedBox(height: 16),
-            Text('No cards yet', style: TextStyle(color: Colors.white54)),
+            Text('No cards yet', style: TextStyle(color: AxonColors.textSecondary)),
           ],
         ),
       );
@@ -277,10 +277,10 @@ class _LeitnerSystemScreenState extends ConsumerState<LeitnerSystemScreen>
           Icon(Icons.celebration, color: Color(0xFF95E1D3), size: 64),
           const SizedBox(height: 16),
           Text('No cards due for review!',
-              style: TextStyle(color: Colors.white54, fontSize: 18)),
+              style: TextStyle(color: AxonColors.textSecondary, fontSize: 18)),
           const SizedBox(height: 8),
           Text('Check back later or add more cards',
-              style: TextStyle(color: Colors.white38)),
+              style: TextStyle(color: AxonColors.textTertiary)),
           const SizedBox(height: 24),
           ElevatedButton(
             onPressed: _loadDueCards,
@@ -354,7 +354,7 @@ class _LeitnerSystemScreenState extends ConsumerState<LeitnerSystemScreen>
                         _currentCard!.front,
                         textAlign: TextAlign.center,
                         style: GoogleFonts.inter(
-                          color: Colors.white,
+                          color: AxonColors.textPrimary,
                           fontSize: 24,
                           fontWeight: FontWeight.w600,
                         ),
@@ -362,13 +362,13 @@ class _LeitnerSystemScreenState extends ConsumerState<LeitnerSystemScreen>
                       const SizedBox(height: 24),
                       Text(
                         'Tap to reveal answer',
-                        style: TextStyle(color: Colors.white38),
+                        style: TextStyle(color: AxonColors.textTertiary),
                       ),
                     ] else ...[
                       Text(
                         _currentCard!.front,
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.white54, fontSize: 16),
+                        style: TextStyle(color: AxonColors.textSecondary, fontSize: 16),
                       ),
                       const SizedBox(height: 24),
                       Container(
@@ -488,7 +488,7 @@ class _LeitnerSystemScreenState extends ConsumerState<LeitnerSystemScreen>
           Text(
             'Stats',
             style: TextStyle(
-                color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                color: AxonColors.textPrimary, fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 16),
           Row(
@@ -516,9 +516,9 @@ class _LeitnerSystemScreenState extends ConsumerState<LeitnerSystemScreen>
         children: [
           Text(box,
               style:
-                  TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  TextStyle(color: AxonColors.textPrimary, fontWeight: FontWeight.bold)),
           const SizedBox(width: 8),
-          Expanded(child: Text(desc, style: TextStyle(color: Colors.white54))),
+          Expanded(child: Text(desc, style: TextStyle(color: AxonColors.textSecondary))),
           Text(interval, style: TextStyle(color: Color(0xFF95E1D3))),
         ],
       ),
@@ -538,7 +538,7 @@ class _LeitnerSystemScreenState extends ConsumerState<LeitnerSystemScreen>
             Text(value,
                 style: TextStyle(
                     color: color, fontSize: 24, fontWeight: FontWeight.bold)),
-            Text(label, style: TextStyle(color: Colors.white54, fontSize: 12)),
+            Text(label, style: TextStyle(color: AxonColors.textSecondary, fontSize: 12)),
           ],
         ),
       ),
@@ -562,7 +562,7 @@ class _LeitnerBoxCard extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.05),
+          color: AxonColors.textPrimary.withValues(alpha: 0.05),
           borderRadius: BorderRadius.circular(16),
         ),
         child: Row(
@@ -592,15 +592,15 @@ class _LeitnerBoxCard extends StatelessWidget {
                 children: [
                   Text(
                     'Box ${box.boxNumber}',
-                    style: const TextStyle(
-                      color: Colors.white,
+                    style: TextStyle(
+                      color: AxonColors.textPrimary,
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
                   Text(
                     'Review every $interval day${interval > 1 ? 's' : ''}',
-                    style: const TextStyle(color: Colors.white38, fontSize: 12),
+                    style: TextStyle(color: AxonColors.textTertiary, fontSize: 12),
                   ),
                 ],
               ),
@@ -620,7 +620,7 @@ class _LeitnerBoxCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            Icon(Icons.chevron_right, color: Colors.white38),
+            Icon(Icons.chevron_right, color: AxonColors.textTertiary),
           ],
         ),
       ),

@@ -92,16 +92,16 @@ class _AccessibilitySettingsScreenState
       padding: EdgeInsets.all(_preset.density.cardPadding),
       decoration: BoxDecoration(
         color: isDark
-            ? Colors.white.withValues(alpha: 0.05)
+            ? Colors.white.withOpacity(0.05)
             : Colors.grey.shade100,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: const Color(0xFF3A86FF).withValues(alpha: 0.3),
+          color: const Color(0xFF3A86FF).withOpacity(0.3),
           width: _preset.contrast.borderWidth,
         ),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF3A86FF).withValues(alpha: 0.1),
+            color: const Color(0xFF3A86FF).withOpacity(0.1),
             blurRadius: 20,
             offset: const Offset(0, 8),
           )
@@ -144,15 +144,15 @@ class _AccessibilitySettingsScreenState
             'and the equations of motion that govern how objects move.',
             style: textStyle.copyWith(
               color: isDark
-                  ? Colors.white.withValues(alpha: 0.7)
-                  : Colors.black.withValues(alpha: 0.7),
+                  ? Colors.white.withOpacity(0.7)
+                  : Colors.black.withOpacity(0.7),
             ),
           ),
           const SizedBox(height: 12),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: const Color(0xFF3A86FF).withValues(alpha: 0.15),
+              color: const Color(0xFF3A86FF).withOpacity(0.15),
               borderRadius: BorderRadius.circular(20),
             ),
             child: Text(
@@ -213,10 +213,20 @@ class _AccessibilitySettingsScreenState
                   'ACCESSIBILITY',
                   'Display Settings',
                 ),
-                if (greyscaleModeNotifierProvider.suggestedForUser)
-                  _buildGreyscaleSuggestionBanner(),
+                ListenableBuilder(
+                  listenable: greyscaleModeNotifierProvider,
+                  builder: (context, _) {
+                    if (greyscaleModeNotifierProvider.suggestedForUser) {
+                      return _buildGreyscaleSuggestionBanner();
+                    }
+                    return const SizedBox.shrink();
+                  },
+                ),
                 _buildFloatingPreviewCard(),
                 const SizedBox(height: 32),
+                _buildSectionTitle('Theme Mode'),
+                _buildThemeModeSelector(),
+                const SizedBox(height: 24),
                 _buildSectionTitle('Reading Density'),
                 _buildDensityTiles(),
                 const SizedBox(height: 24),
@@ -235,12 +245,13 @@ class _AccessibilitySettingsScreenState
   }
 
   Widget _buildSectionTitle(String title) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Text(
         title.toUpperCase(),
         style: GoogleFonts.googleSans(
-          color: Colors.white.withValues(alpha: 0.6),
+          color: isDark ? Colors.white.withOpacity(0.6) : Colors.black.withOpacity(0.6),
           fontSize: 11,
           fontWeight: FontWeight.bold,
           letterSpacing: 1.5,
@@ -250,13 +261,14 @@ class _AccessibilitySettingsScreenState
   }
 
   Widget _buildGreyscaleSuggestionBanner() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AxonColors.cardSurface,
+        color: isDark ? AxonColors.cardSurface : Colors.grey.shade100,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AxonColors.divider),
+        border: Border.all(color: isDark ? AxonColors.divider : Colors.black12),
       ),
       child: Row(
         children: [
@@ -269,7 +281,7 @@ class _AccessibilitySettingsScreenState
                 Text(
                   'Low light detected',
                   style: GoogleFonts.googleSans(
-                    color: Colors.white,
+                    color: isDark ? Colors.white : Colors.black87,
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
                   ),
@@ -278,7 +290,7 @@ class _AccessibilitySettingsScreenState
                 Text(
                   'Enable greyscale for easier reading',
                   style: GoogleFonts.googleSans(
-                    color: Colors.white.withValues(alpha: 0.6),
+                    color: isDark ? Colors.white.withOpacity(0.6) : Colors.black.withOpacity(0.6),
                     fontSize: 12,
                   ),
                 ),
@@ -286,7 +298,7 @@ class _AccessibilitySettingsScreenState
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.close, color: Colors.white54, size: 20),
+            icon: Icon(Icons.close, color: isDark ? Colors.white54 : Colors.black54, size: 20),
             onPressed: () {
               greyscaleModeNotifierProvider.dismissSuggestion();
             },
@@ -304,7 +316,7 @@ class _AccessibilitySettingsScreenState
             child: Text(
               'Enable',
               style: GoogleFonts.googleSans(
-                color: Colors.white,
+                color: AxonColors.textPrimary,
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
@@ -348,12 +360,111 @@ class _AccessibilitySettingsScreenState
     );
   }
 
+  Widget _buildThemeModeSelector() {
+    return ListenableBuilder(
+      listenable: AxonThemeMode.notifier,
+      builder: (context, _) {
+        final currentMode = AxonThemeMode.mode;
+        return Row(
+          children: [
+            Expanded(
+              child: _buildThemeModeTile(
+                'System',
+                ThemeMode.system,
+                currentMode == ThemeMode.system,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildThemeModeTile(
+                'Light',
+                ThemeMode.light,
+                currentMode == ThemeMode.light,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildThemeModeTile(
+                'Dark',
+                ThemeMode.dark,
+                currentMode == ThemeMode.dark,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildThemeModeTile(
+    String label,
+    ThemeMode mode,
+    bool isActive,
+  ) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return GestureDetector(
+      onTap: () {
+        AxonThemeMode.notifier.value = mode;
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeInOut,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isActive
+              ? const Color(0xFF3A86FF).withOpacity(0.12)
+              : (isDark ? Colors.white.withOpacity(0.03) : Colors.black.withOpacity(0.03)),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isActive
+                ? const Color(0xFF3A86FF)
+                : (isDark ? Colors.white10 : Colors.black12),
+            width: isActive ? 2 : 1,
+          ),
+          boxShadow: isActive
+              ? [
+                  BoxShadow(
+                    color: const Color(0xFF3A86FF).withOpacity(0.15),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  )
+                ]
+              : [],
+        ),
+        child: Column(
+          children: [
+            Icon(
+              mode == ThemeMode.system
+                  ? Icons.brightness_auto
+                  : mode == ThemeMode.light
+                      ? Icons.light_mode
+                      : Icons.dark_mode,
+              color: isActive ? const Color(0xFF3A86FF) : (isDark ? Colors.white : Colors.black87),
+              size: 20,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              label.toUpperCase(),
+              style: GoogleFonts.googleSans(
+                color: isActive ? const Color(0xFF3A86FF) : (isDark ? Colors.white : Colors.black87),
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildDensityTile(
     String label,
     String subtitle,
     ReadingDensity density,
     double scale,
   ) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final isActive = _preset.density == density;
     return GestureDetector(
       onTap: () => _savePreset(_preset.copyWith(density: density)),
@@ -363,19 +474,19 @@ class _AccessibilitySettingsScreenState
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: isActive
-              ? const Color(0xFF3A86FF).withValues(alpha: 0.12)
-              : Colors.white.withValues(alpha: 0.03),
+              ? const Color(0xFF3A86FF).withOpacity(0.12)
+              : (isDark ? Colors.white.withOpacity(0.03) : Colors.black.withOpacity(0.03)),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: isActive
                 ? const Color(0xFF3A86FF)
-                : Colors.white.withValues(alpha: 0.1),
+                : (isDark ? Colors.white10 : Colors.black12),
             width: isActive ? 2 : 1,
           ),
           boxShadow: isActive
               ? [
                   BoxShadow(
-                    color: const Color(0xFF3A86FF).withValues(alpha: 0.15),
+                    color: const Color(0xFF3A86FF).withOpacity(0.15),
                     blurRadius: 12,
                     offset: const Offset(0, 4),
                   )
@@ -387,7 +498,7 @@ class _AccessibilitySettingsScreenState
             Text(
               label.toUpperCase(),
               style: GoogleFonts.googleSans(
-                color: isActive ? const Color(0xFF3A86FF) : Colors.white,
+                color: isActive ? const Color(0xFF3A86FF) : (isDark ? Colors.white : Colors.black87),
                 fontSize: 12,
                 fontWeight: FontWeight.bold,
                 letterSpacing: 1,
@@ -397,7 +508,7 @@ class _AccessibilitySettingsScreenState
             Text(
               subtitle,
               style: GoogleFonts.googleSans(
-                color: Colors.white.withValues(alpha: 0.5),
+                color: isActive ? const Color(0xFF3A86FF).withOpacity(0.7) : (isDark ? Colors.white60 : Colors.black54),
                 fontSize: 10,
               ),
             ),
@@ -405,13 +516,17 @@ class _AccessibilitySettingsScreenState
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.2),
+                color: isActive
+                    ? const Color(0xFF3A86FF)
+                    : (isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.05)),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
                 '${scale}x',
                 style: GoogleFonts.googleSans(
-                  color: const Color(0xFF3A86FF),
+                  color: isActive
+                      ? Colors.white
+                      : (isDark ? Colors.white60 : Colors.black54),
                   fontSize: 9,
                 ),
               ),
@@ -423,26 +538,27 @@ class _AccessibilitySettingsScreenState
   }
 
   Widget _buildMotionSelector() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.03),
+        color: isDark ? Colors.white.withOpacity(0.03) : Colors.black.withOpacity(0.03),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: Colors.white.withValues(alpha: 0.1),
+          color: isDark ? Colors.white10 : Colors.black12,
         ),
       ),
       child: Column(
         children: [
           _buildMotionRow(MotionPreference.full, 'Full Animations',
               'All transitions and effects'),
-          Divider(color: Colors.white12),
+          Divider(color: isDark ? Colors.white12 : Colors.black12),
           _buildMotionRow(
               MotionPreference.reduced, 'Reduced', 'Essential animations only'),
-          Divider(color: Colors.white12),
+          Divider(color: isDark ? Colors.white12 : Colors.black12),
           _buildMotionRow(
               MotionPreference.minimal, 'Minimal', 'Page transitions only'),
-          Divider(color: Colors.white12),
+          Divider(color: isDark ? Colors.white12 : Colors.black12),
           _buildMotionRow(MotionPreference.none, 'None', 'No animations'),
         ],
       ),
@@ -450,6 +566,7 @@ class _AccessibilitySettingsScreenState
   }
 
   Widget _buildMotionRow(MotionPreference motion, String label, String desc) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final isActive = _preset.motion == motion;
     return GestureDetector(
       onTap: () => _savePreset(_preset.copyWith(motion: motion)),
@@ -465,13 +582,13 @@ class _AccessibilitySettingsScreenState
                   Text(label,
                       style: TextStyle(
                           color:
-                              isActive ? const Color(0xFF3A86FF) : Colors.white,
+                              isActive ? const Color(0xFF3A86FF) : (isDark ? Colors.white : Colors.black87),
                           fontSize: 14,
                           fontWeight: FontWeight.w600)),
                   const SizedBox(height: 2),
                   Text(desc,
                       style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.5),
+                          color: isDark ? Colors.white60 : Colors.black54,
                           fontSize: 11)),
                 ],
               ),
@@ -486,23 +603,24 @@ class _AccessibilitySettingsScreenState
   }
 
   Widget _buildContrastSelector() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.03),
+        color: isDark ? Colors.white.withOpacity(0.03) : Colors.black.withOpacity(0.03),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: Colors.white.withValues(alpha: 0.1),
+          color: isDark ? Colors.white10 : Colors.black12,
         ),
       ),
       child: Column(
         children: [
           _buildContrastRow(
               ContrastMode.standard, 'Standard', 'Default contrast'),
-          Divider(color: Colors.white12),
+          Divider(color: isDark ? Colors.white12 : Colors.black12),
           _buildContrastRow(
               ContrastMode.high, 'High Contrast', 'Maximum text visibility'),
-          Divider(color: Colors.white12),
+          Divider(color: isDark ? Colors.white12 : Colors.black12),
           _buildContrastRow(
               ContrastMode.inverted, 'Inverted', 'Light text on dark always'),
         ],
@@ -511,6 +629,7 @@ class _AccessibilitySettingsScreenState
   }
 
   Widget _buildContrastRow(ContrastMode contrast, String label, String desc) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final isActive = _preset.contrast == contrast;
     return GestureDetector(
       onTap: () => _savePreset(_preset.copyWith(contrast: contrast)),
@@ -526,13 +645,13 @@ class _AccessibilitySettingsScreenState
                   Text(label,
                       style: TextStyle(
                           color:
-                              isActive ? const Color(0xFF3A86FF) : Colors.white,
+                              isActive ? const Color(0xFF3A86FF) : (isDark ? Colors.white : Colors.black87),
                           fontSize: 14,
                           fontWeight: FontWeight.w600)),
                   const SizedBox(height: 2),
                   Text(desc,
                       style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.5),
+                          color: isDark ? Colors.white60 : Colors.black54,
                           fontSize: 11)),
                 ],
               ),
@@ -547,13 +666,14 @@ class _AccessibilitySettingsScreenState
   }
 
   Widget _buildToggles() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.03),
+        color: isDark ? Colors.white.withOpacity(0.03) : Colors.black.withOpacity(0.03),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: Colors.white.withValues(alpha: 0.1),
+          color: isDark ? Colors.white10 : Colors.black12,
         ),
       ),
       child: Column(
@@ -564,14 +684,14 @@ class _AccessibilitySettingsScreenState
             _preset.reduceTransparency,
             (v) => _savePreset(_preset.copyWith(reduceTransparency: v)),
           ),
-          Divider(color: Colors.white12),
+          Divider(color: isDark ? Colors.white12 : Colors.black12),
           _buildToggleRow(
             'Bold Text',
             'Increases text weight for better visibility',
             _preset.boldText,
             (v) => _savePreset(_preset.copyWith(boldText: v)),
           ),
-          Divider(color: Colors.white12),
+          Divider(color: isDark ? Colors.white12 : Colors.black12),
           _buildToggleRow(
             'Greyscale Mode',
             'Removes color for easier reading in dark',
@@ -589,6 +709,7 @@ class _AccessibilitySettingsScreenState
     bool value,
     Function(bool) onChanged,
   ) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
@@ -599,13 +720,13 @@ class _AccessibilitySettingsScreenState
               children: [
                 Text(label,
                     style: TextStyle(
-                        color: Colors.white,
+                        color: isDark ? Colors.white : Colors.black87,
                         fontSize: 14,
                         fontWeight: FontWeight.w600)),
                 const SizedBox(height: 2),
                 Text(description,
                     style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.5),
+                        color: isDark ? Colors.white60 : Colors.black54,
                         fontSize: 11)),
               ],
             ),

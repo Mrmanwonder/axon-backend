@@ -103,7 +103,7 @@ class _FeynmanTechniqueScreenState extends ConsumerState<FeynmanTechniqueScreen>
                   Text(
                     'New Feynman Note',
                     style: GoogleFonts.inter(
-                      color: Colors.white,
+                      color: AxonColors.textPrimary,
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
                     ),
@@ -113,26 +113,26 @@ class _FeynmanTechniqueScreenState extends ConsumerState<FeynmanTechniqueScreen>
               const SizedBox(height: 24),
               TextField(
                 controller: topicController,
-                style: const TextStyle(color: Colors.white),
+                style: TextStyle(color: AxonColors.textPrimary),
                 decoration: _inputDecoration('Topic', Icons.bookmark),
               ),
               const SizedBox(height: 16),
               TextField(
                 controller: conceptController,
-                style: const TextStyle(color: Colors.white),
+                style: TextStyle(color: AxonColors.textPrimary),
                 decoration: _inputDecoration('Concept', Icons.fingerprint),
               ),
               const SizedBox(height: 16),
               TextField(
                 controller: explanationController,
-                style: const TextStyle(color: Colors.white),
+                style: TextStyle(color: AxonColors.textPrimary),
                 maxLines: 3,
                 decoration: _inputDecoration('Full Explanation', Icons.article),
               ),
               const SizedBox(height: 16),
               TextField(
                 controller: simpleController,
-                style: const TextStyle(color: Colors.white),
+                style: TextStyle(color: AxonColors.textPrimary),
                 maxLines: 2,
                 decoration: _inputDecoration(
                   'Simple Explanation (Child can understand)',
@@ -186,10 +186,10 @@ class _FeynmanTechniqueScreenState extends ConsumerState<FeynmanTechniqueScreen>
   InputDecoration _inputDecoration(String label, IconData icon) {
     return InputDecoration(
       labelText: label,
-      labelStyle: const TextStyle(color: Colors.white54),
-      prefixIcon: Icon(icon, color: Colors.white38),
+      labelStyle: TextStyle(color: AxonColors.textSecondary),
+      prefixIcon: Icon(icon, color: AxonColors.textTertiary),
       filled: true,
-      fillColor: Colors.white.withValues(alpha: 0.05),
+      fillColor: AxonColors.textPrimary.withValues(alpha: 0.05),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
         borderSide: BorderSide.none,
@@ -204,12 +204,12 @@ class _FeynmanTechniqueScreenState extends ConsumerState<FeynmanTechniqueScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: AxonColors.background,
       appBar: AppBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AxonColors.background,
         leading: IconButton(
           onPressed: () => popOrGo(context, '/timer'),
-          icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+          icon: Icon(Icons.arrow_back_rounded, color: AxonColors.textPrimary),
         ),
         title: Row(
           children: [
@@ -218,7 +218,7 @@ class _FeynmanTechniqueScreenState extends ConsumerState<FeynmanTechniqueScreen>
             Text(
               'Feynman Technique',
               style: GoogleFonts.inter(
-                  color: Colors.white, fontWeight: FontWeight.bold),
+                  color: AxonColors.textPrimary, fontWeight: FontWeight.bold),
             ),
           ],
         ),
@@ -226,7 +226,7 @@ class _FeynmanTechniqueScreenState extends ConsumerState<FeynmanTechniqueScreen>
           controller: _tabController,
           indicatorColor: Color(0xFFFFE66D),
           labelColor: Color(0xFFFFE66D),
-          unselectedLabelColor: Colors.white54,
+          unselectedLabelColor: AxonColors.textSecondary,
           tabs: const [
             Tab(text: 'Learn'),
             Tab(text: 'Create'),
@@ -258,16 +258,16 @@ class _FeynmanTechniqueScreenState extends ConsumerState<FeynmanTechniqueScreen>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.lightbulb_outline, color: Colors.white24, size: 64),
+            Icon(Icons.lightbulb_outline, color: AxonColors.textTertiary, size: 64),
             const SizedBox(height: 16),
             Text(
               'No Feynman notes yet',
-              style: TextStyle(color: Colors.white54, fontSize: 16),
+              style: TextStyle(color: AxonColors.textSecondary, fontSize: 16),
             ),
             const SizedBox(height: 8),
             Text(
               'Create one to start learning',
-              style: TextStyle(color: Colors.white38, fontSize: 14),
+              style: TextStyle(color: AxonColors.textTertiary, fontSize: 14),
             ),
           ],
         ),
@@ -331,7 +331,7 @@ class _FeynmanTechniqueScreenState extends ConsumerState<FeynmanTechniqueScreen>
           Text(
             'Quick Create',
             style: TextStyle(
-                color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                color: AxonColors.textPrimary, fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 16),
           _quickCreateButton('Physics', Icons.science),
@@ -362,7 +362,7 @@ class _FeynmanTechniqueScreenState extends ConsumerState<FeynmanTechniqueScreen>
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(text, style: TextStyle(color: Colors.white70)),
+            child: Text(text, style: TextStyle(color: AxonColors.textSecondary)),
           ),
         ],
       ),
@@ -380,17 +380,17 @@ class _FeynmanTechniqueScreenState extends ConsumerState<FeynmanTechniqueScreen>
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.05),
+            color: AxonColors.textPrimary.withValues(alpha: 0.05),
             borderRadius: BorderRadius.circular(12),
           ),
           child: Row(
             children: [
-              Icon(icon, color: Colors.white54),
+              Icon(icon, color: AxonColors.textSecondary),
               const SizedBox(width: 12),
               Text(subject,
-                  style: TextStyle(color: Colors.white, fontSize: 16)),
+                  style: TextStyle(color: AxonColors.textPrimary, fontSize: 16)),
               const Spacer(),
-              Icon(Icons.add, color: Colors.white38),
+              Icon(Icons.add, color: AxonColors.textTertiary),
             ],
           ),
         ),
@@ -412,12 +412,12 @@ class _FeynmanTechniqueScreenState extends ConsumerState<FeynmanTechniqueScreen>
             const SizedBox(height: 16),
             Text(
               'All caught up!',
-              style: TextStyle(color: Colors.white54, fontSize: 16),
+              style: TextStyle(color: AxonColors.textSecondary, fontSize: 16),
             ),
             const SizedBox(height: 8),
             Text(
               'Review your notes tomorrow',
-              style: TextStyle(color: Colors.white38, fontSize: 14),
+              style: TextStyle(color: AxonColors.textTertiary, fontSize: 14),
             ),
           ],
         ),
@@ -459,7 +459,7 @@ class _FeynmanTechniqueScreenState extends ConsumerState<FeynmanTechniqueScreen>
                   child: Text(
                     note.concept,
                     style: GoogleFonts.inter(
-                      color: Colors.white,
+                      color: AxonColors.textPrimary,
                       fontSize: 22,
                       fontWeight: FontWeight.bold,
                     ),
@@ -481,7 +481,7 @@ class _FeynmanTechniqueScreenState extends ConsumerState<FeynmanTechniqueScreen>
             if (note.topic.isNotEmpty)
               Text(
                 note.topic,
-                style: TextStyle(color: Colors.white54, fontSize: 14),
+                style: TextStyle(color: AxonColors.textSecondary, fontSize: 14),
               ),
             const SizedBox(height: 24),
             _detailSection('Full Explanation', note.explanation),
@@ -545,7 +545,7 @@ class _FeynmanTechniqueScreenState extends ConsumerState<FeynmanTechniqueScreen>
           child: Text(
             content.isEmpty ? 'Not provided' : content,
             style: TextStyle(
-              color: Colors.white,
+              color: AxonColors.textPrimary,
               fontSize: 14,
               height: 1.5,
             ),
@@ -575,7 +575,7 @@ class _FeynmanNoteCard extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.05),
+          color: AxonColors.textPrimary.withValues(alpha: 0.05),
           borderRadius: BorderRadius.circular(16),
         ),
         child: Column(
@@ -586,8 +586,8 @@ class _FeynmanNoteCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     note.concept,
-                    style: const TextStyle(
-                      color: Colors.white,
+                    style: TextStyle(
+                      color: AxonColors.textPrimary,
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
                     ),
@@ -616,7 +616,7 @@ class _FeynmanNoteCard extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 note.topic,
-                style: const TextStyle(color: Colors.white38, fontSize: 12),
+                style: TextStyle(color: AxonColors.textTertiary, fontSize: 12),
               ),
             ],
             const SizedBox(height: 8),
@@ -626,7 +626,7 @@ class _FeynmanNoteCard extends StatelessWidget {
                   : note.explanation,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white54, fontSize: 13),
+              style: TextStyle(color: AxonColors.textSecondary, fontSize: 13),
             ),
           ],
         ),

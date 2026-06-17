@@ -10,7 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/daily_plan_task.dart';
 import '../../models/models.dart';
 import '../../services/app_state.dart';
-import '../../services/board_exam_service.dart';
+import '../../services/exam_service.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/task_type_theme.dart';
 import '../../utils/layout_utils.dart';
@@ -48,10 +48,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     final metrics = ref.watch(metricsProvider);
     final tasks = ref.watch(todayPlanProvider);
     final isDark = AxonThemeMode.isDark;
-    final bg = isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF);
-
     return Scaffold(
-      backgroundColor: bg,
+      backgroundColor: AxonColors.background,
       body: SafeArea(
         child: RefreshIndicator(
           onRefresh: () async {
@@ -257,7 +255,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             child: LinearProgressIndicator(
               value: focusProgress,
               minHeight: 6,
-              backgroundColor: Colors.white.withValues(alpha: 0.08),
+              backgroundColor: AxonColors.divider,
               valueColor:
                   const AlwaysStoppedAnimation<Color>(Color(0xFF10B981)),
             ),
@@ -301,7 +299,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           child: LinearProgressIndicator(
             value: readiness <= 0 ? 0.08 : readiness.clamp(0.0, 1.0),
             minHeight: 8,
-            backgroundColor: Colors.white.withValues(alpha: 0.08),
+            backgroundColor: AxonColors.divider,
             valueColor: AlwaysStoppedAnimation<Color>(
               readiness <= 0
                   ? AxonColors.textTertiary
@@ -710,7 +708,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     if (_examFutureKey == key && _examFuture != null) return _examFuture;
 
     _examFutureKey = key;
-    _examFuture = BoardExamService()
+    _examFuture = ExamService()
         .fetchBoardDates(board, subjects: user.subjects)
         .timeout(
           const Duration(seconds: 8),
@@ -845,7 +843,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
 class _HubCard extends StatelessWidget {
   final Widget child;
-  const _HubCard({required this.child});
+  const _HubCard({required this.child, super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -855,7 +853,7 @@ class _HubCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AxonColors.surfaceElevated,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white12),
+        border: Border.all(color: AxonColors.divider),
       ),
       child: child,
     );
@@ -865,7 +863,7 @@ class _HubCard extends StatelessWidget {
 class _IconBox extends StatelessWidget {
   final IconData icon;
   final Color color;
-  const _IconBox({required this.icon, required this.color});
+  const _IconBox({required this.icon, required this.color, super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -891,6 +889,7 @@ class _StatusChip extends StatelessWidget {
     required this.label,
     required this.value,
     required this.color,
+    super.key,
   });
 
   @override
@@ -900,7 +899,7 @@ class _StatusChip extends StatelessWidget {
       decoration: BoxDecoration(
         color: AxonColors.surfaceElevated,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white12),
+        border: Border.all(color: AxonColors.divider),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -944,6 +943,7 @@ class _ActionChip extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
+    super.key,
   });
 
   @override
@@ -991,6 +991,7 @@ class _MetricTile extends StatelessWidget {
     required this.value,
     required this.detail,
     required this.color,
+    super.key,
   });
 
   @override
@@ -1047,6 +1048,7 @@ class _PortfolioMetric extends StatelessWidget {
     required this.label,
     required this.value,
     required this.color,
+    super.key,
   });
 
   @override
@@ -1093,6 +1095,7 @@ class _InlineNavTile extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.onTap,
+    super.key,
   });
 
   @override
@@ -1134,6 +1137,7 @@ class _TaskRow extends StatelessWidget {
     required this.task,
     required this.onToggle,
     required this.onOpen,
+    super.key,
   });
 
   @override
@@ -1167,8 +1171,8 @@ class _TaskRow extends StatelessWidget {
                   ),
                 ),
                 child: task.isCompleted
-                    ? const Icon(Icons.check_rounded,
-                        color: Colors.white, size: 16)
+                    ? Icon(Icons.check_rounded,
+                        color: AxonColors.textPrimary, size: 16)
                     : null,
               ),
             ),
@@ -1256,7 +1260,7 @@ class _TaskRow extends StatelessWidget {
 
 class _SkeletonLine extends StatelessWidget {
   final double widthFactor;
-  const _SkeletonLine({this.widthFactor = 0.72});
+  const _SkeletonLine({this.widthFactor = 0.72, super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -1265,7 +1269,7 @@ class _SkeletonLine extends StatelessWidget {
       child: Container(
         height: 12,
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.06),
+          color: AxonColors.surfaceHighlight,
           borderRadius: BorderRadius.circular(6),
         ),
       ),

@@ -47,10 +47,10 @@ class MilestoneProgressBar extends StatelessWidget {
             backgroundColor: AxonColors.divider,
             valueColor: AlwaysStoppedAnimation<Color>(
               ratio >= 0.75
-                  ? const Color(0xFF27AE60)
+                  ? AxonColors.success
                   : ratio >= 0.4
-                      ? const Color(0xFFF0AD4E)
-                      : const Color(0xFFD9534F),
+                      ? AxonColors.warning
+                      : AxonColors.error,
             ),
           ),
         ),

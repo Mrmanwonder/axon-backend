@@ -300,7 +300,7 @@ class _FlippingNavbarItem extends StatelessWidget {
                           isSelected ? FontWeight.w700 : FontWeight.w500,
                       color: isSelected
                           ? AxonColors.accent
-                          : Colors.white.withValues(alpha: 0.5),
+                          : AxonColors.textTertiary,
                       letterSpacing: 0.5,
                     ),
                   ),
@@ -315,9 +315,9 @@ class _FlippingNavbarItem extends StatelessWidget {
   Color _getIconColor(bool showNewIcon) {
     if (AxonThemeMode.isDark) {
       if (isSelected) {
-        return showNewIcon ? AxonColors.accent : Colors.white;
+        return showNewIcon ? AxonColors.accent : AxonColors.textPrimary;
       }
-      return Colors.white38;
+      return AxonColors.textTertiary;
     } else {
       if (isSelected) {
         return showNewIcon ? AxonColors.accent : AxonColors.accent;

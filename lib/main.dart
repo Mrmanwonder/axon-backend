@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'firebase_options.dart';
@@ -15,7 +16,7 @@ import 'theme/app_theme.dart';
 import 'services/notification_service.dart';
 import 'services/secure_credentials_service.dart';
 import 'services/app_state.dart';
-import 'services/board_exam_service.dart';
+import 'services/exam_service.dart';
 import 'services/smart_reminder_service.dart';
 import 'services/google_drive_downloader.dart';
 import 'services/grok_service.dart';
@@ -66,10 +67,9 @@ void main() async {
     // Initialize secure credentials first
     final credentials = SecureCredentialsService();
     await credentials.initialize().timeout(const Duration(seconds: 2));
-    final allCreds = await credentials.getAllCredentials();
 
     debugPrint('Axon: keys are server-side only');
-  }
+  } catch (_) {} // Credentials are optional
 
   runApp(
     ProviderScope(
@@ -120,6 +120,9 @@ class _AxonAppState extends State<AxonApp> {
 
   Future<void> _initialize() async {
     try {
+      // Pre-warm Google Fonts (Inter, Google Sans, Roboto Mono) during splash
+      unawaited(_prewarmGoogleFonts());
+
       // Use a timeout to ensure splash screen doesn't hang indefinitely
       await widget.onInitialized().timeout(const Duration(seconds: 10), onTimeout: () {
         debugPrint('Startup tasks timed out. Proceeding to app.');
@@ -137,41 +140,21 @@ class _AxonAppState extends State<AxonApp> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = AxonThemeMode.isDark;
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      themeMode: AxonThemeMode.mode,
-      darkTheme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor:
-            isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-        appBarTheme: AppBarTheme(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-        ),
-        colorScheme: ColorScheme.dark(
-          surface: isDark ? const Color(0xFF0D0D0D) : const Color(0xFFFFFFFF),
-          primary: const Color(0xFF3A86FF),
-          secondary: const Color(0xFF6BA3FF),
-        ),
-      ),
-      theme: ThemeData.light().copyWith(
-        scaffoldBackgroundColor:
-            isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-        appBarTheme: AppBarTheme(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-        ),
-        colorScheme: ColorScheme.light(
-          surface: isDark ? const Color(0xFF0D0D0D) : const Color(0xFFFFFFFF),
-          primary: const Color(0xFF3A86FF),
-          secondary: const Color(0xFF6BA3FF),
-        ),
-      ),
-      home: _isInitialized
-          ? const _AppWithRouter()
-          : const Scaffold(backgroundColor: Color(0xFF040B14)),
+    return ListenableBuilder(
+      listenable: AxonThemeMode.notifier,
+      builder: (context, _) {
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          themeMode: AxonThemeMode.mode,
+          theme: AxonTheme.light,
+          darkTheme: AxonTheme.dark,
+          home: _isInitialized
+              ? const _AppWithRouter()
+              : Scaffold(
+                  backgroundColor: AxonColors.background,
+                ),
+        );
+      },
     );
   }
 }
@@ -191,13 +174,28 @@ class _AppWithRouter extends ConsumerWidget {
     final router = ref.watch(appRouterProvider);
     final greyscaleNotifier = greyscaleModeNotifierProvider;
 
+    // Dynamic accent scheme: Watch deadlineAccentProvider and update AxonAccentPalette
+    final deadlineAccent = ref.watch(deadlineAccentProvider);
+    if (deadlineAccent.hasValue) {
+      final scheme = deadlineAccent.value!;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        AxonAccentPalette.setScheme(scheme);
+      });
+    }
+
     return ListenableBuilder(
-      listenable: greyscaleNotifier,
+      listenable: Listenable.merge([
+        greyscaleNotifier,
+        AxonThemeMode.notifier,
+        AxonAccentPalette.notifier,
+      ]),
       builder: (context, _) {
         final isGreyscale = greyscaleNotifier.enabled;
         final child = MaterialApp.router(
           debugShowCheckedModeBanner: false,
-          theme: ThemeData.dark(),
+          theme: AxonTheme.light,
+          darkTheme: AxonTheme.dark,
+          themeMode: AxonThemeMode.mode,
           routerConfig: router,
         );
         if (isGreyscale) {
@@ -237,8 +235,8 @@ Future<void> _runDeferredStartupTasks() async {
     debugPrint('.env reload failed: $e');
   }
 
-  unawaited(BoardExamService.initFromPrefs().timeout(const Duration(seconds: 3)).catchError((e) {
-    debugPrint('BoardExamService init failed: $e');
+  unawaited(ExamService.initFromPrefs().timeout(const Duration(seconds: 3)).catchError((e) {
+    debugPrint('ExamService init failed: $e');
   }));
 
   unawaited(StudyLockService.instance.initialize().timeout(const Duration(seconds: 2)).catchError((e) {
@@ -305,6 +303,17 @@ Future<void> _runDeferredStartupTasks() async {
   unawaited(_autoGenerateDailyPlan());
 }
 
+Future<void> _prewarmGoogleFonts() async {
+  // Trigger font loading for all three font families used across the app.
+  // The google_fonts package caches loaded fonts, so subsequent calls in
+  // widgets resolve instantly.
+  try {
+    GoogleFonts.inter();
+    GoogleFonts.googleSans();
+    GoogleFonts.robotoMono();
+  } catch (_) {}
+}
+
 Future<void> _autoGenerateDailyPlan() async {
   try {
     final user = firebase_auth.FirebaseAuth.instance.currentUser;
@@ -363,7 +372,7 @@ final deadlineAccentProvider = FutureProvider<AxonAccentScheme>((ref) async {
     final prefs = _prefsInstance ?? await SharedPreferences.getInstance();
     final preferredStudyHour = _preferredStudyHourFromPrefs(prefs);
     final now = DateTime.now();
-    final result = await BoardExamService().fetchBoardDates(board);
+    final result = await ExamService().fetchBoardDates(board);
     DateTime? nearest;
     for (final event in result.events) {
       if (event.startDate.isBefore(now)) continue;
@@ -373,11 +382,11 @@ final deadlineAccentProvider = FutureProvider<AxonAccentScheme>((ref) async {
     }
     final days = nearest?.difference(now).inDays;
     final base = AxonAccentScheme.forDaysUntilExam(days);
-    return _withStudyWindowGlow(base, preferredStudyHour, now);
+    return withStudyWindowGlow(base, preferredStudyHour, now);
   } catch (_) {
     final prefs = _prefsInstance ?? await SharedPreferences.getInstance();
     final preferredStudyHour = _preferredStudyHourFromPrefs(prefs);
-    return _withStudyWindowGlow(
+    return withStudyWindowGlow(
       AxonAccentScheme.focused,
       preferredStudyHour,
       DateTime.now(),
@@ -408,7 +417,7 @@ int? _preferredStudyHourFromPrefs(SharedPreferences prefs) {
   }
 }
 
-AxonAccentScheme _withStudyWindowGlow(
+AxonAccentScheme withStudyWindowGlow(
   AxonAccentScheme base,
   int? preferredHour,
   DateTime now,
@@ -416,7 +425,8 @@ AxonAccentScheme _withStudyWindowGlow(
   if (preferredHour == null) return base;
   final minutesNow = now.hour * 60 + now.minute;
   final preferredMinutes = preferredHour * 60;
-  final delta = (minutesNow - preferredMinutes).abs();
+  final diff = (minutesNow - preferredMinutes).abs();
+  final delta = diff > 720 ? 1440 - diff : diff;
   if (delta > 35) return base;
   final t = 1.0 - (delta / 35.0);
   return AxonAccentScheme(

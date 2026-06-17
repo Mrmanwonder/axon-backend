@@ -9,6 +9,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:go_router/go_router.dart';
 import '../../services/app_state.dart';
 import '../../services/input_validation_service.dart';
+import '../../theme/app_theme.dart';
 
 class RegisterScreen extends ConsumerStatefulWidget {
   const RegisterScreen({super.key});
@@ -113,7 +114,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   Widget build(BuildContext context) {
     final authState = ref.watch(authStateProvider);
     return Scaffold(
-      backgroundColor: const Color(0xFF050505),
+      backgroundColor: AxonColors.background,
       body: Stack(
         children: [
           Positioned(
@@ -151,14 +152,14 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                       children: [
                         IconButton(
                           onPressed: () => context.go('/auth/login'),
-                          icon: const Icon(Icons.arrow_back, color: Colors.white24),
+                          icon: Icon(Icons.arrow_back, color: AxonColors.textTertiary),
                         ),
                       ],
                     ),
                     Text(
                       "IDENTITY_SEQUENCE_START",
                       style: GoogleFonts.robotoMono(
-                        color: Colors.white24,
+                        color: AxonColors.textTertiary,
                         fontSize: 10,
                         letterSpacing: 2.0,
                       ),
@@ -249,7 +250,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                                   "WINDOWS BUILD: USE EMAIL/PASSWORD AUTH",
                                   textAlign: TextAlign.center,
                                   style: GoogleFonts.robotoMono(
-                                    color: Colors.white24,
+                                    color: AxonColors.textTertiary,
                                     fontSize: 10,
                                     letterSpacing: 1.0,
                                   ),
@@ -267,7 +268,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                         Text(
                           "Already registered? ",
                           style: GoogleFonts.robotoMono(
-                            color: Colors.white38,
+                            color: AxonColors.textTertiary,
                             fontSize: 10,
                             letterSpacing: 1.0,
                           ),
@@ -329,7 +330,7 @@ class _AuthInputField extends StatelessWidget {
         children: [
           Text(
             label,
-            style: GoogleFonts.robotoMono(color: Colors.white38, fontSize: 8, letterSpacing: 1.5),
+            style: GoogleFonts.robotoMono(color: AxonColors.textTertiary, fontSize: 8, letterSpacing: 1.5),
           ),
           const SizedBox(height: 8),
           AnimatedContainer(
@@ -349,17 +350,17 @@ class _AuthInputField extends StatelessWidget {
             child: TextField(
               controller: controller,
               obscureText: isPassword && isObscured,
-              style: GoogleFonts.robotoMono(color: Colors.white, fontSize: 14),
+              style: GoogleFonts.robotoMono(color: AxonColors.textPrimary, fontSize: 14),
               cursorColor: const Color(0xFF3A86FF),
               decoration: InputDecoration(
                 hintText: hint,
                 hintStyle: GoogleFonts.robotoMono(color: Colors.white10, fontSize: 14),
-                prefixIcon: Icon(icon, color: Colors.white24, size: 18),
+                prefixIcon: Icon(icon, color: AxonColors.textTertiary, size: 18),
                 suffixIcon: isPassword
                     ? IconButton(
                         icon: Icon(
                           isObscured ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                          color: Colors.white24,
+                          color: AxonColors.textTertiary,
                           size: 18,
                         ),
                         onPressed: onToggleVisibility,
@@ -445,7 +446,7 @@ class _PrimaryAuthButtonState extends State<_PrimaryAuthButton> {
               : Text(
                   widget.label,
                   style: GoogleFonts.robotoMono(
-                    color: Colors.white,
+                    color: AxonColors.textPrimary,
                     fontWeight: FontWeight.bold,
                     fontSize: 12,
                     letterSpacing: 1.2,
@@ -502,12 +503,12 @@ class _SecondaryAuthButtonState extends State<_SecondaryAuthButton> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(widget.icon, color: Colors.white54, size: 20),
+              Icon(widget.icon, color: AxonColors.textSecondary, size: 20),
               const SizedBox(width: 8),
               Text(
                 widget.label,
                 style: GoogleFonts.robotoMono(
-                  color: Colors.white54,
+                  color: AxonColors.textSecondary,
                   fontSize: 11,
                   letterSpacing: 1.0,
                 ),

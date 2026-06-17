@@ -16,6 +16,7 @@ import '../../services/caie_topic_engine.dart';
 import '../../services/caie_recommendation_engine.dart';
 import '../../services/caie_command_palette.dart';
 import '../../services/caie_paper_repository.dart';
+import '../../theme/app_theme.dart';
 
 // ── Enums ──────────────────────────────────────────────────────────
 
@@ -251,7 +252,7 @@ class _UnifiedCaieScreenState extends ConsumerState<UnifiedCaieScreen>
         return KeyEventResult.ignored;
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFF0B1020),
+        backgroundColor: AxonColors.background,
         body: LayoutBuilder(
           builder: (context, constraints) {
             final layout = _layout(constraints.maxWidth);

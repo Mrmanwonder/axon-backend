@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../services/exam_planner_service.dart';
 import '../../services/mock_exam_service.dart';
+import '../../theme/app_theme.dart';
 
 class MockSimulationScreen extends StatefulWidget {
   final PastPaperPack paper;
@@ -133,7 +134,7 @@ class _MockSimulationScreenState extends State<MockSimulationScreen>
       isDismissible: false,
       enableDrag: false,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF0F1117),
+      backgroundColor: AxonColors.surfaceHighlight,
       builder: (context) => _ReflectionSheet(
         maxMarks: widget.paper.maxMarks,
         paperTitle: '${widget.paper.subject} ${widget.paper.year} ${widget.paper.variant}',
@@ -190,7 +191,7 @@ class _MockSimulationScreenState extends State<MockSimulationScreen>
         }
       },
       child: Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: AxonColors.background,
         body: SafeArea(
           child: Column(
             children: [
@@ -215,8 +216,8 @@ class _MockSimulationScreenState extends State<MockSimulationScreen>
                           const SizedBox(height: 6),
                           Text(
                             '${widget.paper.subject} ${widget.paper.year} ${widget.paper.variant}',
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: AxonColors.textPrimary,
                               fontSize: 18,
                               fontWeight: FontWeight.w700,
                             ),
@@ -225,7 +226,7 @@ class _MockSimulationScreenState extends State<MockSimulationScreen>
                           Text(
                             '${widget.paper.maxMarks} marks · ${widget.paper.duration} minutes',
                             style: GoogleFonts.robotoMono(
-                              color: Colors.white38,
+                              color: AxonColors.textTertiary,
                               fontSize: 11,
                             ),
                           ),
@@ -263,10 +264,10 @@ class _MockSimulationScreenState extends State<MockSimulationScreen>
                 child: Container(
                   margin: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.02),
+                    color: AxonColors.textPrimary.withValues(alpha: 0.02),
                     borderRadius: BorderRadius.circular(24),
                     border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.05),
+                      color: AxonColors.textPrimary.withValues(alpha: 0.05),
                     ),
                   ),
                   child: Stack(
@@ -296,11 +297,11 @@ class _MockSimulationScreenState extends State<MockSimulationScreen>
                                 ),
                               ),
                               const SizedBox(height: 12),
-                              const Text(
+                              Text(
                                 'Secure paper mode is active.\nUse triage below to move through the paper.\nKeep all AI aids disabled until reflection.',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
-                                  color: Colors.white70,
+                                  color: AxonColors.textSecondary,
                                   fontSize: 16,
                                   height: 1.5,
                                 ),
@@ -311,7 +312,7 @@ class _MockSimulationScreenState extends State<MockSimulationScreen>
                                     ? 'No questions flagged yet.'
                                     : '${_flaggedQuestions.length} questions flagged for review.',
                                 style: GoogleFonts.robotoMono(
-                                  color: Colors.white38,
+                                  color: AxonColors.textTertiary,
                                   fontSize: 11,
                                 ),
                               ),
@@ -534,8 +535,8 @@ class _ReflectionSheetState extends State<_ReflectionSheet> {
           const SizedBox(height: 8),
           Text(
             widget.paperTitle,
-            style: const TextStyle(
-              color: Colors.white,
+            style: TextStyle(
+              color: AxonColors.textPrimary,
               fontSize: 22,
               fontWeight: FontWeight.w700,
             ),
@@ -544,7 +545,7 @@ class _ReflectionSheetState extends State<_ReflectionSheet> {
           Text(
             'Record your mark now. This closes the simulation and updates your exam signal with a real post-paper outcome.',
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.75),
+              color: AxonColors.textPrimary.withValues(alpha: 0.75),
               height: 1.5,
             ),
           ),
@@ -566,13 +567,13 @@ class _ReflectionSheetState extends State<_ReflectionSheet> {
           TextField(
             controller: _scoreController,
             keyboardType: TextInputType.number,
-            style: const TextStyle(color: Colors.white),
+            style: TextStyle(color: AxonColors.textPrimary),
             decoration: InputDecoration(
               labelText: 'Score',
               hintText: '0 - ${widget.maxMarks}',
               filled: true,
-              fillColor: Colors.white.withValues(alpha: 0.05),
-              labelStyle: const TextStyle(color: Colors.white54),
+              fillColor: AxonColors.textPrimary.withValues(alpha: 0.05),
+              labelStyle: TextStyle(color: AxonColors.textSecondary),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(14),
                 borderSide: BorderSide.none,
@@ -583,13 +584,13 @@ class _ReflectionSheetState extends State<_ReflectionSheet> {
           TextField(
             controller: _reflectionController,
             maxLines: 3,
-            style: const TextStyle(color: Colors.white),
+            style: TextStyle(color: AxonColors.textPrimary),
             decoration: InputDecoration(
               labelText: 'Reflection',
               hintText: 'Where did you leak marks, and what gets drilled next?',
               filled: true,
-              fillColor: Colors.white.withValues(alpha: 0.05),
-              labelStyle: const TextStyle(color: Colors.white54),
+              fillColor: AxonColors.textPrimary.withValues(alpha: 0.05),
+              labelStyle: TextStyle(color: AxonColors.textSecondary),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(14),
                 borderSide: BorderSide.none,
@@ -625,7 +626,7 @@ class _ReflectionStat extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.04),
+          color: AxonColors.textPrimary.withValues(alpha: 0.04),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: Colors.white12),
         ),
@@ -635,7 +636,7 @@ class _ReflectionStat extends StatelessWidget {
             Text(
               label,
               style: GoogleFonts.robotoMono(
-                color: Colors.white38,
+                color: AxonColors.textTertiary,
                 fontSize: 10,
                 letterSpacing: 1.4,
               ),
@@ -643,8 +644,8 @@ class _ReflectionStat extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               value,
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: AxonColors.textPrimary,
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
               ),

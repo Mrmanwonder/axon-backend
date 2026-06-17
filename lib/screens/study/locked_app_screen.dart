@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../services/study_lock_service.dart';
+import '../../theme/app_theme.dart';
 
 class LockedAppScreen extends ConsumerStatefulWidget {
   final String appName;
@@ -94,15 +95,7 @@ class _LockedAppScreenState extends ConsumerState<LockedAppScreen>
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              const Color(0xFF1A0A0A),
-              const Color(0xFF0D0D0D),
-              const Color(0xFF050505),
-            ],
-          ),
+          gradient: AxonGradients.backgroundGradient,
         ),
         child: Stack(
           children: [

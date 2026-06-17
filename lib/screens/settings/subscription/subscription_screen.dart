@@ -345,7 +345,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                 'MOST POPULAR',
                 textAlign: TextAlign.center,
                 style: GoogleFonts.spaceGrotesk(
-                  color: Colors.black,
+                  color: AxonColors.background,
                   fontSize: 11,
                   fontWeight: FontWeight.w800,
                   letterSpacing: 1.5,
@@ -510,7 +510,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
           backgroundColor: isUpgrade
               ? AxonColors.electricCyan
               : Colors.white.withValues(alpha: 0.1),
-          foregroundColor: isUpgrade ? Colors.black : Colors.white,
+          foregroundColor: isUpgrade ? AxonColors.background : AxonColors.textPrimary,
           disabledBackgroundColor: Colors.white.withValues(alpha: 0.05),
           disabledForegroundColor: Colors.white30,
           padding: const EdgeInsets.symmetric(vertical: 14),
@@ -519,7 +519,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
           ),
         ),
         child: isLoading
-            ? const RoseLoader(size: 20, color: Colors.black54)
+            ? RoseLoader(size: 20, color: AxonColors.textSecondary)
             : Text(
                 label,
                 style: const TextStyle(fontWeight: FontWeight.w700),
@@ -858,7 +858,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
     AxonDialog.showCustom(
       context: context,
       title: 'Complete Your Purchase',
-      backgroundColor: const Color(0xFF1a1a2e),
+      backgroundColor: AxonColors.background,
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -916,7 +916,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
     AxonDialog.showCustom(
       context: context,
       title: 'Manage Subscription',
-      backgroundColor: const Color(0xFF1a1a2e),
+      backgroundColor: AxonColors.background,
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [

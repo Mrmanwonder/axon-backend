@@ -176,12 +176,20 @@ class CatalogController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void reset() {
+    _startupCtrl?.dispose();
+    _startupCtrl = null;
+    _breathCtrl?.dispose();
+    _breathCtrl = null;
+    _snapCtrl?.dispose();
+    _snapCtrl = null;
+    _initialized = false;
+  }
+
   // ── Dispose ───────────────────────────────────────────────────────────────
   @override
   void dispose() {
-    _startupCtrl?.dispose();
-    _breathCtrl?.dispose();
-    _snapCtrl?.dispose();
+    reset();
     super.dispose();
   }
 }

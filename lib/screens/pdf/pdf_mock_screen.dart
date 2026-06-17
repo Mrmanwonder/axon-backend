@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
+import '../../theme/app_theme.dart';
 
 class PdfMockScreen extends ConsumerStatefulWidget {
   final String filePath;
@@ -36,20 +37,20 @@ class _PdfMockScreenState extends ConsumerState<PdfMockScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: AxonColors.background,
       appBar: AppBar(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
+        backgroundColor: AxonColors.background,
+        foregroundColor: AxonColors.textPrimary,
         title: Text(
           widget.title,
           style: GoogleFonts.inter(fontWeight: FontWeight.w600),
         ),
       ),
       body: widget.filePath.isEmpty
-          ? const Center(
+          ? Center(
               child: Text(
                 'No PDF file selected',
-                style: TextStyle(color: Colors.white),
+                style: TextStyle(color: AxonColors.textPrimary),
               ),
             )
           : SfPdfViewer.file(

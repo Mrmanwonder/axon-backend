@@ -130,12 +130,12 @@ class _ActiveRecallScreenState extends ConsumerState<ActiveRecallScreen> {
           children: [
             Row(
               children: [
-                Icon(Icons.psychology, color: Color(0xFFDDA0DD)),
+                Icon(Icons.psychology, color: AxonColors.accent),
                 const SizedBox(width: 12),
                 Text(
                   'Add Recall Item',
                   style: GoogleFonts.inter(
-                    color: Colors.white,
+                    color: AxonColors.textPrimary,
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
                   ),
@@ -145,44 +145,44 @@ class _ActiveRecallScreenState extends ConsumerState<ActiveRecallScreen> {
             const SizedBox(height: 24),
             TextField(
               controller: questionController,
-              style: const TextStyle(color: Colors.white),
+              style: TextStyle(color: AxonColors.textPrimary),
               maxLines: 2,
               decoration: InputDecoration(
                 labelText: 'Question / Prompt',
-                labelStyle: const TextStyle(color: Colors.white54),
+                labelStyle: TextStyle(color: AxonColors.textSecondary),
                 prefixIcon:
-                    const Icon(Icons.help_outline, color: Colors.white38),
+                    Icon(Icons.help_outline, color: AxonColors.textTertiary),
                 filled: true,
-                fillColor: Colors.white.withValues(alpha: 0.05),
+                fillColor: AxonColors.textPrimary.withValues(alpha: 0.05),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide.none,
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: Color(0xFFDDA0DD)),
+                  borderSide: BorderSide(color: AxonColors.accent),
                 ),
               ),
             ),
             const SizedBox(height: 16),
             TextField(
               controller: answerController,
-              style: const TextStyle(color: Colors.white),
+              style: TextStyle(color: AxonColors.textPrimary),
               maxLines: 2,
               decoration: InputDecoration(
                 labelText: 'Answer',
-                labelStyle: const TextStyle(color: Colors.white54),
+                labelStyle: TextStyle(color: AxonColors.textSecondary),
                 prefixIcon:
-                    const Icon(Icons.lightbulb_outline, color: Colors.white38),
+                    Icon(Icons.lightbulb_outline, color: AxonColors.textTertiary),
                 filled: true,
-                fillColor: Colors.white.withValues(alpha: 0.05),
+                fillColor: AxonColors.textPrimary.withValues(alpha: 0.05),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide.none,
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: Color(0xFFDDA0DD)),
+                  borderSide: BorderSide(color: AxonColors.accent),
                 ),
               ),
             ),
@@ -210,16 +210,16 @@ class _ActiveRecallScreenState extends ConsumerState<ActiveRecallScreen> {
                   Navigator.pop(context);
                 },
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Color(0xFFDDA0DD),
+                  backgroundColor: AxonColors.accent,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
                 ),
-                child: const Text(
+                child: Text(
                   'Add Item',
                   style: TextStyle(
-                      color: Colors.black, fontWeight: FontWeight.bold),
+                      color: AxonColors.background, fontWeight: FontWeight.bold),
                 ),
               ),
             ),
@@ -236,34 +236,34 @@ class _ActiveRecallScreenState extends ConsumerState<ActiveRecallScreen> {
     }
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: AxonColors.background,
       appBar: AppBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AxonColors.background,
         leading: IconButton(
           onPressed: () => popOrGo(context, '/study'),
-          icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+          icon: Icon(Icons.arrow_back_rounded, color: AxonColors.textPrimary),
         ),
         title: Row(
           children: [
-            Icon(Icons.psychology, color: Color(0xFFDDA0DD)),
+            Icon(Icons.psychology, color: AxonColors.accent),
             const SizedBox(width: 8),
             Text(
               'Active Recall',
               style: GoogleFonts.inter(
-                  color: Colors.white, fontWeight: FontWeight.bold),
+                  color: AxonColors.textPrimary, fontWeight: FontWeight.bold),
             ),
           ],
         ),
       ),
       body: _isLoading
-          ? const Center(child: RoseLoader(size: 24, color: Color(0xFFDDA0DD)))
+          ? Center(child: RoseLoader(size: 24, color: AxonColors.accent))
           : _items.isEmpty
               ? _buildEmptyState()
               : _buildItemList(),
       floatingActionButton: FloatingActionButton(
         onPressed: _showAddItemDialog,
-        backgroundColor: Color(0xFFDDA0DD),
-        child: const Icon(Icons.add, color: Colors.black),
+        backgroundColor: AxonColors.accent,
+        child: Icon(Icons.add, color: AxonColors.background),
       ),
     );
   }
@@ -273,20 +273,20 @@ class _ActiveRecallScreenState extends ConsumerState<ActiveRecallScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.psychology_outlined, color: Colors.white24, size: 64),
+          Icon(Icons.psychology_outlined, color: AxonColors.textTertiary, size: 64),
           const SizedBox(height: 16),
           Text('No recall items yet',
-              style: TextStyle(color: Colors.white54, fontSize: 18)),
+              style: TextStyle(color: AxonColors.textSecondary, fontSize: 18)),
           const SizedBox(height: 8),
           Text('Add questions to test yourself',
-              style: TextStyle(color: Colors.white38)),
+              style: TextStyle(color: AxonColors.textTertiary)),
           const SizedBox(height: 24),
           ElevatedButton.icon(
             onPressed: _showAddItemDialog,
             icon: const Icon(Icons.add),
             label: const Text('Add First Item'),
             style: ElevatedButton.styleFrom(
-              backgroundColor: Color(0xFFDDA0DD),
+              backgroundColor: AxonColors.accent,
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),
             ),
@@ -305,7 +305,7 @@ class _ActiveRecallScreenState extends ConsumerState<ActiveRecallScreen> {
             children: [
               Text(
                 '${_items.length} items',
-                style: TextStyle(color: Colors.white54),
+                style: TextStyle(color: AxonColors.textSecondary),
               ),
               const Spacer(),
               ElevatedButton.icon(
@@ -313,7 +313,7 @@ class _ActiveRecallScreenState extends ConsumerState<ActiveRecallScreen> {
                 icon: const Icon(Icons.play_arrow, size: 18),
                 label: const Text('Start Practice'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Color(0xFFDDA0DD),
+                  backgroundColor: AxonColors.accent,
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
                 ),
@@ -345,33 +345,33 @@ class _ActiveRecallScreenState extends ConsumerState<ActiveRecallScreen> {
   Widget _buildActiveSession() {
     if (_currentIndex >= _items.length) {
       return Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: AxonColors.background,
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.celebration, color: Color(0xFFDDA0DD), size: 64),
+              Icon(Icons.celebration, color: AxonColors.accent, size: 64),
               const SizedBox(height: 16),
               Text('Session Complete!',
-                  style: TextStyle(color: Colors.white, fontSize: 24)),
+                  style: TextStyle(color: AxonColors.textPrimary, fontSize: 24)),
               const SizedBox(height: 8),
               Text(
                 '$_correctCount / $_totalCount correct (${(_totalCount > 0 ? (_correctCount / _totalCount * 100).round() : 0)}%)',
-                style: TextStyle(color: Colors.white54, fontSize: 18),
+                style: TextStyle(color: AxonColors.textSecondary, fontSize: 18),
               ),
               const SizedBox(height: 24),
               ElevatedButton(
                 onPressed: _endSession,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Color(0xFFDDA0DD),
+                  backgroundColor: AxonColors.accent,
                   padding:
                       const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
                 ),
-                child: const Text('Finish',
+                child: Text('Finish',
                     style: TextStyle(
-                        color: Colors.black, fontWeight: FontWeight.bold)),
+                        color: AxonColors.background, fontWeight: FontWeight.bold)),
               ),
             ],
           ),
@@ -382,16 +382,16 @@ class _ActiveRecallScreenState extends ConsumerState<ActiveRecallScreen> {
     final item = _items[_currentIndex];
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: AxonColors.background,
       appBar: AppBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AxonColors.background,
         leading: IconButton(
           onPressed: _endSession,
-          icon: const Icon(Icons.close, color: Colors.white54),
+          icon: Icon(Icons.close, color: AxonColors.textSecondary),
         ),
         title: Text(
           '${_currentIndex + 1} / ${_items.length}',
-          style: const TextStyle(color: Colors.white),
+          style: TextStyle(color: AxonColors.textPrimary),
         ),
       ),
       body: Column(
@@ -399,7 +399,7 @@ class _ActiveRecallScreenState extends ConsumerState<ActiveRecallScreen> {
           LinearProgressIndicator(
             value: _currentIndex / _items.length,
             backgroundColor: Colors.white10,
-            valueColor: AlwaysStoppedAnimation(Color(0xFFDDA0DD)),
+            valueColor: AlwaysStoppedAnimation(AxonColors.accent),
           ),
           Expanded(
             child: GestureDetector(
@@ -412,7 +412,7 @@ class _ActiveRecallScreenState extends ConsumerState<ActiveRecallScreen> {
                   borderRadius: BorderRadius.circular(24),
                   border: Border.all(
                     color: _showAnswer
-                        ? Color(0xFFDDA0DD)
+                        ? AxonColors.accent
                         : Colors.white.withValues(alpha: 0.1),
                     width: 2,
                   ),
@@ -425,7 +425,7 @@ class _ActiveRecallScreenState extends ConsumerState<ActiveRecallScreen> {
                         item['question'] ?? '',
                         textAlign: TextAlign.center,
                         style: GoogleFonts.inter(
-                          color: Colors.white,
+                          color: AxonColors.textPrimary,
                           fontSize: 24,
                         ),
                       ),
@@ -433,27 +433,27 @@ class _ActiveRecallScreenState extends ConsumerState<ActiveRecallScreen> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.touch_app, color: Colors.white24),
+                          Icon(Icons.touch_app, color: AxonColors.textTertiary),
                           const SizedBox(width: 8),
                           Text(
                             'Tap to reveal answer',
-                            style: TextStyle(color: Colors.white38),
+                            style: TextStyle(color: AxonColors.textTertiary),
                           ),
                         ],
                       ),
                     ] else ...[
                       Text(
                         item['question'] ?? '',
-                        style: TextStyle(color: Colors.white54, fontSize: 16),
+                        style: TextStyle(color: AxonColors.textSecondary, fontSize: 16),
                       ),
                       const SizedBox(height: 24),
-                      Container(height: 2, width: 80, color: Color(0xFFDDA0DD)),
+                      Container(height: 2, width: 80, color: AxonColors.accent),
                       const SizedBox(height: 24),
                       Text(
                         item['answer'] ?? '',
                         textAlign: TextAlign.center,
                         style: GoogleFonts.inter(
-                          color: Color(0xFFDDA0DD),
+                          color: AxonColors.accent,
                           fontSize: 24,
                           fontWeight: FontWeight.bold,
                         ),
@@ -505,15 +505,15 @@ class _ActiveRecallScreenState extends ConsumerState<ActiveRecallScreen> {
                         });
                       },
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Color(0xFFDDA0DD),
+                        backgroundColor: AxonColors.accent,
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
                       ),
-                      child: const Text('Got it!',
+                      child: Text('Got it!',
                           style: TextStyle(
-                              color: Colors.black,
+                              color: AxonColors.background,
                               fontWeight: FontWeight.bold)),
                     ),
                   ),
@@ -538,7 +538,7 @@ class _RecallItemCard extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.05),
+        color: AxonColors.textPrimary.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
@@ -549,8 +549,8 @@ class _RecallItemCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   item['question'] ?? '',
-                  style: const TextStyle(
-                    color: Colors.white,
+                  style: TextStyle(
+                    color: AxonColors.textPrimary,
                     fontSize: 15,
                     fontWeight: FontWeight.w500,
                   ),
@@ -559,7 +559,7 @@ class _RecallItemCard extends StatelessWidget {
               IconButton(
                 onPressed: onDelete,
                 icon:
-                    Icon(Icons.delete_outline, color: Colors.white24, size: 20),
+                    Icon(Icons.delete_outline, color: AxonColors.textTertiary, size: 20),
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(),
               ),
@@ -568,7 +568,7 @@ class _RecallItemCard extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             item['answer'] ?? '',
-            style: TextStyle(color: Colors.white54, fontSize: 13),
+            style: TextStyle(color: AxonColors.textSecondary, fontSize: 13),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
           ),

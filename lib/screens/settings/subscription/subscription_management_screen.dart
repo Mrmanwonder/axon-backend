@@ -396,7 +396,7 @@ class SubscriptionManagementScreen extends ConsumerWidget {
                     onPressed: () => context.push('/settings/subscription'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AxonColors.electricCyan,
-                      foregroundColor: Colors.black,
+                      foregroundColor: AxonColors.background,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10),

@@ -438,6 +438,22 @@ service cloud.firestore {
             || request.resource.data.linked_target_ids is list);
     }
 
+    function validAdmissionsMarkDoc() {
+      return request.resource.data.keys().hasAll([
+          'subject',
+          'current_mark',
+          'current_grade',
+          'target_grade'
+        ])
+        && request.resource.data.subject is string
+        && request.resource.data.current_mark is number
+        && request.resource.data.current_grade is string
+        && request.resource.data.target_grade is string
+        && (!request.resource.data.keys().hasAny(['updated_at'])
+            || request.resource.data.updated_at is string);
+    }
+
+
     function validCommandWordDrillAttemptDoc() {
       return request.resource.data.keys().hasAll([
           'objective_id',
@@ -551,6 +567,11 @@ service cloud.firestore {
       match /admissions_vault/{assetId} {
         allow read, delete: if isOwner(userId);
         allow create, update: if isOwner(userId) && validAdmissionsVaultDoc();
+      }
+
+      match /admissions_marks/{markId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validAdmissionsMarkDoc();
       }
 
       match /command_word_drills/{attemptId} {

@@ -2,14 +2,14 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'auth_service.dart';
-import 'board_exam_service.dart';
+import 'exam_service.dart';
 
 class SupabaseProxyService {
   static final SupabaseProxyService _instance = SupabaseProxyService._();
   static SupabaseProxyService get instance => _instance;
   SupabaseProxyService._();
 
-  String get _baseUrl => BoardExamService.backendUrl;
+  String get _baseUrl => ExamService.backendUrl;
 
   Future<List<Map<String, dynamic>>> query(
     String table, {

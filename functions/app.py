@@ -399,6 +399,7 @@ PUBLIC_SUPABASE_TABLES = {
     "boards", "subjects", "chapters", "Datesheet", "PYQs",
     "curriculum",  # Unified table
     "global_notes", "subchapter_notes", "papers", "topics",
+    "sme_questions",  # SaveMyExams scraped questions
 }
 
 # User-scoped tables - require auth
@@ -1477,6 +1478,81 @@ async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
         "phase": phase,
         "days_to_exam": max(0, days_to_exam),
         "target_hours": target_hours,
+    }
+
+
+class SMEImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    csv_content: str = Field(min_length=1)
+
+
+@app.post("/sme/questions/import")
+async def import_sme_questions(
+    payload: SMEImportRequest,
+    user: dict[str, Any] = Depends(current_user),
+):
+    """Import questions from SaveMyExams CSV data into Supabase."""
+    import io
+    
+    # Parse CSV
+    reader = csv.DictReader(io.StringIO(payload.csv_content))
+    records = []
+    for row in reader:
+        records.append({
+            "subject": row.get("subject", ""),
+            "topic": row.get("topic", ""),
+            "question": row.get("question", ""),
+            "source": "savemyexams",
+        })
+    
+    if not records:
+        raise HTTPException(status_code=400, detail="No records in CSV")
+    
+    # Insert into Supabase
+    from services.supabase_client import get_supabase_client
+    supabase = get_supabase_client()
+    
+    try:
+        result = supabase.table("sme_questions").upsert(records).execute()
+    except Exception as e:
+        # Try creating table first
+        try:
+            supabase.rpc("create_sme_questions_table").execute()
+        except:
+            pass
+        try:
+            result = supabase.table("sme_questions").upsert(records).execute()
+        except Exception as e2:
+            raise HTTPException(status_code=500, detail=f"Import failed: {str(e2)}")
+    
+    return {
+        "imported": len(records),
+        "source_type": "SAVEMYEXAMS_IMPORTER",
+    }
+
+
+@app.get("/sme/questions")
+async def get_sme_questions(
+    subject: str | None = None,
+    topic: str | None = None,
+    user: dict[str, Any] = Depends(current_user),
+):
+    """Get saved questions from SaveMyExams."""
+    from services.supabase_client import get_supabase_client
+    supabase = get_supabase_client()
+    
+    query = supabase.table("sme_questions").select("*")
+    if subject:
+        query = query.eq("subject", subject)
+    if topic:
+        query = query.eq("topic", topic)
+    
+    result = query.execute()
+    return {
+        "questions": result.data,
+        "total": len(result.data),
+        "source_type": "SAVEMYEXAMS",
     }
 
 

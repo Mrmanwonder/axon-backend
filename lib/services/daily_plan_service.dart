@@ -946,6 +946,19 @@ class DailyPlanService {
       debugPrint('DailyPlanService: failed to update task — $e');
     }
   }
+
+  Future<void> updateTaskTimes(String uid, String taskId, DateTime newStartTime, DateTime newEndTime) async {
+    try {
+      final docRef = _dailyPlanCollection(uid).doc(taskId);
+      await docRef.update({
+        'start_time': newStartTime.toIso8601String(),
+        'end_time': newEndTime.toIso8601String(),
+      });
+      debugPrint('DailyPlanService: updated task times for $taskId');
+    } catch (e) {
+      debugPrint('DailyPlanService: failed to update task times — $e');
+    }
+  }
 }
 
 /// Internal time slot for cognitive-load-aware scheduling

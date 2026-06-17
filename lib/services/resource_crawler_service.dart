@@ -64,9 +64,10 @@ class ChapterResource {
 }
 
 class ResourceCrawlerService {
+  static ResourceCrawlerService? mockInstance;
   static final ResourceCrawlerService _instance =
       ResourceCrawlerService._internal();
-  factory ResourceCrawlerService() => _instance;
+  factory ResourceCrawlerService() => mockInstance ?? _instance;
   ResourceCrawlerService._internal();
 
   final FirebaseFirestore _db = AxonFirestore.instance;

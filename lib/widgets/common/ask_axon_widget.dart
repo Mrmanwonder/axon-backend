@@ -138,9 +138,11 @@ class _AskAxonWidgetState extends ConsumerState<AskAxonWidget> {
     }
   }
 
-  Future<void> _stopListening() async {
+  Future<void> _stopListening({bool isDisposing = false}) async {
     if (!mounted) return;
-    setState(() => _isListening = false);
+    if (!isDisposing) {
+      setState(() => _isListening = false);
+    }
     _smoothedLevel = 0.0;
 
     try {
@@ -151,7 +153,7 @@ class _AskAxonWidgetState extends ConsumerState<AskAxonWidget> {
 
       await HybridSpeechService.instance.stopListening();
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || isDisposing) return;
       AlertService.showError(context, 'Voice input failed', error.toString());
     }
   }
@@ -333,7 +335,7 @@ class _AskAxonWidgetState extends ConsumerState<AskAxonWidget> {
   void dispose() {
     _transcriptSub?.cancel();
     _levelSub?.cancel();
-    _stopListening();
+    _stopListening(isDisposing: true);
     _textController.dispose();
     _focusNode.dispose();
     super.dispose();

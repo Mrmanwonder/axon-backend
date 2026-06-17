@@ -1,7 +1,8 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'dart:ui';
+import '../../theme/app_theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,9 +18,9 @@ class FluidTimerApp extends StatelessWidget {
     return MaterialApp(
       title: 'Fluid Timer',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: Colors.black,
-      ),
+      theme: AxonTheme.light,
+      darkTheme: AxonTheme.dark,
+      themeMode: AxonThemeMode.mode,
       home: const TimerScreen(),
     );
   }

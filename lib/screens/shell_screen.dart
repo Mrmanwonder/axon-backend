@@ -158,7 +158,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen>
         statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
       ),
       child: Scaffold(
-        backgroundColor: isDark ? const Color(0xFF05070B) : const Color(0xFFF4F7FB),
+        backgroundColor: AxonColors.background,
         extendBody: true,
         body: _isDesktop(context)
             ? _buildDesktopShell(idx)
@@ -224,6 +224,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen>
     final isNavbarVisible = ref.watch(navbarVisibleProvider);
     const double navHeight = 80;
 
+    // Wrap child with KeepAlive to prevent rebuilds when switching tabs
     return Stack(
       children: [
         Padding(
@@ -383,12 +384,8 @@ class _DesktopBackground extends StatelessWidget {
     return Stack(
       children: [
         Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Color(0xFF07111F), Color(0xFF0A0F17), Color(0xFF111827)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
+          decoration: BoxDecoration(
+            gradient: AxonGradients.backgroundGradient,
           ),
         ),
         Positioned(
@@ -428,7 +425,7 @@ class _ContentWrapper extends StatelessWidget {
     borderRadius: BorderRadius.circular(28),
     child: Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF0D1320).withValues(alpha: 0.86),
+        color: SpatialColors.glassWhite,
         borderRadius: BorderRadius.circular(28),
         border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
         boxShadow: [
@@ -524,20 +521,20 @@ class _BrandLockup extends StatelessWidget {
                 end: Alignment.bottomRight,
               ),
             ),
-            child: const Icon(Icons.bolt_rounded, color: Colors.white, size: 24),
+            child: Icon(Icons.bolt_rounded, color: AxonColors.textPrimary, size: 24),
           ),
           const SizedBox(height: 14),
           Text(
             'AXON DESKTOP',
             style: GoogleFonts.robotoMono(
-              color: Colors.white, fontSize: 14,
+              color: AxonColors.textPrimary, fontSize: 14,
               fontWeight: FontWeight.w700, letterSpacing: 1.4,
             ),
           ),
           const SizedBox(height: 6),
           Text(
             'Focused study operations for large-screen work.',
-            style: GoogleFonts.googleSans(color: Colors.white70, fontSize: 13),
+            style: GoogleFonts.googleSans(color: AxonColors.textSecondary, fontSize: 13),
           ),
         ],
       ),
@@ -635,7 +632,7 @@ class _QuickActionCard extends StatelessWidget {
           Text(
             'Ask Axon',
             style: GoogleFonts.googleSans(
-              color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700,
+              color: AxonColors.textPrimary, fontSize: 18, fontWeight: FontWeight.w700,
             ),
           ),
           const SizedBox(height: 8),
@@ -643,7 +640,7 @@ class _QuickActionCard extends StatelessWidget {
             hasPrevious
                 ? 'Jump back into your last conversation or start a clean thread.'
                 : 'Use AI inside the desktop workflow without leaving the workspace.',
-            style: GoogleFonts.googleSans(color: Colors.white70, fontSize: 13),
+            style: GoogleFonts.googleSans(color: AxonColors.textSecondary, fontSize: 13),
           ),
           const SizedBox(height: 16),
           Row(
@@ -708,7 +705,7 @@ class _SessionSnapshot extends StatelessWidget {
           Text(
             'Session Snapshot',
             style: GoogleFonts.googleSans(
-              color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700,
+              color: AxonColors.textPrimary, fontSize: 16, fontWeight: FontWeight.w700,
             ),
           ),
           const SizedBox(height: 14),
@@ -747,13 +744,13 @@ class _DesktopHeader extends StatelessWidget {
                 Text(
                   destination.title,
                   style: GoogleFonts.googleSans(
-                    color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold,
+                    color: AxonColors.textPrimary, fontSize: 28, fontWeight: FontWeight.bold,
                   ),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   destination.subtitle,
-                  style: GoogleFonts.googleSans(color: Colors.white70, fontSize: 14),
+                  style: GoogleFonts.googleSans(color: AxonColors.textSecondary, fontSize: 14),
                 ),
               ],
             ),
@@ -789,7 +786,7 @@ class _UserStatusBadge extends StatelessWidget {
               color: const Color(0xFF3A86FF).withValues(alpha: 0.20),
               borderRadius: BorderRadius.circular(14),
             ),
-            child: const Icon(Icons.person_outline_rounded, color: Colors.white),
+            child: Icon(Icons.person_outline_rounded, color: AxonColors.textPrimary),
           ),
           const SizedBox(width: 12),
           Column(
@@ -797,7 +794,7 @@ class _UserStatusBadge extends StatelessWidget {
             children: [
               Text(
                 user?.displayName ?? 'Student',
-                style: GoogleFonts.googleSans(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+                style: GoogleFonts.googleSans(color: AxonColors.textPrimary, fontSize: 14, fontWeight: FontWeight.w600),
               ),
               Text(
                 'Ready ${(performance * 100).clamp(0, 100).round()}%',
@@ -840,7 +837,7 @@ class _FloatingAxonButton extends StatelessWidget {
               ),
             ],
           ),
-          child: const Icon(Icons.smart_toy_rounded, color: Colors.white, size: 28),
+          child: Icon(Icons.smart_toy_rounded, color: AxonColors.textPrimary, size: 28),
         ),
       ),
     ),
@@ -872,7 +869,7 @@ class _StreakHighlight extends StatelessWidget {
               Text(
                 '$streak DAY STREAK',
                 style: GoogleFonts.robotoMono(
-                  color: Colors.white, fontSize: 20,
+                  color: AxonColors.textPrimary, fontSize: 20,
                   letterSpacing: 4, fontWeight: FontWeight.bold,
                 ),
               ),
@@ -912,13 +909,13 @@ class _MetricBadge extends StatelessWidget {
           children: [
             Text(
               label,
-              style: GoogleFonts.robotoMono(color: Colors.white54, fontSize: 10),
+              style: GoogleFonts.robotoMono(color: AxonColors.textSecondary, fontSize: 10),
             ),
             const SizedBox(height: 4),
             Text(
               value,
               style: GoogleFonts.googleSans(
-                color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700,
+                color: AxonColors.textPrimary, fontSize: 15, fontWeight: FontWeight.w700,
               ),
             ),
           ],
@@ -942,13 +939,13 @@ class _InfoRow extends StatelessWidget {
         children: [
           Text(
             label,
-            style: GoogleFonts.googleSans(color: Colors.white54, fontSize: 13),
+            style: GoogleFonts.googleSans(color: AxonColors.textSecondary, fontSize: 13),
           ),
           const Spacer(),
           Text(
             value,
             style: GoogleFonts.robotoMono(
-              color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700,
+              color: AxonColors.textPrimary, fontSize: 12, fontWeight: FontWeight.w700,
             ),
           ),
         ],
@@ -985,12 +982,12 @@ class _OptionButton extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: Colors.white, size: 18),
+            Icon(icon, color: AxonColors.textPrimary, size: 18),
             const SizedBox(width: 6),
             Text(
               label,
               style: GoogleFonts.googleSans(
-                color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500,
+                color: AxonColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w500,
               ),
             ),
           ],
