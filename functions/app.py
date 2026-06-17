@@ -42,7 +42,7 @@ async def optional_user():
 
 app = FastAPI(
     title="Axon Backend",
-    version="2.1.2",
+    version="2.1.3",
     description="ASGI backend for Axon document analysis, grading, and trust-safe sync.",
 )
 
@@ -1566,6 +1566,12 @@ async def get_sme_questions(
         "total": len(questions),
         "source_type": "SAVEMYEXAMS",
     }
+
+
+@app.get("/debug-test")
+async def debug_test():
+    """Simple debug test."""
+    return {"debug": "ok", "version": "2.1.3"}
 
 
 if __name__ == "__main__":
