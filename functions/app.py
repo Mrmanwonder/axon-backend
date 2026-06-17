@@ -100,7 +100,7 @@ async def rate_limit_middleware(request, call_next):
     # DEBUG: Log all incoming requests with auth
     auth_header = request.headers.get("Authorization", "None")[:50]
     print(f">>> {request.method} {request.url.path} Auth:{auth_header}...")
-    
+
     if request.url.path == "/health":
         return await call_next(request)
 
@@ -421,13 +421,13 @@ async def supabase_query(
 ):
     if payload.table not in ALLOWED_SUPABASE_TABLES:
         raise HTTPException(status_code=403, detail=f"Table '{payload.table}' not allowed")
-    
+
     # Check if public table - no auth needed
     is_public = payload.table in PUBLIC_SUPABASE_TABLES
-    
+
     if not is_public and user is None:
         raise HTTPException(status_code=401, detail="Authentication required for user-scoped tables")
-    
+
     # Get user_id safely (None for anonymous on public tables)
     user_id = user.get("uid") if user else None
 
@@ -777,7 +777,7 @@ async def get_job(job_id: str, user: dict[str, Any] = Depends(current_user)):
             job = snapshot.to_dict()
         else:
             raise HTTPException(status_code=404, detail="Job not found")
-            
+
         if job.get("owner_uid") != user["uid"]:
             raise HTTPException(status_code=403, detail="Forbidden")
         return job
@@ -1248,7 +1248,7 @@ async def deepgram_transcribe(
 
 
 # ══════════════════════════════════════════════════════════════
-# V2 DAILY PLAN — No Firestore dependency, works offline
+# V2 DAILY PLAN - No Firestore dependency, works offline
 # ══════════════════════════════════════════════════════════════
 
 class V2DailyPlanRequest(BaseModel):
@@ -1494,7 +1494,7 @@ async def import_sme_questions(
 ):
     """Import questions from SaveMyExams CSV data into Supabase."""
     import io
-    
+
     # Parse CSV
     reader = csv.DictReader(io.StringIO(payload.csv_content))
     records = []
@@ -1505,14 +1505,14 @@ async def import_sme_questions(
             "question": row.get("question", ""),
             "source": "savemyexams",
         })
-    
+
     if not records:
         raise HTTPException(status_code=400, detail="No records in CSV")
-    
+
     # Insert into Supabase
     from services.supabase_client import get_supabase_client
     supabase = get_supabase_client()
-    
+
     try:
         result = supabase.table("sme_questions").upsert(records).execute()
     except Exception as e:
@@ -1525,7 +1525,7 @@ async def import_sme_questions(
             result = supabase.table("sme_questions").upsert(records).execute()
         except Exception as e2:
             raise HTTPException(status_code=500, detail=f"Import failed: {str(e2)}")
-    
+
     return {
         "imported": len(records),
         "source_type": "SAVEMYEXAMS_IMPORTER",
@@ -1539,19 +1539,27 @@ async def get_sme_questions(
     user: dict[str, Any] | None = Depends(optional_current_user),
 ):
     """Get saved questions from SaveMyExams."""
-    from services.supabase_client import get_supabase_client
-    supabase = get_supabase_client()
+    import httpx
+    SUPABASE_URL = "https://anmfwzxyvqxyxxeobxti.supabase.co"
+    SUPABASE_KEY = "sb_publishable_fIbfGtT5yyFaogq4DQAuxw_tZ54kolM"
     
-    query = supabase.table("sme_questions").select("*")
+    params = {}
     if subject:
-        query = query.eq("subject", subject)
+        params["subject"] = f"eq.{subject}"
     if topic:
-        query = query.eq("topic", topic)
+        params["topic"] = f"eq.{topic}"
     
-    result = query.execute()
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/sme_questions",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params=params
+        )
+    
+    questions = resp.json() if resp.status_code == 200 else []
     return {
-        "questions": result.data,
-        "total": len(result.data),
+        "questions": questions,
+        "total": len(questions),
         "source_type": "SAVEMYEXAMS",
     }
 
