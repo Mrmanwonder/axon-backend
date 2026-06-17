@@ -1536,7 +1536,7 @@ async def import_sme_questions(
 async def get_sme_questions(
     subject: str | None = None,
     topic: str | None = None,
-    user: dict[str, Any] = Depends(current_user),
+    user: dict[str, Any] | None = Depends(optional_current_user),
 ):
     """Get saved questions from SaveMyExams."""
     from services.supabase_client import get_supabase_client
