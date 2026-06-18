@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../theme/app_theme.dart';
 
 class AcademicDocumentPreview extends StatefulWidget {
@@ -72,25 +73,21 @@ class _AcademicDocumentPreviewState extends State<AcademicDocumentPreview> {
                       ),
                     ],
                   ),
-                  child: Image.network(
-                    widget.imageUrl,
+                  child: CachedNetworkImage(
+                    imageUrl: widget.imageUrl,
                     fit: BoxFit.contain,
-                    loadingBuilder: (context, child, loadingProgress) {
-                      if (loadingProgress == null) return child;
+                    progressIndicatorBuilder: (context, url, downloadProgress) {
                       return SizedBox(
                         height: 200,
                         child: Center(
                           child: CircularProgressIndicator(
-                            value: loadingProgress.expectedTotalBytes != null
-                                ? loadingProgress.cumulativeBytesLoaded /
-                                    loadingProgress.expectedTotalBytes!
-                                : null,
+                            value: downloadProgress.progress,
                             color: const Color(0xFF3A86FF),
                           ),
                         ),
                       );
                     },
-                    errorBuilder: (context, error, stackTrace) {
+                    errorWidget: (context, url, error) {
                       return SizedBox(
                         height: 200,
                         child: Center(
