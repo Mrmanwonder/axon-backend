@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────────
 
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -664,7 +665,7 @@ class _PartnerCard extends StatelessWidget {
             radius: 24,
             backgroundColor: AxonColors.accent.withValues(alpha: 0.2),
             backgroundImage: partner.partnerPhoto != null
-                ? NetworkImage(partner.partnerPhoto!)
+                ? CachedNetworkImageProvider(partner.partnerPhoto!)
                 : null,
             child: partner.partnerPhoto == null
                 ? Text(
@@ -866,7 +867,7 @@ class _PublicChallengeCard extends StatelessWidget {
             radius: 20,
             backgroundColor: AxonColors.accent.withValues(alpha: 0.2),
             backgroundImage: challenge.creatorPhoto != null
-                ? NetworkImage(challenge.creatorPhoto!)
+                ? CachedNetworkImageProvider(challenge.creatorPhoto!)
                 : null,
             child: challenge.creatorPhoto == null
                 ? Text(
