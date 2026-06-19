@@ -67,4 +67,14 @@ class EncryptionService {
     final payload = EncryptionPayload(key.bytes, ciphertext);
     return compute(_isolateDecrypt, payload);
   }
+
+  static Future<String> encryptMap(Map<String, dynamic> data) async {
+    final jsonStr = jsonEncode(data);
+    return encrypt(jsonStr);
+  }
+
+  static Future<Map<String, dynamic>> decryptMap(String ciphertext) async {
+    final jsonStr = await decrypt(ciphertext);
+    return jsonDecode(jsonStr) as Map<String, dynamic>;
+  }
 }
