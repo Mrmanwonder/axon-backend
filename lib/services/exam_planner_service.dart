@@ -1,18 +1,3 @@
-// lib/services/exam_planner_service.dart
-// ─────────────────────────────────────────────────────────────────
-// Exam Planning Service
-// Countdown, milestones, past papers, strategy checklists
-//
-// Fixed vs original:
-//  1. getRevisionPlan: raw.isEmpty → raw.isNotEmpty (plan never loaded before)
-//  2. _calculatePhases: endDay values are now fixed constants, not live vars
-//  3. getCountdown: firstWhere condition had startDay/endDay reversed
-//  4. getCountdown: daysRemaining > 90 now correctly returns Foundation phase
-//  5. getCountdown: isOver uses <= 0, not < 0
-//  6. generateCompressionPlan: cycles through all subjects per day properly
-//  7. SharedPreferences cached as _prefs to avoid repeated getInstance() calls
-//  8. totalDays derives from config.examStartDate if available, else 90-day window
-// ─────────────────────────────────────────────────────────────────
 
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -98,23 +83,22 @@ class ExamPlannerService {
     final daysRemaining = examDate.difference(now).inDays;
     final weeksRemaining = (daysRemaining / 7).floor();
 
-    // FIX: phases now have fixed boundary constants (see _calculatePhases).
+
     final phases = _calculatePhases();
 
-    // FIX: condition was reversed (endDay/startDay swapped).
+
     // Each phase covers: endDay ≤ daysRemaining ≤ startDay.
     RevisionPhase? currentPhase;
     if (daysRemaining > 0) {
       currentPhase = phases.firstWhere(
         (p) => daysRemaining <= p.startDay && daysRemaining >= p.endDay,
-        // FIX: > 90 days → Foundation (not Final Prep which was the bugged fallback).
         orElse: () => phases.first,
       );
     }
 
-    // FIX: isOver should include the exam day itself (<= 0).
+
     return ExamCountdown(
-      // FIX: total window = distance from "90 days before exam" to exam date,
+
       // OR from today if today is already within the window.
       totalDays:      examDate
           .difference(
@@ -132,7 +116,7 @@ class ExamPlannerService {
     );
   }
 
-  // FIX: phase boundaries are fixed constants, not derived from live daysRemaining.
+
   // Phase matching uses: daysRemaining ∈ [endDay, startDay].
   List<RevisionPhase> _calculatePhases() {
     return [
@@ -547,7 +531,7 @@ class ExamPlannerService {
     final prefs = await _p;
     final raw   = prefs.getString(_revisionPlanKey);
 
-    // FIX: was `raw.isEmpty` — condition was inverted, plan never loaded.
+
     if (raw != null && raw.isNotEmpty) {
       try {
         return RevisionPlan.fromJson(jsonDecode(raw));
@@ -562,7 +546,7 @@ class ExamPlannerService {
     );
   }
 
-  // FIX: original algorithm broke after chaptersPerDay entries and only ever
+
   // assigned the first subject. Now it cycles round-robin across all subjects.
   Future<void> generateCompressionPlan({
     required List<String> subjects,
@@ -588,7 +572,7 @@ class ExamPlannerService {
       final date       = DateTime.now().add(Duration(days: day));
       final dayTargets = <ChapterRevision>[];
 
-      // FIX: pull chaptersPerDay items from the flat list, cycling correctly.
+
       for (int i = 0; i < chaptersPerDay && chapterIndex < allChapters.length; i++) {
         final item = allChapters[chapterIndex++];
         dayTargets.add(ChapterRevision(
