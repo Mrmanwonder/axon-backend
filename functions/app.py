@@ -112,7 +112,7 @@ async def rate_limit_middleware(request, call_next):
         else client_ip
     )
 
-    if is_rate_limited(identifier, request.url.path):
+    if is_rate_limited(f"global_{identifier}", limit=60, window_seconds=60):
         return JSONResponse(
             status_code=429,
             content={"detail": "Rate limit exceeded"},
