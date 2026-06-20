@@ -461,7 +461,19 @@ class ObjectiveScoringEngine:
 # ══════════════════════════════════════════════════════════════
 
 
+
+@dataclass
+class TaskBuildParams:
+    obj: SyllabusObjective
+    ctx: SubjectContext
+    score: float
+    task_type: TaskType
+    slot_start: datetime
+    window: ScheduledWindow
+    today_str: str
+
 class TaskBuilder:
+
     """
     Converts a scored objective + SubjectContext into a fully populated PlannerTask.
 
@@ -584,58 +596,49 @@ class TaskBuilder:
                 return slot
         return None
 
-    def build(
-        self,
-        obj: SyllabusObjective,
-        ctx: SubjectContext,
-        score: float,
-        task_type: TaskType,
-        slot_start: datetime,
-        window: ScheduledWindow,
-        today_str: str,
-    ) -> PlannerTask:
-        intensity_score, intensity = self.determine_intensity(score, ctx.days_to_exam)
-        duration = self.DURATIONS[task_type]
-        end_time = slot_start + timedelta(minutes=duration)
+    def build(self, params: TaskBuildParams) -> PlannerTask:
+        intensity_score, intensity = self.determine_intensity(params.score, params.ctx.days_to_exam)
+        duration = self.DURATIONS[params.task_type]
+        end_time = params.slot_start + timedelta(minutes=duration)
 
         paper_str = ""
-        if obj.paper_numbers:
-            paper_str = f"Paper {obj.paper_numbers[0]}"
+        if params.obj.paper_numbers:
+            paper_str = f"Paper {params.obj.paper_numbers[0]}"
 
         stable_id = hashlib.sha1(
             "|".join(
                 [
-                    today_str,
-                    ctx.subject_id,
-                    obj.id,
-                    task_type.value,
-                    window.value,
-                    slot_start.isoformat(),
+                    params.today_str,
+                    params.ctx.subject_id,
+                    params.obj.id,
+                    params.task_type.value,
+                    params.window.value,
+                    params.slot_start.isoformat(),
                 ]
             ).encode("utf-8")
         ).hexdigest()[:24]
 
         return PlannerTask(
             id=f"plan_{stable_id}",
-            title=self.build_title(obj, task_type),
-            subject=ctx.name,
-            description=self.build_description(obj, task_type, ctx),
+            title=self.build_title(params.obj, params.task_type),
+            subject=params.ctx.name,
+            description=self.build_description(params.obj, params.task_type, params.ctx),
             paper=paper_str,
-            objective_id=obj.id,
-            start_time=slot_start,
+            objective_id=params.obj.id,
+            start_time=params.slot_start,
             end_time=end_time,
             status="pending",
-            date=today_str,
+            date=params.today_str,
             reason=(
-                f"Score {score:.3f} | {ctx.phase.value} | "
-                f"{ctx.days_to_exam}d to exam | target {ctx.target_grade}"
+                f"Score {params.score:.3f} | {params.ctx.phase.value} | "
+                f"{params.ctx.days_to_exam}d to exam | target {params.ctx.target_grade}"
             ),
             intensity_score=round(intensity_score, 3),
             intensity_label=intensity.value,
-            phase=ctx.phase.value,
-            anchor_date=today_str,
-            task_type=task_type.value,
-            scheduled_window=window.value,
+            phase=params.ctx.phase.value,
+            anchor_date=params.today_str,
+            task_type=params.task_type.value,
+            scheduled_window=params.window.value,
             priority=self.INTENSITY_PRIORITY[intensity],
         )
 
@@ -1407,7 +1410,16 @@ class DailyPlannerServiceV2:
                 continue
 
             slot_start, window = result
-            task = self._builder.build(obj, ctx, score, task_type, slot_start, window, today_str)
+            params = TaskBuildParams(
+                obj=obj,
+                ctx=ctx,
+                score=score,
+                task_type=task_type,
+                slot_start=slot_start,
+                window=window,
+                today_str=today_str,
+            )
+            task = self._builder.build(params)
             tasks.append(task)
 
         # 5. Inject command-word drills for critical gaps
