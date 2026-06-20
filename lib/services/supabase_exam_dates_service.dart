@@ -192,7 +192,9 @@ class SupabaseExamDatesService {
         final date = _parseDate(_string(row[dateCol]));
 
         // Fix #5: Only filter if date is genuinely in the past
-        if (upcomingOnly && date.isBefore(now) && !date.isAtSameMomentAs(now)) continue;
+        final today = DateTime(now.year, now.month, now.day);
+        final examDate = DateTime(date.year, date.month, date.day);
+        if (upcomingOnly && examDate.isBefore(today)) continue;
 
         final event = ExamEventModel(
           id: _string(row['id'] ?? rowCode + date.millisecondsSinceEpoch.toString()),
