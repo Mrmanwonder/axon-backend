@@ -59,7 +59,9 @@ class CurriculumCatalogService:
                     "id": board.get("id", ""),
                     "label": board.get("label", ""),
                     "subject_count": len(board.get("subjects", [])),
-                    "subjects": [item.get("name", "") for item in board.get("subjects", [])],
+                    "subjects": [
+                        item.get("name", "") for item in board.get("subjects", [])
+                    ],
                 }
                 for board in boards
             ]

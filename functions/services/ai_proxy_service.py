@@ -67,7 +67,11 @@ class AiProxyService:
                 "message": "No AI providers configured on the server.",
             }
 
-        provider_order = [self.PROVIDER_OPENROUTER, self.PROVIDER_GROK, self.PROVIDER_DEEPSEEK]
+        provider_order = [
+            self.PROVIDER_OPENROUTER,
+            self.PROVIDER_GROK,
+            self.PROVIDER_DEEPSEEK,
+        ]
         last_error: str | None = None
 
         for provider_name in provider_order:
@@ -148,7 +152,11 @@ class AiProxyService:
             yield "data: [DONE]\n\n"
             return
 
-        provider_order = [self.PROVIDER_OPENROUTER, self.PROVIDER_GROK, self.PROVIDER_DEEPSEEK]
+        provider_order = [
+            self.PROVIDER_OPENROUTER,
+            self.PROVIDER_GROK,
+            self.PROVIDER_DEEPSEEK,
+        ]
 
         for provider_name in provider_order:
             config = self._provider_configs.get(provider_name)
@@ -181,8 +189,10 @@ class AiProxyService:
                 ) as response:
                     if response.status_code != 200:
                         error_text = await response.aread()
-                        print(f"AiProxyService: {provider_name} returned {response.status_code}: {error_text.decode(errors='replace')[:200]}")
-                        continue # Failover to next provider
+                        print(
+                            f"AiProxyService: {provider_name} returned {response.status_code}: {error_text.decode(errors='replace')[:200]}"
+                        )
+                        continue  # Failover to next provider
 
                     # If we got here, stream was successful
                     async for line in response.aiter_lines():
@@ -191,11 +201,11 @@ class AiProxyService:
                             if line.strip() == "data: [DONE]":
                                 return
 
-                return # Ensure we exit after successful stream completion
+                return  # Ensure we exit after successful stream completion
 
             except (httpx.TimeoutException, httpx.RequestError) as exc:
                 print(f"AiProxyService: {provider_name} network error: {exc}")
-                continue # Failover to next provider
+                continue  # Failover to next provider
 
         yield f"data: {json.dumps({'error': 'all_providers_failed'})}\n\n"
         yield "data: [DONE]\n\n"
@@ -203,9 +213,13 @@ class AiProxyService:
     def _check_rate_limit(self, user_id: str) -> bool:
         now = time.time()
         window_start = now - self.RATE_LIMIT_WINDOW
-        
+
         if now - self._last_rate_limit_reap > 300:
-            stale_users = [u for u, t in self._rate_limits.items() if not t or t[-1] <= window_start]
+            stale_users = [
+                u
+                for u, t in self._rate_limits.items()
+                if not t or t[-1] <= window_start
+            ]
             for u in stale_users:
                 self._rate_limits.pop(u, None)
             self._last_rate_limit_reap = now

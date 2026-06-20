@@ -66,7 +66,9 @@ class ScrapedExamEvent:
     source_title: str
     source_type: str = "OFFICIAL_DATESHEET_SCRAPER"
 
-    def to_deadline_doc(self, *, administrative_zone: str | None, series: str, year: int) -> dict[str, Any]:
+    def to_deadline_doc(
+        self, *, administrative_zone: str | None, series: str, year: int
+    ) -> dict[str, Any]:
         return {
             "board": self.board,
             "subject": self.subject,
@@ -105,26 +107,48 @@ class OfficialExamDatesService:
         target_series = (series or self._default_series()).lower()
         target_zone = _normalize_zone(administrative_zone)
 
-        print(f"[ExamDates] sync_user_deadlines: user={user_id}, board={board}, subjects={subjects}, year={target_year}, series={target_series}, zone={target_zone}")
+        print(
+            f"[ExamDates] sync_user_deadlines: user={user_id}, board={board}, subjects={subjects}, year={target_year}, series={target_series}, zone={target_zone}"
+        )
 
         deadlines_ref = (
-            self._db.collection("users_private").document(user_id).collection("deadlines")
+            self._db.collection("users_private")
+            .document(user_id)
+            .collection("deadlines")
         )
         sync_meta_ref = (
-            self._db.collection("users_private").document(user_id).collection("_sync_meta").document("exam_dates")
+            self._db.collection("users_private")
+            .document(user_id)
+            .collection("_sync_meta")
+            .document("exam_dates")
         )
 
         sync_key = hashlib.sha1(
-            json.dumps([user_id, board, sorted(subjects), target_year, target_series, target_zone], sort_keys=True).encode("utf-8")
+            json.dumps(
+                [
+                    user_id,
+                    board,
+                    sorted(subjects),
+                    target_year,
+                    target_series,
+                    target_zone,
+                ],
+                sort_keys=True,
+            ).encode("utf-8")
         ).hexdigest()
 
         sync_meta = sync_meta_ref.get()
         if sync_meta.exists:
             meta = sync_meta.to_dict() or {}
             if meta.get("sync_key") == sync_key:
-                print(f"[ExamDates] Sync meta matches (key={sync_key[:12]}...), skipping scrape")
+                print(
+                    f"[ExamDates] Sync meta matches (key={sync_key[:12]}...), skipping scrape"
+                )
                 existing_snapshots = list(deadlines_ref.stream())
-                existing_subjects = {str((s.to_dict() or {}).get("subject", "")) for s in existing_snapshots}
+                existing_subjects = {
+                    str((s.to_dict() or {}).get("subject", ""))
+                    for s in existing_snapshots
+                }
                 stale = existing_subjects - set(subjects)
                 if stale:
                     for snap in existing_snapshots:
@@ -195,13 +219,17 @@ class OfficialExamDatesService:
                     deadlines_ref.document(doc_id).set(payload, merge=True)
                     persisted += 1
 
-                sync_meta_ref.set({
-                    "sync_key": sync_key,
-                    "subject_count": len(subjects),
-                    "event_count": len(events),
-                    "synced_at": _utc_now(),
-                })
-                print(f"[ExamDates] Persisted {persisted} deadlines to Firestore (replaced {len(existing_snapshots)} old)")
+                sync_meta_ref.set(
+                    {
+                        "sync_key": sync_key,
+                        "subject_count": len(subjects),
+                        "event_count": len(events),
+                        "synced_at": _utc_now(),
+                    }
+                )
+                print(
+                    f"[ExamDates] Persisted {persisted} deadlines to Firestore (replaced {len(existing_snapshots)} old)"
+                )
             except Exception as e:
                 print(f"[ExamDates] Failed to persist deadlines: {e}")
 
@@ -213,11 +241,14 @@ class OfficialExamDatesService:
             "administrative_zone": target_zone,
             "persisted_count": persisted,
             "cached": False,
-            "events": [event.to_deadline_doc(
-                administrative_zone=target_zone,
-                series=target_series,
-                year=target_year,
-            ) for event in events],
+            "events": [
+                event.to_deadline_doc(
+                    administrative_zone=target_zone,
+                    series=target_series,
+                    year=target_year,
+                )
+                for event in events
+            ],
         }
 
     def fetch_official_exam_dates(
@@ -250,7 +281,9 @@ class OfficialExamDatesService:
                 administrative_zone=administrative_zone,
             )
 
-        print(f"[ExamDates] Unrecognized board: '{canonical_board}' (original: '{board}')")
+        print(
+            f"[ExamDates] Unrecognized board: '{canonical_board}' (original: '{board}')"
+        )
         return []
 
     def _default_series(self) -> str:
@@ -280,7 +313,12 @@ class OfficialExamDatesService:
         # Step 2: Identify the qualification level
         if "as level" in normalized and "a level" not in normalized:
             level = "as_level"
-        elif "a level" in normalized or "alevel" in normalized or "ial" in normalized or "international advanced" in normalized:
+        elif (
+            "a level" in normalized
+            or "alevel" in normalized
+            or "ial" in normalized
+            or "international advanced" in normalized
+        ):
             level = "a_level"
         elif "igcse" in normalized or "international gcse" in normalized:
             level = "igcse"
@@ -337,12 +375,17 @@ class OfficialExamDatesService:
             if administrative_zone == "uk":
                 if "uk" not in normalized_text:
                     continue
-            elif administrative_zone and administrative_zone not in normalized_text.replace(" ", ""):
+            elif (
+                administrative_zone
+                and administrative_zone not in normalized_text.replace(" ", "")
+            ):
                 continue
             pdf_links.append((text, urljoin(self.CAMBRIDGE_TIMETABLES_URL, href)))
 
         if not pdf_links:
-            print(f"[ExamDates] No Cambridge PDF links found for year={year}, series={series}, zone={administrative_zone}")
+            print(
+                f"[ExamDates] No Cambridge PDF links found for year={year}, series={series}, zone={administrative_zone}"
+            )
 
         events: list[ScrapedExamEvent] = []
         seen: set[tuple[str, str, str]] = set()

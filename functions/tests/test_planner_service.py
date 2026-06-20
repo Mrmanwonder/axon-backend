@@ -118,42 +118,64 @@ def test_v2_generates_task_list():
     # Seed: settings
     ref = db.collection("users_private").document(uid)
     ref.set({})
-    ref.collection("settings").document("prefs").set({
-        "target_hours_per_day": 2.0,
-        "day_start_hour": 8,
-    })
+    ref.collection("settings").document("prefs").set(
+        {
+            "target_hours_per_day": 2.0,
+            "day_start_hour": 8,
+        }
+    )
 
     # Seed: subject with exam 20 days away
     subj_id = "physics-9702"
-    subj_ref = db.collection("users_private").document(uid).collection("subjects").document(subj_id)
-    subj_ref.set({
-        "id": subj_id,
-        "name": "Physics",
-        "code": "9702",
-        "level": "A_LEVEL",
-        "exam_date": (now + timedelta(days=20)).isoformat(),
-        "target_grade": "A",
-        "papers": [{"number": 1, "type": "structured", "duration_minutes": 90, "total_marks": 100, "weight_pct": 50.0}],
-        "weak_command_words": [],
-    })
+    subj_ref = (
+        db.collection("users_private")
+        .document(uid)
+        .collection("subjects")
+        .document(subj_id)
+    )
+    subj_ref.set(
+        {
+            "id": subj_id,
+            "name": "Physics",
+            "code": "9702",
+            "level": "A_LEVEL",
+            "exam_date": (now + timedelta(days=20)).isoformat(),
+            "target_grade": "A",
+            "papers": [
+                {
+                    "number": 1,
+                    "type": "structured",
+                    "duration_minutes": 90,
+                    "total_marks": 100,
+                    "weight_pct": 50.0,
+                }
+            ],
+            "weak_command_words": [],
+        }
+    )
 
     # Seed: objective
-    subj_ref.collection("objectives").document("obj-1").set({
-        "id": "obj-1",
-        "topic": "Kinematics",
-        "subtopic": "Motion",
-        "paper_numbers": [1],
-        "prerequisites": [],
-        "mastery_score": 0.3,
-        "stability": 1.0,
-        "difficulty": 0.3,
-    })
+    subj_ref.collection("objectives").document("obj-1").set(
+        {
+            "id": "obj-1",
+            "topic": "Kinematics",
+            "subtopic": "Motion",
+            "paper_numbers": [1],
+            "prerequisites": [],
+            "mastery_score": 0.3,
+            "stability": 1.0,
+            "difficulty": 0.3,
+        }
+    )
 
     # Seed: analytics summary
-    db.collection("users_private").document(uid).collection("analytics").document("summary").set({})
+    db.collection("users_private").document(uid).collection("analytics").document(
+        "summary"
+    ).set({})
 
     service = DailyPlannerServiceV2(db)
     import asyncio
+
     tasks = asyncio.run(service.generate_and_persist_daily_plan(uid, force=True))
 
     assert isinstance(tasks, list)
