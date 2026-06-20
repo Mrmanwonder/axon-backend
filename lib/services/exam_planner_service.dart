@@ -8,7 +8,7 @@
 //  2. _calculatePhases: endDay values are now fixed constants, not live vars
 //  3. getCountdown: firstWhere condition had startDay/endDay reversed
 //  4. getCountdown: daysRemaining > 90 now correctly returns Foundation phase
-//  5. getCountdown: isOver uses <= 0, not < 0
+//  5. getCountdown: isOver uses < 0, not <= 0
 //  6. generateCompressionPlan: cycles through all subjects per day properly
 //  7. SharedPreferences cached as _prefs to avoid repeated getInstance() calls
 //  8. totalDays derives from config.examStartDate if available, else 90-day window
@@ -104,7 +104,7 @@ class ExamPlannerService {
     // FIX: condition was reversed (endDay/startDay swapped).
     // Each phase covers: endDay ≤ daysRemaining ≤ startDay.
     RevisionPhase? currentPhase;
-    if (daysRemaining > 0) {
+    if (daysRemaining >= 0) {
       currentPhase = phases.firstWhere(
         (p) => daysRemaining <= p.startDay && daysRemaining >= p.endDay,
         // FIX: > 90 days → Foundation (not Final Prep which was the bugged fallback).
@@ -112,7 +112,7 @@ class ExamPlannerService {
       );
     }
 
-    // FIX: isOver should include the exam day itself (<= 0).
+    // FIX: isOver should include the exam day itself (< 0).
     return ExamCountdown(
       // FIX: total window = distance from "90 days before exam" to exam date,
       // OR from today if today is already within the window.
