@@ -50,7 +50,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import networkx as nx
 from google.cloud import firestore
@@ -567,7 +567,7 @@ class TaskBuilder:
         if task_type == TaskType.EXAMINER_REPORT and obj.examiner_flagged:
             parts.append("⚠ Common error area - review examiner report commentary carefully.")
         if task_type == TaskType.PAST_PAPER:
-            parts.append(f"Use mark-scheme after completing. Annotate why wrong answers were chosen.")
+            parts.append("Use mark-scheme after completing. Annotate why wrong answers were chosen.")
         if task_type == TaskType.MOCK_EXAM:
             parts.append("Strict timed conditions. No mark-scheme until complete.")
         return " | ".join(parts)
@@ -1131,9 +1131,12 @@ class SubjectContextBuilder:
 
     @staticmethod
     def _phase_from_days(days: int) -> StudyPhase:
-        if days <= 7:  return StudyPhase.T7
-        if days <= 14: return StudyPhase.T14
-        if days <= 30: return StudyPhase.T30
+        if days <= 7:
+            return StudyPhase.T7
+        if days <= 14:
+            return StudyPhase.T14
+        if days <= 30:
+            return StudyPhase.T30
         return StudyPhase.FOUNDATION
 
 
