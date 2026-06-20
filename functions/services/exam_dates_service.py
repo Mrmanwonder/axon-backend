@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
+import httpx
 import json
 import re
 from dataclasses import dataclass
@@ -299,6 +301,24 @@ class OfficialExamDatesService:
             return "caie_a_level"
         return "caie_igcse"
 
+    async def _fetch_all_pdfs(self, pdf_links: list[tuple[str, str]]) -> list[tuple[str, str, bytes | None]]:
+        # Limit concurrency to 10 simultaneous downloads to prevent OOM or rate limits
+        semaphore = asyncio.Semaphore(10)
+
+        async with httpx.AsyncClient(timeout=40.0) as client:
+            async def fetch_one(title: str, url: str) -> tuple[str, str, bytes | None]:
+                async with semaphore:
+                    try:
+                        response = await client.get(url)
+                        response.raise_for_status()
+                        return title, url, response.content
+                    except Exception as e:
+                        print(f"[ExamDates] Failed to download PDF {url}: {e}")
+                        return title, url, None
+
+            tasks = [fetch_one(title, url) for title, url in pdf_links]
+            return await asyncio.gather(*tasks)
+
     def _scrape_cambridge_dates(
         self,
         *,
@@ -346,11 +366,24 @@ class OfficialExamDatesService:
 
         events: list[ScrapedExamEvent] = []
         seen: set[tuple[str, str, str]] = set()
-        for title, pdf_url in pdf_links:
+
+        # Concurrent fetching of PDFs
+        try:
+            results = asyncio.run(self._fetch_all_pdfs(pdf_links))
+        except RuntimeError as e:
+            # If we're already running in an event loop (e.g. from FastAPI), we can't use asyncio.run
+            # We must gracefully fail or provide an alternative.
+            print(f"[ExamDates] RuntimeError executing concurrent fetches (likely already in an event loop): {e}")
+            raise
+        except Exception as e:
+            print(f"[ExamDates] Failed to execute concurrent fetches: {e}")
+            raise
+
+        for title, pdf_url, content in results:
+            if content is None:
+                continue
             try:
-                pdf_response = requests.get(pdf_url, timeout=40)
-                pdf_response.raise_for_status()
-                text = _extract_pdf_text(pdf_response.content)
+                text = _extract_pdf_text(content)
                 events.extend(
                     self._parse_timetable_text(
                         board=board,
@@ -362,14 +395,10 @@ class OfficialExamDatesService:
                         seen=seen,
                     )
                 )
-            except requests.RequestException as e:
-                print(f"[ExamDates] Failed to download PDF {pdf_url}: {e}")
-                continue
             except Exception as e:
                 print(f"[ExamDates] Failed to parse PDF {pdf_url}: {e}")
                 continue
         return events
-
     def _parse_timetable_text(
         self,
         *,
