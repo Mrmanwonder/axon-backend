@@ -34,11 +34,7 @@ from middleware.rate_limit import cors_allowed_origins, is_rate_limited
 
 
 from fastapi import Depends
-from typing import Annotated
 
-# Global dependency to make auth optional
-async def optional_user():
-    return {"uid": "anonymous", "email": "anonymous@example.com"}
 
 app = FastAPI(
     title="Axon Backend",
