@@ -1,17 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import requests
 import ipaddress
-import json
 import os
-import re
-import tempfile
-import time
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-import requests
+import concurrent.futures
 from bs4 import BeautifulSoup
 
 # SSRF protection: blocked IP ranges (private/internal networks)
@@ -236,28 +233,45 @@ class UniversityProgramCrawler:
             print(f"[Crawler] Blocked unsafe base URL: {base_url}")
             return None
 
+        urls = []
         for path in self.CATALOG_PATHS:
             url = urljoin(base_url, path)
             # SSRF protection: validate each URL
             if not _is_safe_url(url):
                 print(f"[Crawler] Blocked unsafe URL: {url}")
                 continue
+            urls.append(url)
+
+        if not urls:
+            return None
+
+        def fetch_and_parse(url):
             print(f"[Crawler] Trying: {url}")
             try:
                 resp = requests.get(url, timeout=8, headers=self._headers())
-                if resp.status_code != 200:
-                    continue
-
-                programs = self._parse_catalog_page(resp.text, url, university_name)
-                if programs:
-                    print(f"[Crawler] Scrape OK: {len(programs)} programs from {url}")
-                    return programs
-
+                if resp.status_code == 200:
+                    programs = self._parse_catalog_page(resp.text, url, university_name)
+                    if programs:
+                        print(f"[Crawler] Scrape OK: {len(programs)} programs from {url}")
+                        return programs
             except requests.RequestException:
-                continue
+                pass
             except Exception as exc:
                 print(f"[Crawler] Scrape error {url}: {exc}")
-                continue
+            return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_url = {executor.submit(fetch_and_parse, url): url for url in urls}
+            for future in concurrent.futures.as_completed(future_to_url):
+                try:
+                    result = future.result()
+                    if result:
+                        # Cancel remaining futures if possible
+                        for f in future_to_url:
+                            f.cancel()
+                        return result
+                except Exception as exc:
+                    print(f"[Crawler] Thread error for {future_to_url[future]}: {exc}")
 
         return None
 
