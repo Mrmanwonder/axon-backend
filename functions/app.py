@@ -587,29 +587,37 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
     if payload.pdf_base64:
         return base64.b64decode(payload.pdf_base64), payload.filename
 
-    import requests
+    import httpx
 
-    def fetch() -> tuple[bytes, str]:
-        assert_safe_https_url(payload.pdf_url)
-        response = requests.get(
-            payload.pdf_url,
-            timeout=30,
-            allow_redirects=False,
-        )
-        if response.status_code in {301, 302, 303, 307, 308}:
-            location = response.headers.get("Location")
-            if not location or not validate_https_url(location):
-                raise requests.HTTPError("Unsafe redirect target")
-            response = requests.get(location, timeout=30, allow_redirects=False)
-        response.raise_for_status()
-        content = response.content
-        if len(content) > MAX_PDF_BASE64_CHARS:
-            raise ValueError("Downloaded PDF exceeds maximum allowed size")
-        filename = os.path.basename(urlparse(payload.pdf_url).path) or payload.filename
-        return content, filename
+    assert_safe_https_url(payload.pdf_url)
 
     try:
-        return await asyncio.to_thread(fetch)
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                payload.pdf_url,
+                timeout=30.0,
+                follow_redirects=False,
+            )
+
+            if response.status_code in {301, 302, 303, 307, 308}:
+                location = response.headers.get("Location")
+                if not location or not validate_https_url(location):
+                    raise HTTPException(status_code=400, detail="Unsafe redirect target")
+                response = await client.get(location, timeout=30.0, follow_redirects=False)
+
+            response.raise_for_status()
+            content = response.content
+
+            if len(content) > MAX_PDF_BASE64_CHARS:
+                raise ValueError("Downloaded PDF exceeds maximum allowed size")
+
+            filename = os.path.basename(urlparse(payload.pdf_url).path) or payload.filename
+            return content, filename
+
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=f"HTTP Error: {exc.response.status_code}") from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=400, detail=f"Request failed: {str(exc)}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
