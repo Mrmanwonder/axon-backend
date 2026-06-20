@@ -15,6 +15,7 @@ import argparse
 import csv
 import hashlib
 import os
+import sys
 import re
 from datetime import datetime, timezone
 

@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
-import json
 import os
-import re
-import tempfile
-import time
+import socket
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -59,7 +56,6 @@ def _is_safe_url(url: str) -> bool:
         return False
 
 
-import socket
 
 
 class UniversityProgramCrawler:

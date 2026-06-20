@@ -237,7 +237,7 @@ class OfficialExamDatesService:
         # Parse canonical board into board_id + level
         parts = canonical_board.split("_", 1)
         board_id = parts[0] if len(parts) > 0 else canonical_board
-        level = parts[1] if len(parts) > 1 else "igcse"
+        level = parts[1] if len(parts) > 1 else "igcse"  # noqa: F841
 
         # Cambridge International (CIE) — IGCSE, AS Level, A Level
         # Scrapes from cambridgeinternational.org/timetables
