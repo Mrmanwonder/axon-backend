@@ -245,16 +245,15 @@ Strict Rules:
         if not image_url.startswith("https://"):
             raise HTTPException(status_code=400, detail="image_url must be an HTTPS URL")
 
-        import requests
-
-        def fetch() -> tuple[bytes, str]:
-            response = requests.get(image_url, timeout=20)
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "image/png").split(";")[0].strip()
-            return response.content, content_type or "image/png"
+        import httpx
 
         try:
-            image_bytes, mime_type = await asyncio.to_thread(fetch)
+            async with httpx.AsyncClient() as client:
+                response = await client.get(image_url, timeout=20.0, follow_redirects=True)
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "image/png").split(";")[0].strip()
+                image_bytes = response.content
+                mime_type = content_type or "image/png"
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Unable to fetch answer image: {exc}") from exc
 
