@@ -7,7 +7,7 @@ import os
 import tempfile
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import uvicorn
@@ -528,27 +528,24 @@ class NormalizeDegreeRequest(BaseModel):
     country: str = ""
 
 
+
+class ChatMessage(BaseModel):
+    role: Literal["system", "user", "assistant"]
+    content: str = Field(min_length=1, max_length=12000)
+
+    @model_validator(mode="after")
+    def validate_content_strip(self):
+        if not self.content.strip():
+            raise ValueError("Message content must be a non-empty string")
+        return self
+
 class AiChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    messages: list[dict[str, str]] = Field(min_length=1, max_length=50)
+    messages: list[ChatMessage] = Field(min_length=1, max_length=50)
     stream: bool = False
     max_tokens: int | None = Field(default=None, ge=1, le=16384)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-
-    @model_validator(mode="after")
-    def validate_messages(self):
-        allowed_roles = {"system", "user", "assistant"}
-        for entry in self.messages:
-            role = entry.get("role", "")
-            if role not in allowed_roles:
-                raise ValueError(f"Invalid message role: {role}")
-            content = entry.get("content", "")
-            if not isinstance(content, str) or not content.strip():
-                raise ValueError("Message content must be a non-empty string")
-            if len(content) > 12000:
-                raise ValueError("Message content exceeds maximum length")
-        return self
 
 
 async def download_or_decode_image(payload: BaseModel) -> bytes:
@@ -997,7 +994,7 @@ async def ai_chat(
     if payload.stream:
         async def event_stream():
             async for chunk in service.chat_stream(
-                messages=payload.messages,
+                messages=[m.model_dump() for m in payload.messages],
                 user_id=user["uid"],
                 max_tokens=payload.max_tokens,
                 temperature=payload.temperature,
@@ -1015,7 +1012,7 @@ async def ai_chat(
         )
 
     result = await service.chat(
-        messages=payload.messages,
+        messages=[m.model_dump() for m in payload.messages],
         user_id=user["uid"],
         stream=False,
         max_tokens=payload.max_tokens,
