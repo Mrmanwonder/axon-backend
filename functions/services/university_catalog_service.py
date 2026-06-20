@@ -77,8 +77,8 @@ class UniversityCatalogService:
             "role": "degree_normalizer",
             "instruction": (
                 "Normalize this university degree/program name into a standard format. "
-                "Return strict JSON only: {\"normalized_name\": \"...\", \"degree_type\": \"Bachelor/Master/PhD/Diploma/Certificate\", "
-                "\"field\": \"...\", \"duration_years\": N, \"country_variant\": \"...\"}. "
+                'Return strict JSON only: {"normalized_name": "...", "degree_type": "Bachelor/Master/PhD/Diploma/Certificate", '
+                '"field": "...", "duration_years": N, "country_variant": "..."}. '
                 "Do not add markdown."
             ),
             "degree_name": degree_name,
@@ -135,9 +135,16 @@ class UniversityCatalogService:
             cache_ref = self._db.collection("university_cache")
             for uni in universities:
                 doc_ref = cache_ref.document(uni["id"])
-                batch.set(doc_ref, {**uni, "_cached_at": __import__("datetime").datetime.now(
-                    __import__("datetime").timezone.utc
-                ).isoformat()}, merge=True)
+                batch.set(
+                    doc_ref,
+                    {
+                        **uni,
+                        "_cached_at": __import__("datetime")
+                        .datetime.now(__import__("datetime").timezone.utc)
+                        .isoformat(),
+                    },
+                    merge=True,
+                )
             batch.commit()
         except Exception as exc:
             print(f"[UniversityCatalog] Cache write error: {exc}")
@@ -145,7 +152,9 @@ class UniversityCatalogService:
     def _get_cached_programs(self, university_name: str) -> list[dict]:
         try:
             doc_id = f"prog_{hashlib.sha1(university_name.lower().encode()).hexdigest()[:12]}"
-            doc = self._db.collection("university_programs_cache").document(doc_id).get()
+            doc = (
+                self._db.collection("university_programs_cache").document(doc_id).get()
+            )
             if doc.exists:
                 data = doc.to_dict() or {}
                 return data.get("programs", [])
@@ -156,13 +165,15 @@ class UniversityCatalogService:
     def _cache_programs(self, university_name: str, programs: list[dict]) -> None:
         try:
             doc_id = f"prog_{hashlib.sha1(university_name.lower().encode()).hexdigest()[:12]}"
-            self._db.collection("university_programs_cache").document(doc_id).set({
-                "university_name": university_name,
-                "programs": programs,
-                "_cached_at": __import__("datetime").datetime.now(
-                    __import__("datetime").timezone.utc
-                ).isoformat(),
-            })
+            self._db.collection("university_programs_cache").document(doc_id).set(
+                {
+                    "university_name": university_name,
+                    "programs": programs,
+                    "_cached_at": __import__("datetime")
+                    .datetime.now(__import__("datetime").timezone.utc)
+                    .isoformat(),
+                }
+            )
         except Exception as exc:
             print(f"[UniversityCatalog] Programs cache write error: {exc}")
 
@@ -183,7 +194,7 @@ class UniversityCatalogService:
                 "For each program include: name, degree_type (Bachelor/Master), field, duration_years, "
                 "core_modules (list of 3-6 subjects), grade_requirements by board (IGCSE, A-Level, IB, CBSE, etc.), "
                 "and minimum_threshold (e.g. 'AAA', '85%', '38/45'). "
-                "Return strict JSON only: {\"programs\": [...]}. Do not add markdown."
+                'Return strict JSON only: {"programs": [...]}. Do not add markdown.'
             ),
             "university": university_name,
             "country": country,
@@ -268,7 +279,9 @@ class UniversityCatalogService:
     def _heuristic_normalize(self, degree_name: str) -> dict[str, Any]:
         name_lower = degree_name.lower().strip()
         degree_type = "Bachelor"
-        if any(kw in name_lower for kw in ["master", "msc", "ma ", "meng", "llm", "mba"]):
+        if any(
+            kw in name_lower for kw in ["master", "msc", "ma ", "meng", "llm", "mba"]
+        ):
             degree_type = "Master"
         elif any(kw in name_lower for kw in ["phd", "doctorate", "dphil"]):
             degree_type = "PhD"

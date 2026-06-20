@@ -9,6 +9,7 @@ Usage:
     python seed_university_datasets.py --ipeds data/ipeds.csv
     python seed_university_datasets.py --dry-run
 """
+
 from __future__ import annotations
 
 import argparse
@@ -27,7 +28,9 @@ def _detect_degree_type(course: str) -> str:
     cl = course.lower()
     if any(kw in cl for kw in ["phd", "doctorate", "doctoral"]):
         return "PhD"
-    if any(kw in cl for kw in ["master", "msc", "ma ", "mba", "meng", "llm", "postgrad"]):
+    if any(
+        kw in cl for kw in ["master", "msc", "ma ", "mba", "meng", "llm", "postgrad"]
+    ):
         return "Master"
     if any(kw in cl for kw in ["diploma", "certificate", "pgdip"]):
         return "Diploma"
@@ -85,7 +88,9 @@ def import_aishe(csv_path: str, dry_run: bool = False) -> list[dict]:
     with open(csv_path, encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         for i, row in enumerate(reader):
-            university = row.get("University Name", row.get("institute_name", "")).strip()
+            university = row.get(
+                "University Name", row.get("institute_name", "")
+            ).strip()
             course = row.get("Course Name", row.get("program_name", "")).strip()
             level = row.get("Level", row.get("level", "")).strip()
             duration = row.get("Duration", row.get("duration_years", "3")).strip()
@@ -101,23 +106,25 @@ def import_aishe(csv_path: str, dry_run: bool = False) -> list[dict]:
             degree_type = _detect_degree_type(f"{course} {level}")
             field = _field_from_course(course)
 
-            programs.append({
-                "id": _doc_id(f"{university}|{course}"),
-                "university_name": university,
-                "country": "India",
-                "degree_type": degree_type,
-                "field": field,
-                "course_name": course,
-                "duration_years": duration_years,
-                "core_modules": [],
-                "grade_requirements": {
-                    "CBSE": "75%",
-                    "ISC": "75%",
-                    "State Board": "75%",
-                },
-                "minimum_threshold": "Pass",
-                "source": "AISHE",
-            })
+            programs.append(
+                {
+                    "id": _doc_id(f"{university}|{course}"),
+                    "university_name": university,
+                    "country": "India",
+                    "degree_type": degree_type,
+                    "field": field,
+                    "course_name": course,
+                    "duration_years": duration_years,
+                    "core_modules": [],
+                    "grade_requirements": {
+                        "CBSE": "75%",
+                        "ISC": "75%",
+                        "State Board": "75%",
+                    },
+                    "minimum_threshold": "Pass",
+                    "source": "AISHE",
+                }
+            )
 
             if dry_run and i < 10:
                 print(f"  [{degree_type}] {university}: {course} ({duration_years}y)")
@@ -147,28 +154,34 @@ def import_ipeds(csv_path: str, dry_run: bool = False) -> list[dict]:
                 degree_type = "Master"
             elif "doctor" in cred_level.lower():
                 degree_type = "PhD"
-            elif "associate" in cred_level.lower() or "certificate" in cred_level.lower():
+            elif (
+                "associate" in cred_level.lower() or "certificate" in cred_level.lower()
+            ):
                 degree_type = "Diploma"
 
             field = _field_from_course(course)
 
-            programs.append({
-                "id": _doc_id(f"{university}|{course}"),
-                "university_name": university,
-                "country": "United States",
-                "degree_type": degree_type,
-                "field": field,
-                "course_name": course,
-                "duration_years": 4 if degree_type == "Bachelor" else (2 if degree_type in ("Master", "Diploma") else 5),
-                "core_modules": [],
-                "grade_requirements": {
-                    "SAT": "1200",
-                    "ACT": "25",
-                    "GPA": "3.0",
-                },
-                "minimum_threshold": "2.5 GPA",
-                "source": "IPEDS",
-            })
+            programs.append(
+                {
+                    "id": _doc_id(f"{university}|{course}"),
+                    "university_name": university,
+                    "country": "United States",
+                    "degree_type": degree_type,
+                    "field": field,
+                    "course_name": course,
+                    "duration_years": 4
+                    if degree_type == "Bachelor"
+                    else (2 if degree_type in ("Master", "Diploma") else 5),
+                    "core_modules": [],
+                    "grade_requirements": {
+                        "SAT": "1200",
+                        "ACT": "25",
+                        "GPA": "3.0",
+                    },
+                    "minimum_threshold": "2.5 GPA",
+                    "source": "IPEDS",
+                }
+            )
 
             if dry_run and i < 10:
                 print(f"  [{degree_type}] {university}: {course}")
@@ -177,7 +190,9 @@ def import_ipeds(csv_path: str, dry_run: bool = False) -> list[dict]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Seed university datasets into Firestore")
+    parser = argparse.ArgumentParser(
+        description="Seed university datasets into Firestore"
+    )
     parser.add_argument("--aishe", help="Path to AISHE CSV file")
     parser.add_argument("--ipeds", help="Path to IPEDS CSV file")
     parser.add_argument("--dry-run", action="store_true", help="Only print counts")
@@ -198,7 +213,9 @@ def main():
         all_programs.extend(progs)
 
     if not all_programs:
-        print("No data imported. Use --aishe path/to/aishe.csv or --ipeds path/to/ipeds.csv")
+        print(
+            "No data imported. Use --aishe path/to/aishe.csv or --ipeds path/to/ipeds.csv"
+        )
         return
 
     print(f"\nTotal: {len(all_programs)} programs")
@@ -217,17 +234,23 @@ def main():
         else:
             firebase_admin.initialize_app()
 
-        db = firestore.client(database_id=os.environ.get("FIRESTORE_DATABASE_ID", "axon"))
+        db = firestore.client(
+            database_id=os.environ.get("FIRESTORE_DATABASE_ID", "axon")
+        )
 
         batch = db.batch()
         prog_ref = db.collection("university_programs_cache")
         ops = 0
         for prog in all_programs:
             doc_ref = prog_ref.document(prog["id"])
-            batch.set(doc_ref, {
-                **prog,
-                "_cached_at": datetime.now(timezone.utc).isoformat(),
-            }, merge=True)
+            batch.set(
+                doc_ref,
+                {
+                    **prog,
+                    "_cached_at": datetime.now(timezone.utc).isoformat(),
+                },
+                merge=True,
+            )
             ops += 1
             if ops >= 400:
                 batch.commit()
@@ -239,7 +262,9 @@ def main():
             batch.commit()
             print(f"  Committed final {ops} programs")
 
-        print(f"\nDone! Seeded {len(all_programs)} programs into Firestore university_programs_cache")
+        print(
+            f"\nDone! Seeded {len(all_programs)} programs into Firestore university_programs_cache"
+        )
     except Exception as e:
         print(f"\nError writing to Firestore: {e}")
         sys.exit(1)

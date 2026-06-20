@@ -22,9 +22,13 @@ class HandwritingGradingGateway:
 
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel("gemini-1.5-flash")
-        self._cloudinary_cloud_name = os.environ.get("CLOUDINARY_CLOUD_NAME", "").strip()
+        self._cloudinary_cloud_name = os.environ.get(
+            "CLOUDINARY_CLOUD_NAME", ""
+        ).strip()
         self._cloudinary_api_key = os.environ.get("CLOUDINARY_API_KEY", "").strip()
-        self._cloudinary_api_secret = os.environ.get("CLOUDINARY_API_SECRET", "").strip()
+        self._cloudinary_api_secret = os.environ.get(
+            "CLOUDINARY_API_SECRET", ""
+        ).strip()
 
     async def grade_answer(
         self,
@@ -75,7 +79,9 @@ Feedback style:
 the resultant force is zero, which is a required marking point."
 """
 
-        parsed = await self._generate_json([prompt, image_part], "Gemini grading failed")
+        parsed = await self._generate_json(
+            [prompt, image_part], "Gemini grading failed"
+        )
         parsed.setdefault("source_type", "MULTIMODAL_SPATIAL_GRADING")
         parsed.setdefault("available_marks", parsed.get("score", 0))
         parsed.setdefault("marking_point_extract", [])
@@ -109,7 +115,9 @@ the resultant force is zero, which is a required marking point."
                 "learning_objective_gaps": [
                     {
                         "learning_objective_id": (
-                            learning_objective_ids[0] if learning_objective_ids else objective
+                            learning_objective_ids[0]
+                            if learning_objective_ids
+                            else objective
                         ),
                         "reason": "No answer was provided.",
                     }
@@ -143,7 +151,7 @@ Task: Grade the student's typed answer against the supplied marking scheme.
 Question: {question_prompt}
 Student Answer: {student_answer}
 Command Word: {command_word}
-Available Marks: {available_marks if available_marks is not None else 'unknown'}
+Available Marks: {available_marks if available_marks is not None else "unknown"}
 Learning Objectives: {", ".join(learning_objective_ids)}
 Syllabus Context: {syllabus_context or objective}
 Command Word Depth Heuristic JSON:
@@ -173,7 +181,9 @@ Strict Rules:
         parsed["feedback"] = str(parsed.get("feedback", "")).strip()
         parsed["marks_awarded"] = list(parsed.get("marks_awarded", []))
         parsed["marks_missed"] = list(parsed.get("marks_missed", []))
-        parsed["learning_objective_gaps"] = list(parsed.get("learning_objective_gaps", []))
+        parsed["learning_objective_gaps"] = list(
+            parsed.get("learning_objective_gaps", [])
+        )
         parsed["error_type"] = str(parsed.get("error_type", "none")).strip() or "none"
         parsed["marking_point_extract"] = list(parsed.get("marking_point_extract", []))
         parsed["command_word_depth"] = self._merge_command_word_depth(
@@ -211,9 +221,7 @@ Strict Rules:
         timestamp = str(int(time.time()))
         signature_payload = f"public_id={public_id}&tags=axon_archived&timestamp={timestamp}{self._cloudinary_api_secret}"
         signature = hashlib.sha1(signature_payload.encode("utf-8")).hexdigest()
-        endpoint = (
-            f"https://api.cloudinary.com/v1_1/{self._cloudinary_cloud_name}/image/explicit"
-        )
+        endpoint = f"https://api.cloudinary.com/v1_1/{self._cloudinary_cloud_name}/image/explicit"
 
         def post_update() -> dict[str, Any]:
             response = requests.post(
@@ -243,20 +251,26 @@ Strict Rules:
 
     async def _fetch_image_part(self, image_url: str) -> dict[str, Any]:
         if not image_url.startswith("https://"):
-            raise HTTPException(status_code=400, detail="image_url must be an HTTPS URL")
+            raise HTTPException(
+                status_code=400, detail="image_url must be an HTTPS URL"
+            )
 
         import requests
 
         def fetch() -> tuple[bytes, str]:
             response = requests.get(image_url, timeout=20)
             response.raise_for_status()
-            content_type = response.headers.get("content-type", "image/png").split(";")[0].strip()
+            content_type = (
+                response.headers.get("content-type", "image/png").split(";")[0].strip()
+            )
             return response.content, content_type or "image/png"
 
         try:
             image_bytes, mime_type = await asyncio.to_thread(fetch)
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Unable to fetch answer image: {exc}") from exc
+            raise HTTPException(
+                status_code=502, detail=f"Unable to fetch answer image: {exc}"
+            ) from exc
 
         return {"mime_type": mime_type, "data": image_bytes}
 
@@ -264,11 +278,15 @@ Strict Rules:
         try:
             response = await self.model.generate_content_async(prompt)
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"{error_prefix}: {exc}") from exc
+            raise HTTPException(
+                status_code=502, detail=f"{error_prefix}: {exc}"
+            ) from exc
 
         raw_text = getattr(response, "text", "").strip()
         if not raw_text:
-            raise HTTPException(status_code=502, detail="Gemini returned an empty grading response")
+            raise HTTPException(
+                status_code=502, detail="Gemini returned an empty grading response"
+            )
 
         candidate = raw_text.replace("```json", "").replace("```", "").strip()
         try:
@@ -345,8 +363,12 @@ Strict Rules:
             "leads to",
             "causes",
         ]
-        observed_sequence = [marker for marker in sequence_markers if marker in lower_answer]
-        observed_causal = [marker.strip() for marker in causal_markers if marker in lower_answer]
+        observed_sequence = [
+            marker for marker in sequence_markers if marker in lower_answer
+        ]
+        observed_causal = [
+            marker.strip() for marker in causal_markers if marker in lower_answer
+        ]
         missing_depth: list[str] = []
         depth_score = 0.0
         depth_satisfied = False
@@ -361,13 +383,21 @@ Strict Rules:
             if observed_causal:
                 missing_depth.append("Do not add causal explanation to a state answer.")
             depth_satisfied = 1 <= word_count <= 5 and not observed_causal
-            depth_score = 1.0 if depth_satisfied else (0.5 if word_count and word_count <= 8 else 0.0)
+            depth_score = (
+                1.0
+                if depth_satisfied
+                else (0.5 if word_count and word_count <= 8 else 0.0)
+            )
         elif normalized_word == "describe":
             expected_pattern = "Needs an ordered description of features or events."
             if word_count < 6:
-                missing_depth.append("Add enough detail to show the sequence or observable features.")
+                missing_depth.append(
+                    "Add enough detail to show the sequence or observable features."
+                )
             if not observed_sequence:
-                missing_depth.append("Show order using sequence language such as first, then, or finally.")
+                missing_depth.append(
+                    "Show order using sequence language such as first, then, or finally."
+                )
             depth_satisfied = word_count >= 6 and bool(observed_sequence)
             depth_score = min(
                 1.0,
@@ -423,13 +453,17 @@ Strict Rules:
 
         answer_embedding = await self._embed_text(student_answer)
         if answer_embedding is None:
-            return self._lexical_semantic_match(student_answer=student_answer, points=points)
+            return self._lexical_semantic_match(
+                student_answer=student_answer, points=points
+            )
 
         matches: list[dict[str, Any]] = []
         for point in points:
             point_embedding = await self._embed_text(point)
             if point_embedding is None:
-                return self._lexical_semantic_match(student_answer=student_answer, points=points)
+                return self._lexical_semantic_match(
+                    student_answer=student_answer, points=points
+                )
             similarity = self._cosine_similarity(answer_embedding, point_embedding)
             matches.append(
                 {
@@ -475,7 +509,11 @@ Strict Rules:
                 return [float(value) for value in embedding]
         except Exception as exc:
             exc_name = type(exc).__name__
-            if "quota" in str(exc).lower() or "rate_limit" in str(exc).lower() or "429" in str(exc):
+            if (
+                "quota" in str(exc).lower()
+                or "rate_limit" in str(exc).lower()
+                or "429" in str(exc)
+            ):
                 print(f"[GradingService] Gemini quota exceeded for embedding: {exc}")
             else:
                 print(f"[GradingService] Embedding failed ({exc_name}): {exc}")
@@ -557,7 +595,9 @@ Strict Rules:
         merged.setdefault("overall_score", heuristic.get("overall_score", 0.0))
         merged.setdefault("matched_points", heuristic.get("matched_points", []))
         merged.setdefault("top_matches", heuristic.get("top_matches", []))
-        merged.setdefault("source_type", heuristic.get("source_type", "EMBEDDING_HEURISTIC"))
+        merged.setdefault(
+            "source_type", heuristic.get("source_type", "EMBEDDING_HEURISTIC")
+        )
         return merged
 
     def _build_feedback_with_depth(
@@ -572,7 +612,9 @@ Strict Rules:
         missing = command_word_depth.get("missing_depth") or []
         if not missing:
             return base
-        depth_note = " ".join(str(item).strip() for item in missing if str(item).strip())
+        depth_note = " ".join(
+            str(item).strip() for item in missing if str(item).strip()
+        )
         if not depth_note:
             return base
         if not base:

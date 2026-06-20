@@ -84,7 +84,9 @@ class MarkSchemeLayoutService:
                 continue
             for line in block.get("lines", []):
                 spans = line.get("spans", [])
-                text = " ".join((span.get("text") or "").strip() for span in spans).strip()
+                text = " ".join(
+                    (span.get("text") or "").strip() for span in spans
+                ).strip()
                 if not text:
                     continue
                 xs = [span["bbox"][0] for span in spans if span.get("bbox")]
@@ -116,7 +118,11 @@ class MarkSchemeLayoutService:
 
         page_number = int(question.get("page_number") or 0)
         question_number = int(question.get("question_number") or 0)
-        part_labels = [str(item).lower() for item in (question.get("parts") or []) if str(item).strip()]
+        part_labels = [
+            str(item).lower()
+            for item in (question.get("parts") or [])
+            if str(item).strip()
+        ]
         normalized_bounds = (
             (question.get("spatial_metadata") or {}).get("normalized_bounds")
             if isinstance(question.get("spatial_metadata"), dict)
@@ -131,7 +137,9 @@ class MarkSchemeLayoutService:
             height = float(page.get("height") or 1.0)
             for raw_line in page.get("lines", []):
                 line = LayoutLine(
-                    page_number=int(raw_line.get("page_number") or page.get("page_number") or 0),
+                    page_number=int(
+                        raw_line.get("page_number") or page.get("page_number") or 0
+                    ),
                     text=str(raw_line.get("text") or "").strip(),
                     x0=float(raw_line.get("x0") or 0),
                     y0=float(raw_line.get("y0") or 0),
@@ -145,8 +153,12 @@ class MarkSchemeLayoutService:
                 if header_match and int(header_match.group(1)) == question_number:
                     score += 100
                 if normalized_bounds:
-                    score += self._geometry_bonus(line, normalized_bounds, width, height)
-                if part_labels and any(self._line_matches_part(line.text, label) for label in part_labels):
+                    score += self._geometry_bonus(
+                        line, normalized_bounds, width, height
+                    )
+                if part_labels and any(
+                    self._line_matches_part(line.text, label) for label in part_labels
+                ):
                     score += 12
                 candidate_lines.append((score, line))
 
@@ -164,7 +176,9 @@ class MarkSchemeLayoutService:
             for raw_line in page.get("lines", []):
                 linear_lines.append(
                     LayoutLine(
-                        page_number=int(raw_line.get("page_number") or page.get("page_number") or 0),
+                        page_number=int(
+                            raw_line.get("page_number") or page.get("page_number") or 0
+                        ),
                         text=str(raw_line.get("text") or "").strip(),
                         x0=float(raw_line.get("x0") or 0),
                         y0=float(raw_line.get("y0") or 0),
@@ -214,17 +228,25 @@ class MarkSchemeLayoutService:
             return 0.0
         vertical_distance = abs(line.y0 - anchor_y)
         horizontal_distance = abs(line.x0 - anchor_x)
-        return max(0.0, 35.0 - (vertical_distance / 18.0) - (horizontal_distance / 120.0))
+        return max(
+            0.0, 35.0 - (vertical_distance / 18.0) - (horizontal_distance / 120.0)
+        )
 
     def _line_matches_part(self, line_text: str, label: str) -> bool:
         part_match = PART_HEADER.match(line_text)
         return bool(part_match and part_match.group(1).lower() == label.lower())
 
-    def _segment_from_text(self, mark_scheme_text: str, question: dict[str, Any]) -> str:
+    def _segment_from_text(
+        self, mark_scheme_text: str, question: dict[str, Any]
+    ) -> str:
         if not mark_scheme_text.strip():
             return ""
         question_number = int(question.get("question_number") or 0)
-        part_labels = [str(item).lower() for item in (question.get("parts") or []) if str(item).strip()]
+        part_labels = [
+            str(item).lower()
+            for item in (question.get("parts") or [])
+            if str(item).strip()
+        ]
         lines = [line.rstrip() for line in mark_scheme_text.splitlines()]
         start_index = None
         for index, line in enumerate(lines):

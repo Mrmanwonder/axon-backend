@@ -6,8 +6,10 @@ USER_COLUMN_BY_TABLE = {
     "user_recent_papers": "user_id",
 }
 
+
 def _user_column(table: str) -> str:
     return USER_COLUMN_BY_TABLE.get(table, "user_id")
+
 
 # Allowlist - maps to unified curriculum table
 PUBLIC_READ_TABLES = {
@@ -36,6 +38,7 @@ USER_SCOPED_TABLES = {
     "user_personal_index",
 }
 
+
 def _ensure_body_user_scope(body: Any, user_column: str, user_id: str) -> Any:
     if isinstance(body, list):
         return [_ensure_body_user_scope(item, user_column, user_id) for item in body]
@@ -47,6 +50,7 @@ def _ensure_body_user_scope(body: Any, user_column: str, user_id: str) -> Any:
         item[user_column] = user_id
         return item
     return body
+
 
 def apply_user_scope(
     table: str,
@@ -64,12 +68,15 @@ def apply_user_scope(
     if method in ("select", "update", "delete"):
         # Enforce that operations only affect the current user's rows
         scoped_params[f"eq.{user_column}"] = user_id
-    
+
     if method in ("insert", "update", "upsert") and "body" in scoped_params:
         # Enforce that any inserted/updated data correctly identifies the user
-        scoped_params["body"] = _ensure_body_user_scope(scoped_params["body"], user_column, user_id)
+        scoped_params["body"] = _ensure_body_user_scope(
+            scoped_params["body"], user_column, user_id
+        )
 
     return scoped_params
+
 
 def assert_table_access(table: str, method: str) -> None:
     """Assert table access and ensure read-only operations on public tables."""

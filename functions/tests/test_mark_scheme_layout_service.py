@@ -14,9 +14,30 @@ class MarkSchemeLayoutServiceTest(unittest.TestCase):
                 "width": 1000,
                 "height": 1500,
                 "lines": [
-                    {"page_number": 1, "text": "1 (a) momentum = mass x velocity", "x0": 80, "y0": 120, "x1": 500, "y1": 140},
-                    {"page_number": 1, "text": "(b) resultant force is zero", "x0": 80, "y0": 160, "x1": 480, "y1": 180},
-                    {"page_number": 1, "text": "2 (a) energy is conserved", "x0": 80, "y0": 260, "x1": 420, "y1": 280},
+                    {
+                        "page_number": 1,
+                        "text": "1 (a) momentum = mass x velocity",
+                        "x0": 80,
+                        "y0": 120,
+                        "x1": 500,
+                        "y1": 140,
+                    },
+                    {
+                        "page_number": 1,
+                        "text": "(b) resultant force is zero",
+                        "x0": 80,
+                        "y0": 160,
+                        "x1": 480,
+                        "y1": 180,
+                    },
+                    {
+                        "page_number": 1,
+                        "text": "2 (a) energy is conserved",
+                        "x0": 80,
+                        "y0": 260,
+                        "x1": 420,
+                        "y1": 280,
+                    },
                 ],
             }
         ]

@@ -6,6 +6,7 @@ Usage:
     python seed_universities.py --countries India,USA    # Specific countries
     python seed_universities.py --dry-run                # Show counts only
 """
+
 from __future__ import annotations
 
 import argparse
@@ -18,21 +19,59 @@ import requests
 
 # Countries with the most universities in the Hipo API
 DEFAULT_COUNTRIES = [
-    "United States", "United Kingdom", "Canada", "Australia",
-    "India", "China", "Japan", "South Korea", "Singapore",
-    "Germany", "France", "Italy", "Spain", "Netherlands",
-    "Switzerland", "Sweden", "Denmark", "Norway", "Finland",
-    "Brazil", "Mexico", "South Africa", "Nigeria", "Kenya",
-    "United Arab Emirates", "Saudi Arabia", "Qatar", "Malaysia",
-    "New Zealand", "Ireland", "Belgium", "Austria", "Poland",
-    "Russia", "Turkey", "Israel", "Thailand", "Vietnam",
-    "Philippines", "Indonesia", "Pakistan", "Bangladesh",
-    "Argentina", "Chile", "Colombia", "Egypt", "Ghana",
+    "United States",
+    "United Kingdom",
+    "Canada",
+    "Australia",
+    "India",
+    "China",
+    "Japan",
+    "South Korea",
+    "Singapore",
+    "Germany",
+    "France",
+    "Italy",
+    "Spain",
+    "Netherlands",
+    "Switzerland",
+    "Sweden",
+    "Denmark",
+    "Norway",
+    "Finland",
+    "Brazil",
+    "Mexico",
+    "South Africa",
+    "Nigeria",
+    "Kenya",
+    "United Arab Emirates",
+    "Saudi Arabia",
+    "Qatar",
+    "Malaysia",
+    "New Zealand",
+    "Ireland",
+    "Belgium",
+    "Austria",
+    "Poland",
+    "Russia",
+    "Turkey",
+    "Israel",
+    "Thailand",
+    "Vietnam",
+    "Philippines",
+    "Indonesia",
+    "Pakistan",
+    "Bangladesh",
+    "Argentina",
+    "Chile",
+    "Colombia",
+    "Egypt",
+    "Ghana",
 ]
 
 
 def _university_id(name: str, country: str) -> str:
     import hashlib
+
     seed = f"{name.strip().lower()}|{country.strip().lower()}"
     return f"uni_{hashlib.sha1(seed.encode()).hexdigest()[:12]}"
 
@@ -68,17 +107,19 @@ def main():
         for u in unis:
             domains = u.get("domains", [])
             domain = domains[0] if domains else ""
-            enriched.append({
-                "id": _university_id(u.get("name", ""), country),
-                "name": u.get("name", "Unknown"),
-                "country": country,
-                "alpha_two_code": u.get("alpha_two_code", ""),
-                "domains": domains,
-                "web_pages": u.get("web_pages", []),
-                "domain": domain,
-                "logo_url": f"https://logo.clearbit.com/{domain}" if domain else "",
-                "state_province": u.get("state-province") or "",
-            })
+            enriched.append(
+                {
+                    "id": _university_id(u.get("name", ""), country),
+                    "name": u.get("name", "Unknown"),
+                    "country": country,
+                    "alpha_two_code": u.get("alpha_two_code", ""),
+                    "domains": domains,
+                    "web_pages": u.get("web_pages", []),
+                    "domain": domain,
+                    "logo_url": f"https://logo.clearbit.com/{domain}" if domain else "",
+                    "state_province": u.get("state-province") or "",
+                }
+            )
         print(f"{len(enriched)} universities")
         all_unis.extend(enriched)
         total += len(enriched)
@@ -102,17 +143,23 @@ def main():
         else:
             firebase_admin.initialize_app()
 
-        db = firestore.client(database_id=os.environ.get("FIRESTORE_DATABASE_ID", "axon"))
+        db = firestore.client(
+            database_id=os.environ.get("FIRESTORE_DATABASE_ID", "axon")
+        )
 
         batch = db.batch()
         cache_ref = db.collection("university_cache")
         ops = 0
         for uni in all_unis:
             doc_ref = cache_ref.document(uni["id"])
-            batch.set(doc_ref, {
-                **uni,
-                "_cached_at": datetime.now(timezone.utc).isoformat(),
-            }, merge=True)
+            batch.set(
+                doc_ref,
+                {
+                    **uni,
+                    "_cached_at": datetime.now(timezone.utc).isoformat(),
+                },
+                merge=True,
+            )
             ops += 1
             if ops >= 400:
                 batch.commit()

@@ -191,7 +191,12 @@ class UniversityProgramCrawler:
                 return None
 
             school = results[0]
-            prog_pct = school.get("latest", {}).get("academics", {}).get("program_percentage", {}) or {}
+            prog_pct = (
+                school.get("latest", {})
+                .get("academics", {})
+                .get("program_percentage", {})
+                or {}
+            )
             programs = []
             seen = set()
             for cip_code, pct in prog_pct.items():
@@ -201,20 +206,24 @@ class UniversityProgramCrawler:
                 if not name or name in seen:
                     continue
                 seen.add(name)
-                programs.append({
-                    "id": f"csc_{cip_code}",
-                    "name": name,
-                    "degree_type": "Bachelor",
-                    "field": name,
-                    "duration_years": 4,
-                    "core_modules": [],
-                    "grade_requirements": self._us_grade_requirements(),
-                    "minimum_threshold": "3.0 GPA / 1200 SAT",
-                    "source": "college_scorecard",
-                })
+                programs.append(
+                    {
+                        "id": f"csc_{cip_code}",
+                        "name": name,
+                        "degree_type": "Bachelor",
+                        "field": name,
+                        "duration_years": 4,
+                        "core_modules": [],
+                        "grade_requirements": self._us_grade_requirements(),
+                        "minimum_threshold": "3.0 GPA / 1200 SAT",
+                        "source": "college_scorecard",
+                    }
+                )
 
             if programs:
-                print(f"[Crawler] Scorecard: found {len(programs)} programs for {university_name}")
+                print(
+                    f"[Crawler] Scorecard: found {len(programs)} programs for {university_name}"
+                )
                 return programs[:20]
 
         except Exception as exc:
@@ -289,18 +298,20 @@ class UniversityProgramCrawler:
 
             duration = self._guess_duration(text)
             degree_type = self._detect_degree_type(text)
-            programs.append({
-                "id": f"web_{hashlib.sha1(key.encode()).hexdigest()[:8]}",
-                "name": text,
-                "degree_type": degree_type,
-                "field": self._classify_field(text),
-                "duration_years": duration,
-                "core_modules": [],
-                "grade_requirements": {},
-                "minimum_threshold": "",
-                "source": "web_scrape",
-                "url": urljoin(url, href),
-            })
+            programs.append(
+                {
+                    "id": f"web_{hashlib.sha1(key.encode()).hexdigest()[:8]}",
+                    "name": text,
+                    "degree_type": degree_type,
+                    "field": self._classify_field(text),
+                    "duration_years": duration,
+                    "core_modules": [],
+                    "grade_requirements": {},
+                    "minimum_threshold": "",
+                    "source": "web_scrape",
+                    "url": urljoin(url, href),
+                }
+            )
 
         # Strategy 2: Look for heading + list patterns (common in course catalogs)
         if len(programs) < 3:
@@ -313,17 +324,19 @@ class UniversityProgramCrawler:
                     continue
                 seen.add(key)
 
-                programs.append({
-                    "id": f"web_{hashlib.sha1(key.encode()).hexdigest()[:8]}",
-                    "name": heading_text,
-                    "degree_type": self._detect_degree_type(heading_text),
-                    "field": self._classify_field(heading_text),
-                    "duration_years": self._guess_duration(heading_text),
-                    "core_modules": [],
-                    "grade_requirements": {},
-                    "minimum_threshold": "",
-                    "source": "web_scrape",
-                })
+                programs.append(
+                    {
+                        "id": f"web_{hashlib.sha1(key.encode()).hexdigest()[:8]}",
+                        "name": heading_text,
+                        "degree_type": self._detect_degree_type(heading_text),
+                        "field": self._classify_field(heading_text),
+                        "duration_years": self._guess_duration(heading_text),
+                        "core_modules": [],
+                        "grade_requirements": {},
+                        "minimum_threshold": "",
+                        "source": "web_scrape",
+                    }
+                )
 
         return programs[:30]
 
@@ -337,25 +350,77 @@ class UniversityProgramCrawler:
 
         # Contains typical degree keywords
         degree_kw = [
-            "bachelor", "master", "phd", "doctorate", "b.sc", "b.a.", "m.sc",
-            "m.a.", "b.eng", "m.eng", "ll.b", "ll.m", "b.com", "m.com",
-            "b.b.a", "m.b.a", "b.f.a", "m.f.a", "b.s.", "b.a", "m.s.",
-            "diploma", "certificate", "foundation", "undergraduate",
-            "postgraduate", "graduate", "honours", "hons",
+            "bachelor",
+            "master",
+            "phd",
+            "doctorate",
+            "b.sc",
+            "b.a.",
+            "m.sc",
+            "m.a.",
+            "b.eng",
+            "m.eng",
+            "ll.b",
+            "ll.m",
+            "b.com",
+            "m.com",
+            "b.b.a",
+            "m.b.a",
+            "b.f.a",
+            "m.f.a",
+            "b.s.",
+            "b.a",
+            "m.s.",
+            "diploma",
+            "certificate",
+            "foundation",
+            "undergraduate",
+            "postgraduate",
+            "graduate",
+            "honours",
+            "hons",
         ]
         if any(kw in text_lower for kw in degree_kw):
             return True
 
         # Contains common program subject words with length check
         subject_words = [
-            "computer", "engineer", "business", "economics", "mathematics",
-            "physics", "chemistry", "biology", "psychology", "law",
-            "medicine", "nursing", "pharmacy", "accounting", "finance",
-            "marketing", "architecture", "education", "history", "arts",
-            "design", "music", "literature", "philosophy", "sociology",
-            "political", "international", "environmental", "biotechnology",
-            "data science", "artificial intelligence", "mechanical",
-            "electrical", "civil", "chemical", "biomedical",
+            "computer",
+            "engineer",
+            "business",
+            "economics",
+            "mathematics",
+            "physics",
+            "chemistry",
+            "biology",
+            "psychology",
+            "law",
+            "medicine",
+            "nursing",
+            "pharmacy",
+            "accounting",
+            "finance",
+            "marketing",
+            "architecture",
+            "education",
+            "history",
+            "arts",
+            "design",
+            "music",
+            "literature",
+            "philosophy",
+            "sociology",
+            "political",
+            "international",
+            "environmental",
+            "biotechnology",
+            "data science",
+            "artificial intelligence",
+            "mechanical",
+            "electrical",
+            "civil",
+            "chemical",
+            "biomedical",
         ]
         if len(text_lower) > 10 and any(kw in text_lower for kw in subject_words):
             return True
@@ -366,16 +431,48 @@ class UniversityProgramCrawler:
         t = text.lower()
         if any(kw in t for kw in ["phd", "doctorate", "doctoral", "dphil"]):
             return "PhD"
-        if any(kw in t for kw in ["master", "msc", "m.sc", "m.a.", "meng",
-                                    "m.eng", "llm", "ll.m", "mba", "m.b.a",
-                                    "ma ", "postgraduate", "graduate"]):
+        if any(
+            kw in t
+            for kw in [
+                "master",
+                "msc",
+                "m.sc",
+                "m.a.",
+                "meng",
+                "m.eng",
+                "llm",
+                "ll.m",
+                "mba",
+                "m.b.a",
+                "ma ",
+                "postgraduate",
+                "graduate",
+            ]
+        ):
             return "Master"
         if any(kw in t for kw in ["diploma", "certificate", "foundation"]):
             return "Diploma"
-        if any(kw in t for kw in ["bachelor", "b.sc", "b.s.", "b.a.", "beng",
-                                    "b.eng", "llb", "ll.b", "b.com", "b.b.a",
-                                    "b.f.a", "undergraduate", "honours", "hons",
-                                    "ba ", "bsc"]):
+        if any(
+            kw in t
+            for kw in [
+                "bachelor",
+                "b.sc",
+                "b.s.",
+                "b.a.",
+                "beng",
+                "b.eng",
+                "llb",
+                "ll.b",
+                "b.com",
+                "b.b.a",
+                "b.f.a",
+                "undergraduate",
+                "honours",
+                "hons",
+                "ba ",
+                "bsc",
+            ]
+        ):
             return "Bachelor"
         return "Bachelor"
 
@@ -464,138 +561,438 @@ class UniversityProgramCrawler:
 
     def _us_programs(self, name: str) -> list[dict]:
         return [
-            self._prog(name, "Computer Science B.Sc", "Bachelor", "Computer Science", 4,
-                       {"SAT": "1350+", "GPA": "3.5+", "TOEFL": "90+"}),
-            self._prog(name, "Business Administration B.B.A", "Bachelor", "Business", 4,
-                       {"SAT": "1200+", "GPA": "3.0+", "TOEFL": "85+"}),
-            self._prog(name, "Mechanical Engineering B.Sc", "Bachelor", "Mechanical Engineering", 4,
-                       {"SAT": "1300+", "GPA": "3.3+", "TOEFL": "90+"}),
-            self._prog(name, "Economics B.A", "Bachelor", "Economics", 4,
-                       {"SAT": "1250+", "GPA": "3.2+"}),
-            self._prog(name, "Psychology B.A", "Bachelor", "Psychology", 4,
-                       {"SAT": "1150+", "GPA": "3.0+"}),
-            self._prog(name, "Data Science M.Sc", "Master", "Data Science", 2,
-                       {"GRE": "320+", "TOEFL": "95+"}),
-            self._prog(name, "Computer Science M.Sc", "Master", "Computer Science", 2,
-                       {"GRE": "325+", "TOEFL": "95+"}),
+            self._prog(
+                name,
+                "Computer Science B.Sc",
+                "Bachelor",
+                "Computer Science",
+                4,
+                {"SAT": "1350+", "GPA": "3.5+", "TOEFL": "90+"},
+            ),
+            self._prog(
+                name,
+                "Business Administration B.B.A",
+                "Bachelor",
+                "Business",
+                4,
+                {"SAT": "1200+", "GPA": "3.0+", "TOEFL": "85+"},
+            ),
+            self._prog(
+                name,
+                "Mechanical Engineering B.Sc",
+                "Bachelor",
+                "Mechanical Engineering",
+                4,
+                {"SAT": "1300+", "GPA": "3.3+", "TOEFL": "90+"},
+            ),
+            self._prog(
+                name,
+                "Economics B.A",
+                "Bachelor",
+                "Economics",
+                4,
+                {"SAT": "1250+", "GPA": "3.2+"},
+            ),
+            self._prog(
+                name,
+                "Psychology B.A",
+                "Bachelor",
+                "Psychology",
+                4,
+                {"SAT": "1150+", "GPA": "3.0+"},
+            ),
+            self._prog(
+                name,
+                "Data Science M.Sc",
+                "Master",
+                "Data Science",
+                2,
+                {"GRE": "320+", "TOEFL": "95+"},
+            ),
+            self._prog(
+                name,
+                "Computer Science M.Sc",
+                "Master",
+                "Computer Science",
+                2,
+                {"GRE": "325+", "TOEFL": "95+"},
+            ),
         ]
 
     def _uk_programs(self, name: str) -> list[dict]:
         return [
-            self._prog(name, "Computer Science B.Sc (Hons)", "Bachelor", "Computer Science", 3,
-                       {"A-Level": "AAA", "IB": "36/45", "IELTS": "7.0"}),
-            self._prog(name, "Engineering M.Eng", "Bachelor", "Engineering", 4,
-                       {"A-Level": "A*AA", "IB": "38/45", "IELTS": "7.0"}),
-            self._prog(name, "Economics B.Sc (Hons)", "Bachelor", "Economics", 3,
-                       {"A-Level": "AAA", "IB": "36/45"}),
-            self._prog(name, "Law LL.B (Hons)", "Bachelor", "Law", 3,
-                       {"A-Level": "AAA", "IB": "36/45", "LNAT": "Competitive"}),
-            self._prog(name, "Mathematics B.Sc (Hons)", "Bachelor", "Mathematics", 3,
-                       {"A-Level": "AAA", "IB": "36/45"}),
-            self._prog(name, "Business & Management B.Sc", "Bachelor", "Business", 3,
-                       {"A-Level": "AAB", "IB": "34/45"}),
+            self._prog(
+                name,
+                "Computer Science B.Sc (Hons)",
+                "Bachelor",
+                "Computer Science",
+                3,
+                {"A-Level": "AAA", "IB": "36/45", "IELTS": "7.0"},
+            ),
+            self._prog(
+                name,
+                "Engineering M.Eng",
+                "Bachelor",
+                "Engineering",
+                4,
+                {"A-Level": "A*AA", "IB": "38/45", "IELTS": "7.0"},
+            ),
+            self._prog(
+                name,
+                "Economics B.Sc (Hons)",
+                "Bachelor",
+                "Economics",
+                3,
+                {"A-Level": "AAA", "IB": "36/45"},
+            ),
+            self._prog(
+                name,
+                "Law LL.B (Hons)",
+                "Bachelor",
+                "Law",
+                3,
+                {"A-Level": "AAA", "IB": "36/45", "LNAT": "Competitive"},
+            ),
+            self._prog(
+                name,
+                "Mathematics B.Sc (Hons)",
+                "Bachelor",
+                "Mathematics",
+                3,
+                {"A-Level": "AAA", "IB": "36/45"},
+            ),
+            self._prog(
+                name,
+                "Business & Management B.Sc",
+                "Bachelor",
+                "Business",
+                3,
+                {"A-Level": "AAB", "IB": "34/45"},
+            ),
         ]
 
     def _india_programs(self, name: str) -> list[dict]:
         return [
-            self._prog(name, "B.Tech Computer Science", "Bachelor", "Computer Science", 4,
-                       {"JEE": "Advanced Rank", "CBSE": "75%+", "State Board": "75%+"}),
-            self._prog(name, "B.Tech Mechanical Engineering", "Bachelor", "Mechanical Engineering", 4,
-                       {"JEE": "Advanced Rank", "CBSE": "75%+", "State Board": "75%+"}),
-            self._prog(name, "B.Sc Physics (Hons)", "Bachelor", "Physics", 3,
-                       {"CBSE": "70%+", "State Board": "70%+"}),
-            self._prog(name, "B.Com (Hons)", "Bachelor", "Commerce", 3,
-                       {"CBSE": "75%+", "State Board": "70%+"}),
-            self._prog(name, "B.A Economics (Hons)", "Bachelor", "Economics", 3,
-                       {"CBSE": "75%+", "State Board": "70%+"}),
-            self._prog(name, "M.Tech Computer Science", "Master", "Computer Science", 2,
-                       {"GATE": "Qualified", "B.Tech": "60%+"}),
-            self._prog(name, "MBA", "Master", "Business Administration", 2,
-                       {"CAT": "95+ percentile", "Work Exp": "2+ years"}),
+            self._prog(
+                name,
+                "B.Tech Computer Science",
+                "Bachelor",
+                "Computer Science",
+                4,
+                {"JEE": "Advanced Rank", "CBSE": "75%+", "State Board": "75%+"},
+            ),
+            self._prog(
+                name,
+                "B.Tech Mechanical Engineering",
+                "Bachelor",
+                "Mechanical Engineering",
+                4,
+                {"JEE": "Advanced Rank", "CBSE": "75%+", "State Board": "75%+"},
+            ),
+            self._prog(
+                name,
+                "B.Sc Physics (Hons)",
+                "Bachelor",
+                "Physics",
+                3,
+                {"CBSE": "70%+", "State Board": "70%+"},
+            ),
+            self._prog(
+                name,
+                "B.Com (Hons)",
+                "Bachelor",
+                "Commerce",
+                3,
+                {"CBSE": "75%+", "State Board": "70%+"},
+            ),
+            self._prog(
+                name,
+                "B.A Economics (Hons)",
+                "Bachelor",
+                "Economics",
+                3,
+                {"CBSE": "75%+", "State Board": "70%+"},
+            ),
+            self._prog(
+                name,
+                "M.Tech Computer Science",
+                "Master",
+                "Computer Science",
+                2,
+                {"GATE": "Qualified", "B.Tech": "60%+"},
+            ),
+            self._prog(
+                name,
+                "MBA",
+                "Master",
+                "Business Administration",
+                2,
+                {"CAT": "95+ percentile", "Work Exp": "2+ years"},
+            ),
         ]
 
     def _sg_programs(self, name: str) -> list[dict]:
         return [
-            self._prog(name, "B.Comp Computer Science", "Bachelor", "Computer Science", 4,
-                       {"A-Level": "AAA/AAB", "IB": "38/45", "Poly": "3.6+ GPA"}),
-            self._prog(name, "B.Eng Electrical Engineering", "Bachelor", "Electrical Engineering", 4,
-                       {"A-Level": "AAB", "IB": "36/45"}),
-            self._prog(name, "B.Sc Business Administration", "Bachelor", "Business", 3,
-                       {"A-Level": "AAB/ABB", "IB": "36/45"}),
-            self._prog(name, "B.Acc Accountancy", "Bachelor", "Accountancy", 3,
-                       {"A-Level": "AAA", "IB": "38/45"}),
-            self._prog(name, "B.Sc Economics", "Bachelor", "Economics", 3,
-                       {"A-Level": "AAB", "IB": "36/45"}),
-            self._prog(name, "B.Sc Data Science & Analytics", "Bachelor", "Data Science", 4,
-                       {"A-Level": "AAB", "IB": "36/45"}),
-            self._prog(name, "B.A Environmental Studies", "Bachelor", "Environmental Science", 4,
-                       {"A-Level": "ABB", "IB": "34/45"}),
+            self._prog(
+                name,
+                "B.Comp Computer Science",
+                "Bachelor",
+                "Computer Science",
+                4,
+                {"A-Level": "AAA/AAB", "IB": "38/45", "Poly": "3.6+ GPA"},
+            ),
+            self._prog(
+                name,
+                "B.Eng Electrical Engineering",
+                "Bachelor",
+                "Electrical Engineering",
+                4,
+                {"A-Level": "AAB", "IB": "36/45"},
+            ),
+            self._prog(
+                name,
+                "B.Sc Business Administration",
+                "Bachelor",
+                "Business",
+                3,
+                {"A-Level": "AAB/ABB", "IB": "36/45"},
+            ),
+            self._prog(
+                name,
+                "B.Acc Accountancy",
+                "Bachelor",
+                "Accountancy",
+                3,
+                {"A-Level": "AAA", "IB": "38/45"},
+            ),
+            self._prog(
+                name,
+                "B.Sc Economics",
+                "Bachelor",
+                "Economics",
+                3,
+                {"A-Level": "AAB", "IB": "36/45"},
+            ),
+            self._prog(
+                name,
+                "B.Sc Data Science & Analytics",
+                "Bachelor",
+                "Data Science",
+                4,
+                {"A-Level": "AAB", "IB": "36/45"},
+            ),
+            self._prog(
+                name,
+                "B.A Environmental Studies",
+                "Bachelor",
+                "Environmental Science",
+                4,
+                {"A-Level": "ABB", "IB": "34/45"},
+            ),
         ]
 
     def _au_programs(self, name: str) -> list[dict]:
         return [
-            self._prog(name, "Bachelor of Computer Science", "Bachelor", "Computer Science", 3,
-                       {"ATAR": "85+", "IELTS": "6.5"}),
-            self._prog(name, "Bachelor of Engineering (Honours)", "Bachelor", "Engineering", 4,
-                       {"ATAR": "85+", "IELTS": "6.5"}),
-            self._prog(name, "Bachelor of Commerce", "Bachelor", "Commerce", 3,
-                       {"ATAR": "80+", "IELTS": "6.5"}),
-            self._prog(name, "Master of Data Science", "Master", "Data Science", 2,
-                       {"Bachelor": "65%+", "IELTS": "6.5"}),
+            self._prog(
+                name,
+                "Bachelor of Computer Science",
+                "Bachelor",
+                "Computer Science",
+                3,
+                {"ATAR": "85+", "IELTS": "6.5"},
+            ),
+            self._prog(
+                name,
+                "Bachelor of Engineering (Honours)",
+                "Bachelor",
+                "Engineering",
+                4,
+                {"ATAR": "85+", "IELTS": "6.5"},
+            ),
+            self._prog(
+                name,
+                "Bachelor of Commerce",
+                "Bachelor",
+                "Commerce",
+                3,
+                {"ATAR": "80+", "IELTS": "6.5"},
+            ),
+            self._prog(
+                name,
+                "Master of Data Science",
+                "Master",
+                "Data Science",
+                2,
+                {"Bachelor": "65%+", "IELTS": "6.5"},
+            ),
         ]
 
     def _ca_programs(self, name: str) -> list[dict]:
         return [
-            self._prog(name, "Bachelor of Computer Science", "Bachelor", "Computer Science", 4,
-                       {"Ontario": "75%+", "IELTS": "6.5"}),
-            self._prog(name, "Bachelor of Engineering", "Bachelor", "Engineering", 4,
-                       {"Ontario": "80%+", "IELTS": "6.5"}),
-            self._prog(name, "Bachelor of Commerce", "Bachelor", "Business", 4,
-                       {"Ontario": "75%+", "IELTS": "6.5"}),
-            self._prog(name, "Bachelor of Science - Biology", "Bachelor", "Biology", 4,
-                       {"Ontario": "75%+", "IELTS": "6.5"}),
-            self._prog(name, "Master of Business Administration", "Master", "Business", 2,
-                       {"GMAT": "600+", "IELTS": "7.0"}),
+            self._prog(
+                name,
+                "Bachelor of Computer Science",
+                "Bachelor",
+                "Computer Science",
+                4,
+                {"Ontario": "75%+", "IELTS": "6.5"},
+            ),
+            self._prog(
+                name,
+                "Bachelor of Engineering",
+                "Bachelor",
+                "Engineering",
+                4,
+                {"Ontario": "80%+", "IELTS": "6.5"},
+            ),
+            self._prog(
+                name,
+                "Bachelor of Commerce",
+                "Bachelor",
+                "Business",
+                4,
+                {"Ontario": "75%+", "IELTS": "6.5"},
+            ),
+            self._prog(
+                name,
+                "Bachelor of Science - Biology",
+                "Bachelor",
+                "Biology",
+                4,
+                {"Ontario": "75%+", "IELTS": "6.5"},
+            ),
+            self._prog(
+                name,
+                "Master of Business Administration",
+                "Master",
+                "Business",
+                2,
+                {"GMAT": "600+", "IELTS": "7.0"},
+            ),
         ]
 
     def _de_programs(self, name: str) -> list[dict]:
         return [
-            self._prog(name, "B.Sc Informatik (Computer Science)", "Bachelor", "Computer Science", 3,
-                       {"Abitur": "1.5+", "TestDaF": "4+"}),
-            self._prog(name, "B.Sc Maschinenbau (Mechanical Engineering)", "Bachelor", "Mechanical Engineering", 3,
-                       {"Abitur": "1.5+", "TestDaF": "4+"}),
-            self._prog(name, "B.Sc Wirtschaftswissenschaften (Economics)", "Bachelor", "Economics", 3,
-                       {"Abitur": "2.0+"}),
-            self._prog(name, "M.Sc Data Science", "Master", "Data Science", 2,
-                       {"Bachelor": "2.0+", "IELTS": "6.5"}),
+            self._prog(
+                name,
+                "B.Sc Informatik (Computer Science)",
+                "Bachelor",
+                "Computer Science",
+                3,
+                {"Abitur": "1.5+", "TestDaF": "4+"},
+            ),
+            self._prog(
+                name,
+                "B.Sc Maschinenbau (Mechanical Engineering)",
+                "Bachelor",
+                "Mechanical Engineering",
+                3,
+                {"Abitur": "1.5+", "TestDaF": "4+"},
+            ),
+            self._prog(
+                name,
+                "B.Sc Wirtschaftswissenschaften (Economics)",
+                "Bachelor",
+                "Economics",
+                3,
+                {"Abitur": "2.0+"},
+            ),
+            self._prog(
+                name,
+                "M.Sc Data Science",
+                "Master",
+                "Data Science",
+                2,
+                {"Bachelor": "2.0+", "IELTS": "6.5"},
+            ),
         ]
 
     def _fr_programs(self, name: str) -> list[dict]:
         return [
-            self._prog(name, "Licence Informatique (Computer Science)", "Bachelor", "Computer Science", 3,
-                       {"Bac": "14/20+", "TCF": "B2"}),
-            self._prog(name, "Licence Économie (Economics)", "Bachelor", "Economics", 3,
-                       {"Bac": "12/20+"}),
-            self._prog(name, "Master Data Science", "Master", "Data Science", 2,
-                       {"Licence": "14/20+", "IELTS": "6.5"}),
-            self._prog(name, "Diplôme d'Ingénieur", "Bachelor", "Engineering", 5,
-                       {"Classes Prépa": "Admissible", "Concours": "Rank"}),
+            self._prog(
+                name,
+                "Licence Informatique (Computer Science)",
+                "Bachelor",
+                "Computer Science",
+                3,
+                {"Bac": "14/20+", "TCF": "B2"},
+            ),
+            self._prog(
+                name,
+                "Licence Économie (Economics)",
+                "Bachelor",
+                "Economics",
+                3,
+                {"Bac": "12/20+"},
+            ),
+            self._prog(
+                name,
+                "Master Data Science",
+                "Master",
+                "Data Science",
+                2,
+                {"Licence": "14/20+", "IELTS": "6.5"},
+            ),
+            self._prog(
+                name,
+                "Diplôme d'Ingénieur",
+                "Bachelor",
+                "Engineering",
+                5,
+                {"Classes Prépa": "Admissible", "Concours": "Rank"},
+            ),
         ]
 
     def _generic_programs(self, name: str) -> list[dict]:
         return [
-            self._prog(name, "Computer Science", "Bachelor", "Computer Science", 4,
-                       {"IB": "34/45", "A-Level": "AAB"}),
-            self._prog(name, "Business Administration", "Bachelor", "Business", 3,
-                       {"IB": "32/45", "A-Level": "ABB"}),
-            self._prog(name, "Engineering (General)", "Bachelor", "Engineering", 4,
-                       {"IB": "33/45", "A-Level": "AAB"}),
-            self._prog(name, "Economics", "Bachelor", "Economics", 3,
-                       {"IB": "32/45", "A-Level": "ABB"}),
-            self._prog(name, "Mathematics", "Bachelor", "Mathematics", 3,
-                       {"IB": "33/45", "A-Level": "AAB"}),
-            self._prog(name, "Data Science", "Master", "Data Science", 2,
-                       {"Bachelor": "70%+", "IELTS": "6.5"}),
+            self._prog(
+                name,
+                "Computer Science",
+                "Bachelor",
+                "Computer Science",
+                4,
+                {"IB": "34/45", "A-Level": "AAB"},
+            ),
+            self._prog(
+                name,
+                "Business Administration",
+                "Bachelor",
+                "Business",
+                3,
+                {"IB": "32/45", "A-Level": "ABB"},
+            ),
+            self._prog(
+                name,
+                "Engineering (General)",
+                "Bachelor",
+                "Engineering",
+                4,
+                {"IB": "33/45", "A-Level": "AAB"},
+            ),
+            self._prog(
+                name,
+                "Economics",
+                "Bachelor",
+                "Economics",
+                3,
+                {"IB": "32/45", "A-Level": "ABB"},
+            ),
+            self._prog(
+                name,
+                "Mathematics",
+                "Bachelor",
+                "Mathematics",
+                3,
+                {"IB": "33/45", "A-Level": "AAB"},
+            ),
+            self._prog(
+                name,
+                "Data Science",
+                "Master",
+                "Data Science",
+                2,
+                {"Bachelor": "70%+", "IELTS": "6.5"},
+            ),
         ]
 
     def _prog(
@@ -744,9 +1141,11 @@ class UniversityProgramCrawler:
 
     def _get_cached(self, university_name: str) -> list[dict] | None:
         try:
-            doc = self._db.collection("university_programs_cache").document(
-                self._cache_key(university_name)
-            ).get()
+            doc = (
+                self._db.collection("university_programs_cache")
+                .document(self._cache_key(university_name))
+                .get()
+            )
             if doc.exists:
                 data = doc.to_dict() or {}
                 ts = data.get("_cached_at", "")
@@ -764,10 +1163,12 @@ class UniversityProgramCrawler:
         try:
             self._db.collection("university_programs_cache").document(
                 self._cache_key(university_name)
-            ).set({
-                "university_name": university_name,
-                "programs": programs,
-                "_cached_at": datetime.now(timezone.utc).isoformat(),
-            })
+            ).set(
+                {
+                    "university_name": university_name,
+                    "programs": programs,
+                    "_cached_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
         except Exception as exc:
             print(f"[Crawler] Cache write error: {exc}")

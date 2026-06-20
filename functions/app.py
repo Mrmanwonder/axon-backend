@@ -1073,7 +1073,10 @@ async def proxy_search(
     payload: SerperSearchRequest,
     user: dict[str, Any] = Depends(current_user),
 ):
-    del user
+    uid = user.get("uid", "anonymous")
+    if is_rate_limited(f"serper_{uid}", limit=20, window_seconds=60):
+        raise HTTPException(status_code=429, detail="Too many search requests")
+
     api_key = os.environ.get("SERPER_API_KEY")
     if not api_key:
         raise HTTPException(status_code=502, detail="Serper API key not configured")

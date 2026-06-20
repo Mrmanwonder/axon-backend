@@ -63,7 +63,10 @@ class CommandWordDrillService:
         responses: list[dict[str, Any]],
     ) -> dict[str, Any]:
         if self._model is None:
-            raise HTTPException(status_code=503, detail="Gemini is required for command-word drill grading")
+            raise HTTPException(
+                status_code=503,
+                detail="Gemini is required for command-word drill grading",
+            )
 
         objective = self._fetch_objective(objective_id)
         heuristic_items = [
@@ -83,8 +86,8 @@ class CommandWordDrillService:
         ]
         prompt = f"""
 Role: Senior examiner for command-word drilling.
-Objective: {objective.get('code', objective_id)} | {objective.get('title', '')}
-Description: {objective.get('description', '')}
+Objective: {objective.get("code", objective_id)} | {objective.get("title", "")}
+Description: {objective.get("description", "")}
 Prompt Cards: {json.dumps(prompt_cards, ensure_ascii=True)}
 Student Responses: {json.dumps(responses, ensure_ascii=True)}
 Heuristic Depth Analysis: {json.dumps(heuristic_items, ensure_ascii=True)}
@@ -106,17 +109,23 @@ command_word, awarded_score, max_score, depth_satisfied, missing_depth, feedback
         try:
             response = await self._model.generate_content_async(prompt)
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Gemini drill evaluation failed: {exc}") from exc
+            raise HTTPException(
+                status_code=502, detail=f"Gemini drill evaluation failed: {exc}"
+            ) from exc
 
         raw_text = getattr(response, "text", "").strip()
         if not raw_text:
-            raise HTTPException(status_code=502, detail="Gemini returned an empty drill evaluation")
+            raise HTTPException(
+                status_code=502, detail="Gemini returned an empty drill evaluation"
+            )
 
         candidate = raw_text.replace("```json", "").replace("```", "").strip()
         try:
             parsed = json.loads(candidate)
         except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=502, detail="Drill evaluation response was not valid JSON") from exc
+            raise HTTPException(
+                status_code=502, detail="Drill evaluation response was not valid JSON"
+            ) from exc
 
         parsed.setdefault("overall_score", 0)
         parsed.setdefault("feedback", "")
@@ -136,12 +145,20 @@ command_word, awarded_score, max_score, depth_satisfied, missing_depth, feedback
             )
             merged = {
                 "command_word": heuristic["command_word"],
-                "awarded_score": int(existing.get("awarded_score", heuristic["awarded_score"])),
+                "awarded_score": int(
+                    existing.get("awarded_score", heuristic["awarded_score"])
+                ),
                 "max_score": int(existing.get("max_score", heuristic["max_score"])),
-                "depth_satisfied": bool(existing.get("depth_satisfied", heuristic["depth_satisfied"])),
-                "missing_depth": list(existing.get("missing_depth", heuristic["missing_depth"])),
+                "depth_satisfied": bool(
+                    existing.get("depth_satisfied", heuristic["depth_satisfied"])
+                ),
+                "missing_depth": list(
+                    existing.get("missing_depth", heuristic["missing_depth"])
+                ),
                 "feedback": str(existing.get("feedback", heuristic["feedback"])),
-                "depth_score": float(existing.get("depth_score", heuristic["depth_score"])),
+                "depth_score": float(
+                    existing.get("depth_score", heuristic["depth_score"])
+                ),
             }
             merged_items.append(merged)
         parsed["items"] = merged_items
@@ -181,7 +198,9 @@ command_word, awarded_score, max_score, depth_satisfied, missing_depth, feedback
             "explain": "Cause-and-effect reasoning or a linked why/how chain.",
             "contrast": "A direct comparison highlighting meaningful differences.",
             "suggest": "A plausible inference grounded in the context and objective.",
-        }.get(command_word.lower(), "Respond with the depth expected by the command word.")
+        }.get(
+            command_word.lower(), "Respond with the depth expected by the command word."
+        )
 
     def _score_depth(self, *, command_word: str, response: str) -> dict[str, Any]:
         normalized_word = re.sub(r"[^a-z]", "", command_word.lower())
@@ -220,15 +239,25 @@ command_word, awarded_score, max_score, depth_satisfied, missing_depth, feedback
                 missing_depth.append("Add more observable detail.")
             if not has_sequence:
                 missing_depth.append("Show the sequence of events.")
-            depth_score = min(1.0, (0.45 if word_count >= 6 else word_count / 12.0) + (0.55 if has_sequence else 0.0))
+            depth_score = min(
+                1.0,
+                (0.45 if word_count >= 6 else word_count / 12.0)
+                + (0.55 if has_sequence else 0.0),
+            )
         elif normalized_word == "explain":
             has_causal = any(marker in lower_response for marker in causal_markers)
             satisfied = word_count >= 8 and has_causal
             if word_count < 8:
                 missing_depth.append("Add a fuller causal chain.")
             if not has_causal:
-                missing_depth.append("Use because, therefore, or equivalent cause-effect language.")
-            depth_score = min(1.0, (0.35 if word_count >= 8 else word_count / 16.0) + (0.65 if has_causal else 0.0))
+                missing_depth.append(
+                    "Use because, therefore, or equivalent cause-effect language."
+                )
+            depth_score = min(
+                1.0,
+                (0.35 if word_count >= 8 else word_count / 16.0)
+                + (0.65 if has_causal else 0.0),
+            )
         else:
             satisfied = word_count > 0
             depth_score = 1.0 if satisfied else 0.0

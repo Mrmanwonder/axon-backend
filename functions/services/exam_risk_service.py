@@ -33,10 +33,7 @@ class PredictiveExamRiskService:
         ranked: list[dict[str, Any]] = []
         for node in syllabus_json:
             objective_id = str(
-                node.get("objective_id")
-                or node.get("code")
-                or node.get("id")
-                or ""
+                node.get("objective_id") or node.get("code") or node.get("id") or ""
             ).strip()
             if not objective_id:
                 continue
@@ -51,7 +48,9 @@ class PredictiveExamRiskService:
                 0.15,
                 len(node.get("command_words", []) or []) * 0.03,
             )
-            yield_score = explicit_hits + (paper_weight * 100.0) + (command_word_bonus * 100.0)
+            yield_score = (
+                explicit_hits + (paper_weight * 100.0) + (command_word_bonus * 100.0)
+            )
             ranked.append(
                 {
                     "objective_id": objective_id,
@@ -67,7 +66,9 @@ class PredictiveExamRiskService:
         ranked.sort(key=lambda item: item["yield_score"], reverse=True)
         return ranked[:limit]
 
-    def analyze_user(self, user_id: str, *, subject: str | None = None) -> dict[str, Any]:
+    def analyze_user(
+        self, user_id: str, *, subject: str | None = None
+    ) -> dict[str, Any]:
         user_ref = self._db.collection("users_private").document(user_id)
         deadlines = list(user_ref.collection("deadlines").stream())
         now = datetime.now(timezone.utc)
@@ -78,7 +79,11 @@ class PredictiveExamRiskService:
             exam_at = _parse_datetime(data.get("exam_date"))
             if exam_at is None or exam_at.date() < now.date():
                 continue
-            if subject and str(data.get("subject", "")).strip().lower() != subject.strip().lower():
+            if (
+                subject
+                and str(data.get("subject", "")).strip().lower()
+                != subject.strip().lower()
+            ):
                 continue
             ranked_deadlines.append((exam_at, data))
         ranked_deadlines.sort(key=lambda item: item[0])
@@ -99,7 +104,9 @@ class PredictiveExamRiskService:
         board = str(deadline.get("board", "")).strip()
         days_remaining = max(0, (exam_at.date() - now.date()).days)
 
-        syllabus_query = self._db.collection("syllabus_maps").where("subject", "==", target_subject)
+        syllabus_query = self._db.collection("syllabus_maps").where(
+            "subject", "==", target_subject
+        )
         if board:
             syllabus_query = syllabus_query.where("board", "==", board)
         syllabus_docs = list(syllabus_query.stream())
@@ -107,10 +114,7 @@ class PredictiveExamRiskService:
 
         objective_ids = {
             str(
-                item.get("objective_id")
-                or item.get("code")
-                or item.get("id")
-                or ""
+                item.get("objective_id") or item.get("code") or item.get("id") or ""
             ).strip()
             for item in syllabus_json
         }
@@ -171,7 +175,9 @@ class PredictiveExamRiskService:
             weighted_numerator += accuracy * recency_weight * available_marks
             weighted_denominator += recency_weight * available_marks
         weighted_mock_accuracy = (
-            weighted_numerator / weighted_denominator if weighted_denominator > 0 else 0.0
+            weighted_numerator / weighted_denominator
+            if weighted_denominator > 0
+            else 0.0
         )
 
         # 90 days is treated as a healthy revision runway. Nearer than that increases risk.
@@ -203,7 +209,9 @@ class PredictiveExamRiskService:
             "crisis_mode": crisis_mode,
             "high_yield_topics": high_yield_topics,
             "high_yield_objective_ids": [
-                item["objective_id"] for item in high_yield_topics if item.get("objective_id")
+                item["objective_id"]
+                for item in high_yield_topics
+                if item.get("objective_id")
             ],
         }
 
