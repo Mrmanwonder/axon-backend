@@ -28,19 +28,43 @@ class StudyPulseService:
         self._db = db
         self._advisor_model = advisor_model
 
-    def analyze_user(self, user_id: str, *, session_id: str | None = None) -> dict[str, Any]:
+    def analyze_user(
+        self, user_id: str, *, session_id: str | None = None
+    ) -> dict[str, Any]:
         user_ref = self._db.collection("users_private").document(user_id)
-        syllabus_docs = list(self._db.collection("syllabus_maps").stream())
-        study_event_docs = list(user_ref.collection("study_events").stream())
-        mock_result_docs = list(user_ref.collection("mock_results").stream())
-        mastery_docs = list(user_ref.collection("mastery").stream())
+        syllabus_docs = (
+            self._db.collection("syllabus_maps")
+            .select(["objective_id", "code", "topic", "paper_weight"])
+            .stream()
+        )
+        study_event_docs = (
+            user_ref.collection("study_events")
+            .select(["objective_id", "topic_id", "occurred_at", "accuracy_score"])
+            .stream()
+        )
+        mock_result_docs = (
+            user_ref.collection("mock_results")
+            .select(
+                [
+                    "objective_id",
+                    "topic_id",
+                    "error_type",
+                    "awarded_marks",
+                    "available_marks",
+                    "command_word",
+                    "duration_seconds",
+                    "command_word_depth",
+                    "semantic_match",
+                ]
+            )
+            .stream()
+        )
 
         now = datetime.now(timezone.utc)
 
-        syllabus_df = pd.DataFrame([doc.to_dict() or {} for doc in syllabus_docs])
-        event_df = pd.DataFrame([doc.to_dict() or {} for doc in study_event_docs])
-        mock_df = pd.DataFrame([doc.to_dict() or {} for doc in mock_result_docs])
-        mastery_df = pd.DataFrame([doc.to_dict() or {} for doc in mastery_docs])
+        syllabus_df = pd.DataFrame((doc.to_dict() or {} for doc in syllabus_docs))
+        event_df = pd.DataFrame((doc.to_dict() or {} for doc in study_event_docs))
+        mock_df = pd.DataFrame((doc.to_dict() or {} for doc in mock_result_docs))
 
         if not event_df.empty:
             if "objective_id" not in event_df and "topic_id" in event_df:
@@ -51,7 +75,9 @@ class StudyPulseService:
             )
             event_df["accuracy_score"] = event_df.get("accuracy_score", 0.0).fillna(0.0)
         else:
-            event_df = pd.DataFrame(columns=["objective_id", "accuracy_score", "days_since"])
+            event_df = pd.DataFrame(
+                columns=["objective_id", "accuracy_score", "days_since"]
+            )
 
         if not mock_df.empty:
             if "objective_id" not in mock_df and "topic_id" in mock_df:
@@ -77,8 +103,12 @@ class StudyPulseService:
                         "time_per_mark",
                     ]
                 )
-            graded_mock_df["awarded_marks"] = graded_mock_df.get("awarded_marks", 0.0).fillna(0.0)
-            graded_mock_df["available_marks"] = graded_mock_df.get("available_marks", 0.0).fillna(0.0)
+            graded_mock_df["awarded_marks"] = graded_mock_df.get(
+                "awarded_marks", 0.0
+            ).fillna(0.0)
+            graded_mock_df["available_marks"] = graded_mock_df.get(
+                "available_marks", 0.0
+            ).fillna(0.0)
             graded_mock_df["command_word_depth_score"] = graded_mock_df.apply(
                 lambda row: self._extract_depth_score(row.get("command_word_depth")),
                 axis=1,
@@ -88,8 +118,10 @@ class StudyPulseService:
                 axis=1,
             )
             graded_mock_df["time_per_mark"] = graded_mock_df.apply(
-                lambda row: float(row.get("duration_seconds", 0) or 0)
-                / max(float(row.get("available_marks", 0) or 0), 1.0),
+                lambda row: (
+                    float(row.get("duration_seconds", 0) or 0)
+                    / max(float(row.get("available_marks", 0) or 0), 1.0)
+                ),
                 axis=1,
             )
         else:
@@ -119,13 +151,19 @@ class StudyPulseService:
         coverage = attempted_objectives / total_objectives if total_objectives else 0.0
 
         total_marks_awarded = (
-            float(graded_mock_df["awarded_marks"].sum()) if not graded_mock_df.empty else 0.0
+            float(graded_mock_df["awarded_marks"].sum())
+            if not graded_mock_df.empty
+            else 0.0
         )
         total_marks_available = (
-            float(graded_mock_df["available_marks"].sum()) if not graded_mock_df.empty else 0.0
+            float(graded_mock_df["available_marks"].sum())
+            if not graded_mock_df.empty
+            else 0.0
         )
         accuracy = (
-            total_marks_awarded / total_marks_available if total_marks_available > 0 else 0.0
+            total_marks_awarded / total_marks_available
+            if total_marks_available > 0
+            else 0.0
         )
 
         topic_difficulty = {}
@@ -136,21 +174,31 @@ class StudyPulseService:
                     or row.get("code", "")
                     or row.get("topic", "")
                 )
-                topic_difficulty[topic_key] = float(row.get("paper_weight", 0.2) or 0.2) + 0.5
+                topic_difficulty[topic_key] = (
+                    float(row.get("paper_weight", 0.2) or 0.2) + 0.5
+                )
 
         readiness_by_topic: list[dict[str, Any]] = []
         grouped_topics = set()
         if "objective_id" in event_df:
             grouped_topics.update(
-                value for value in event_df["objective_id"].dropna().astype(str).tolist() if value
+                value
+                for value in event_df["objective_id"].dropna().astype(str).tolist()
+                if value
             )
         if "objective_id" in mock_df:
             grouped_topics.update(
-                value for value in mock_df["objective_id"].dropna().astype(str).tolist() if value
+                value
+                for value in mock_df["objective_id"].dropna().astype(str).tolist()
+                if value
             )
 
         for topic_id in sorted(grouped_topics):
-            topic_events = event_df[event_df["objective_id"].astype(str) == topic_id] if not event_df.empty else pd.DataFrame()
+            topic_events = (
+                event_df[event_df["objective_id"].astype(str) == topic_id]
+                if not event_df.empty
+                else pd.DataFrame()
+            )
             topic_mocks = (
                 graded_mock_df[graded_mock_df["objective_id"].astype(str) == topic_id]
                 if not graded_mock_df.empty
@@ -158,7 +206,10 @@ class StudyPulseService:
             )
 
             topic_accuracy = 0.0
-            if not topic_mocks.empty and float(topic_mocks["available_marks"].sum()) > 0:
+            if (
+                not topic_mocks.empty
+                and float(topic_mocks["available_marks"].sum()) > 0
+            ):
                 topic_accuracy = float(topic_mocks["awarded_marks"].sum()) / float(
                     topic_mocks["available_marks"].sum()
                 )
@@ -180,16 +231,26 @@ class StudyPulseService:
                     "accuracy": round(topic_accuracy, 4),
                     "decay": round(decay, 4),
                     "readiness": round(readiness, 4),
-                    "risk": "red" if readiness < 0.45 else ("amber" if readiness < 0.7 else "green"),
+                    "risk": "red"
+                    if readiness < 0.45
+                    else ("amber" if readiness < 0.7 else "green"),
                 }
             )
 
         average_readiness = (
-            sum(item["readiness"] for item in readiness_by_topic) / len(readiness_by_topic)
+            sum(item["readiness"] for item in readiness_by_topic)
+            / len(readiness_by_topic)
             if readiness_by_topic
             else 0.0
         )
-        exam_risk = max(0.0, min(1.0, 1.0 - ((coverage * 0.45) + (accuracy * 0.35) + (average_readiness * 0.20))))
+        exam_risk = max(
+            0.0,
+            min(
+                1.0,
+                1.0
+                - ((coverage * 0.45) + (accuracy * 0.35) + (average_readiness * 0.20)),
+            ),
+        )
 
         command_word_breakdown = []
         weak_command_words = []
@@ -201,13 +262,25 @@ class StudyPulseService:
                 earned = float(frame["awarded_marks"].sum())
                 entry = {
                     "command_word": str(command_word),
-                    "accuracy": round((earned / available) if available > 0 else 0.0, 4),
+                    "accuracy": round(
+                        (earned / available) if available > 0 else 0.0, 4
+                    ),
                     "depth_score": round(
-                        float(frame.get("command_word_depth_score", pd.Series(dtype=float)).mean() or 0.0),
+                        float(
+                            frame.get(
+                                "command_word_depth_score", pd.Series(dtype=float)
+                            ).mean()
+                            or 0.0
+                        ),
                         4,
                     ),
                     "semantic_score": round(
-                        float(frame.get("semantic_match_score", pd.Series(dtype=float)).mean() or 0.0),
+                        float(
+                            frame.get(
+                                "semantic_match_score", pd.Series(dtype=float)
+                            ).mean()
+                            or 0.0
+                        ),
                         4,
                     ),
                     "question_count": int(len(frame.index)),
@@ -217,8 +290,12 @@ class StudyPulseService:
                     weakest_objective = (
                         frame.groupby("objective_id")
                         .apply(
-                            lambda objective_frame: float(objective_frame["awarded_marks"].sum())
-                            / max(float(objective_frame["available_marks"].sum()), 1.0)
+                            lambda objective_frame: (
+                                float(objective_frame["awarded_marks"].sum())
+                                / max(
+                                    float(objective_frame["available_marks"].sum()), 1.0
+                                )
+                            )
                         )
                         .sort_values()
                     )
@@ -229,7 +306,9 @@ class StudyPulseService:
                             "depth_score": entry["depth_score"],
                             "semantic_score": entry["semantic_score"],
                             "recommended_objective_id": (
-                                str(weakest_objective.index[0]) if not weakest_objective.empty else ""
+                                str(weakest_objective.index[0])
+                                if not weakest_objective.empty
+                                else ""
                             ),
                             "recommended_duration_minutes": 10,
                             "reason": (
@@ -250,7 +329,8 @@ class StudyPulseService:
                 .to_dict()
             )
             error_taxonomy = [
-                {"error_type": key, "count": int(value)} for key, value in counts.items()
+                {"error_type": key, "count": int(value)}
+                for key, value in counts.items()
             ]
 
         time_leak = None
@@ -261,7 +341,9 @@ class StudyPulseService:
                 time_leak = {
                     "objective_id": str(row.get("objective_id", "")),
                     "command_word": str(row.get("command_word", "")),
-                    "time_per_mark": round(float(row.get("time_per_mark", 0.0) or 0.0), 2),
+                    "time_per_mark": round(
+                        float(row.get("time_per_mark", 0.0) or 0.0), 2
+                    ),
                 }
 
         advisor_payload = {
@@ -293,7 +375,9 @@ class StudyPulseService:
             "advisor": advisor,
         }
 
-        user_ref.collection("analytics").document("current").set(analytics_doc, merge=True)
+        user_ref.collection("analytics").document("current").set(
+            analytics_doc, merge=True
+        )
         self._queue_advisor_action(user_ref, advisor, now)
         return analytics_doc
 
@@ -329,7 +413,12 @@ Rules:
 """
         try:
             response = self._advisor_model.generate_content(prompt)
-            raw = getattr(response, "text", "").replace("```json", "").replace("```", "").strip()
+            raw = (
+                getattr(response, "text", "")
+                .replace("```json", "")
+                .replace("```", "")
+                .strip()
+            )
             parsed = json.loads(raw)
             return {
                 "headline": str(parsed.get("headline", fallback["headline"])),
@@ -356,7 +445,9 @@ Rules:
                 return float(raw_score)
         return 0.0
 
-    def _queue_advisor_action(self, user_ref, advisor: dict[str, Any], now: datetime) -> None:
+    def _queue_advisor_action(
+        self, user_ref, advisor: dict[str, Any], now: datetime
+    ) -> None:
         title = str(advisor.get("action", "")).strip()
         if not title:
             return
