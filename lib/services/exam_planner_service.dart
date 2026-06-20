@@ -5,13 +5,8 @@
 //
 // Fixed vs original:
 //  1. getRevisionPlan: raw.isEmpty → raw.isNotEmpty (plan never loaded before)
-//  2. _calculatePhases: endDay values are now fixed constants, not live vars
-//  3. getCountdown: firstWhere condition had startDay/endDay reversed
-//  4. getCountdown: daysRemaining > 90 now correctly returns Foundation phase
-//  5. getCountdown: isOver uses <= 0, not < 0
 //  6. generateCompressionPlan: cycles through all subjects per day properly
 //  7. SharedPreferences cached as _prefs to avoid repeated getInstance() calls
-//  8. totalDays derives from config.examStartDate if available, else 90-day window
 // ─────────────────────────────────────────────────────────────────
 
 import 'dart:convert';
@@ -48,11 +43,16 @@ class ExamPlannerService {
       if (data['examStartDate'] != null) {
         try { examStartDate = DateTime.parse(data['examStartDate']); } catch (_) {}
       }
+      DateTime? createdAt;
+      if (data['createdAt'] != null) {
+        try { createdAt = DateTime.parse(data['createdAt']); } catch (_) {}
+      }
       return ExamConfig(
         board:         data['board'] ?? '',
         examStartDate: examStartDate,
         subjects:      List<String>.from(data['subjects'] ?? []),
         targetScore:   data['targetScore'] ?? 85,
+        createdAt:     createdAt,
       );
     } catch (_) {
       return _defaultConfig();
@@ -75,6 +75,7 @@ class ExamPlannerService {
         'examStartDate': config.examStartDate?.toIso8601String(),
         'subjects':      config.subjects,
         'targetScore':   config.targetScore,
+        'createdAt':     config.createdAt.toIso8601String(),
       }),
     );
     await WidgetService().syncFromExamConfig(config);
@@ -98,32 +99,23 @@ class ExamPlannerService {
     final daysRemaining = examDate.difference(now).inDays;
     final weeksRemaining = (daysRemaining / 7).floor();
 
-    // FIX: phases now have fixed boundary constants (see _calculatePhases).
-    final phases = _calculatePhases();
+    // Use the total days since the plan was created to determine phase boundaries.
+    final planTotalDays = examDate.difference(config.createdAt).inDays;
+    // We enforce at least 4 days so each phase gets at least 1 day.
+    final stableTotalDays = planTotalDays > 4 ? planTotalDays : (daysRemaining > 4 ? daysRemaining : 90);
 
-    // FIX: condition was reversed (endDay/startDay swapped).
-    // Each phase covers: endDay ≤ daysRemaining ≤ startDay.
+    final phases = _calculatePhases(stableTotalDays);
+
     RevisionPhase? currentPhase;
     if (daysRemaining > 0) {
       currentPhase = phases.firstWhere(
-        (p) => daysRemaining <= p.startDay && daysRemaining >= p.endDay,
-        // FIX: > 90 days → Foundation (not Final Prep which was the bugged fallback).
+        (p) => daysRemaining >= p.endDay,
         orElse: () => phases.first,
       );
     }
 
-    // FIX: isOver should include the exam day itself (<= 0).
     return ExamCountdown(
-      // FIX: total window = distance from "90 days before exam" to exam date,
-      // OR from today if today is already within the window.
-      totalDays:      examDate
-          .difference(
-            now.isBefore(examDate.subtract(const Duration(days: 90)))
-                ? examDate.subtract(const Duration(days: 90))
-                : now,
-          )
-          .inDays
-          .abs(),
+      totalDays:      stableTotalDays.abs(),
       daysRemaining:  daysRemaining,
       weeksRemaining: weeksRemaining.clamp(0, 9999),
       phases:         phases,
@@ -132,14 +124,35 @@ class ExamPlannerService {
     );
   }
 
-  // FIX: phase boundaries are fixed constants, not derived from live daysRemaining.
-  // Phase matching uses: daysRemaining ∈ [endDay, startDay].
-  List<RevisionPhase> _calculatePhases() {
+  List<RevisionPhase> _calculatePhases(int totalDays) {
+    if (totalDays < 4) totalDays = 4; // Ensure at least 1 day per phase
+
+    int p1 = (totalDays * 30 / 90).round();
+    int p2 = (totalDays * 30 / 90).round();
+    int p3 = (totalDays * 23 / 90).round();
+
+    if (p1 == 0) p1 = 1;
+    if (p2 == 0) p2 = 1;
+    if (p3 == 0) p3 = 1;
+
+    int p4 = totalDays - p1 - p2 - p3;
+    if (p4 < 1) p4 = 1;
+
+    int currentEnd = totalDays;
+
+    final foundationEnd = currentEnd - p1 + 1;
+    currentEnd = foundationEnd - 1;
+
+    final intensiveEnd = currentEnd - p2 + 1;
+    currentEnd = intensiveEnd - 1;
+
+    final mockEnd = currentEnd - p3 + 1;
+
     return [
       RevisionPhase(
         name:        'Foundation',
-        startDay:    90,
-        endDay:      61,
+        startDay:    9999, // Catch any larger daysRemaining
+        endDay:      foundationEnd,
         description: 'Build strong foundations. Cover all chapters.',
         dailyHours:  4,
         focus:       'Learning new concepts',
@@ -147,8 +160,8 @@ class ExamPlannerService {
       ),
       RevisionPhase(
         name:        'Intensive Revision',
-        startDay:    60,
-        endDay:      31,
+        startDay:    foundationEnd - 1,
+        endDay:      intensiveEnd,
         description: 'Deep dive into weak areas. Practice problems.',
         dailyHours:  5,
         focus:       'Problem solving',
@@ -156,8 +169,8 @@ class ExamPlannerService {
       ),
       RevisionPhase(
         name:        'Mock Tests',
-        startDay:    30,
-        endDay:      8,
+        startDay:    intensiveEnd - 1,
+        endDay:      mockEnd,
         description: 'Full-length papers. Time management practice.',
         dailyHours:  6,
         focus:       'Exam simulation',
@@ -165,7 +178,7 @@ class ExamPlannerService {
       ),
       RevisionPhase(
         name:        'Final Prep',
-        startDay:    7,
+        startDay:    mockEnd - 1,
         endDay:      0,
         description: 'Light review. Formula memorization. Rest.',
         dailyHours:  3,
@@ -654,13 +667,15 @@ class ExamConfig {
   final DateTime?    examStartDate;
   final List<String> subjects;
   final int          targetScore;
+  final DateTime createdAt;
 
-  const ExamConfig({
+  ExamConfig({
     required this.board,
     this.examStartDate,
     required this.subjects,
     required this.targetScore,
-  });
+    DateTime? createdAt,
+  }) : createdAt = createdAt ?? DateTime.now();
 }
 
 class ExamCountdown {
