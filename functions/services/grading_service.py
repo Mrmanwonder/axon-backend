@@ -25,6 +25,7 @@ class HandwritingGradingGateway:
         self._cloudinary_cloud_name = os.environ.get("CLOUDINARY_CLOUD_NAME", "").strip()
         self._cloudinary_api_key = os.environ.get("CLOUDINARY_API_KEY", "").strip()
         self._cloudinary_api_secret = os.environ.get("CLOUDINARY_API_SECRET", "").strip()
+        self._cloudinary_archive_tag = os.environ.get("CLOUDINARY_ARCHIVE_TAG", "axon_archived").strip()
 
     async def grade_answer(
         self,
@@ -209,7 +210,7 @@ Strict Rules:
         import requests
 
         timestamp = str(int(time.time()))
-        signature_payload = f"public_id={public_id}&tags=axon_archived&timestamp={timestamp}{self._cloudinary_api_secret}"
+        signature_payload = f"public_id={public_id}&tags={self._cloudinary_archive_tag}&timestamp={timestamp}{self._cloudinary_api_secret}"
         signature = hashlib.sha1(signature_payload.encode("utf-8")).hexdigest()
         endpoint = (
             f"https://api.cloudinary.com/v1_1/{self._cloudinary_cloud_name}/image/explicit"
@@ -220,7 +221,7 @@ Strict Rules:
                 endpoint,
                 data={
                     "public_id": public_id,
-                    "tags": "axon_archived",
+                    "tags": self._cloudinary_archive_tag,
                     "type": "upload",
                     "timestamp": timestamp,
                     "api_key": self._cloudinary_api_key,
