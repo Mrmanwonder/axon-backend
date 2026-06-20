@@ -577,9 +577,19 @@ class ExamPlannerService {
 
     // Build a flat list of (subject, chapter) pairs to distribute.
     final allChapters = <({String subject, int chapterNum})>[];
-    for (final entry in weakChapterCount.entries) {
-      for (int c = 1; c <= entry.value; c++) {
-        allChapters.add((subject: entry.key, chapterNum: c));
+    final subjectChaptersLeft = Map<String, int>.from(weakChapterCount);
+    final subjectCurrentChapter = {for (var s in weakChapterCount.keys) s: 1};
+
+    bool hasMore = true;
+    while (hasMore) {
+      hasMore = false;
+      for (final subject in weakChapterCount.keys) {
+        if ((subjectChaptersLeft[subject] ?? 0) > 0) {
+          allChapters.add((subject: subject, chapterNum: subjectCurrentChapter[subject]!));
+          subjectCurrentChapter[subject] = subjectCurrentChapter[subject]! + 1;
+          subjectChaptersLeft[subject] = subjectChaptersLeft[subject]! - 1;
+          hasMore = true;
+        }
       }
     }
 
