@@ -227,10 +227,10 @@ class SupabaseExamDatesService {
     final targetBoard = targetParts.isNotEmpty ? targetParts[0] : '';
     final targetLevel = targetParts.length > 1 ? targetParts.sublist(1).join('_') : '';
 
-    // Same board — CAIE cross-level matching (AS/A Level share subjects)
+    // Same board — cross-level matching (AS/A Level share subjects)
     if (rowBoard == targetBoard) {
-      final caieLevels = {'igcse', 'as_level', 'a_level', 'o_level'};
-      if (caieLevels.contains(rowLevel) && caieLevels.contains(targetLevel)) return true;
+      final sharedLevels = {'igcse', 'as_level', 'a_level', 'o_level', 'gcse', 'myp', 'dp'};
+      if (sharedLevels.contains(rowLevel) && sharedLevels.contains(targetLevel)) return true;
     }
 
     // Legacy: IGCSE/A Level/O Level without board prefix
@@ -310,10 +310,22 @@ String _canonicalCurriculum(String value) {
   final normalized = value.trim().toLowerCase().replaceAll('-', ' ').replaceAll('_', ' ');
   if (normalized.isEmpty) return '';
 
-  // Step 1: Identify board — only CAIE
+  // Step 1: Identify board
   String? boardId;
   if (normalized.contains('caie') || normalized.contains('cambridge') || normalized.contains('cie')) {
     boardId = 'caie';
+  } else if (normalized.contains('edexcel') || normalized.contains('pearson')) {
+    boardId = 'edexcel';
+  } else if (normalized.contains('aqa') || normalized.contains('oxford aqa')) {
+    boardId = 'aqa';
+  } else if (normalized.contains('ib ') || normalized.contains('international baccalaureate')) {
+    boardId = 'ib';
+  } else if (normalized.contains('ocr')) {
+    boardId = 'ocr';
+  } else if (normalized.contains('wjec') || normalized.contains('cbac') || normalized.contains('eduqas')) {
+    boardId = 'wjec';
+  } else if (normalized.contains('ccea')) {
+    boardId = 'ccea';
   }
 
   // Step 2: Identify level
@@ -328,6 +340,12 @@ String _canonicalCurriculum(String value) {
     level = 'igcse';
   } else if (normalized.contains('gcse')) {
     level = 'igcse';
+  } else if (boardId == 'ib') {
+    if (normalized.contains('myp') || normalized.contains('middle years')) {
+      level = 'myp';
+    } else {
+      level = 'dp';
+    }
   } else {
     level = 'igcse';
   }
