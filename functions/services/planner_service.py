@@ -1321,46 +1321,37 @@ class DailyPlannerServiceV2:
 
     # ── Core algorithm ───────────────────────────────────────
 
-    def _calculate_daily_load(
+    def _calculate_available_time(
         self,
         uid: str,
-        hydrator: FirestoreHydrator,
-        today: date,
-        today_str: str,
-    ) -> List[PlannerTask]:
-
-        # 1. Hydrate settings & calendar
-        settings         = hydrator.load_settings()
-        available_hours  = float(settings.get("target_hours_per_day", 4.0))
-        day_start_hour   = int(settings.get("day_start_hour", 8))
-        analytics        = hydrator.load_analytics()
-        cw_proficiency   = hydrator.load_command_word_proficiency()
-        cal_events       = hydrator.load_calendar_events(today_str)
-
-        # Self-improvement / Adaptive Cognitive Load
-        # Reduce load if user is constantly missing targets or showing high burnout
+        available_hours: float,
+        analytics: dict,
+        cal_events: List[dict]
+    ) -> float:
         recent_completion = float(analytics.get("last_7_days_completion_rate", 1.0))
         burnout_factor    = float(analytics.get("burnout_indicator", 0.0))
         load_modifier = 1.0
         if recent_completion < 0.4:
-            load_modifier *= 0.8  # Gently ease the load to build momentum
+            load_modifier *= 0.8
             logger.info(f"Adaptive Load: User {uid} completion <40%, reducing daily target.")
         if burnout_factor > 0.7:
-            load_modifier *= 0.75 # Heavily ease load if burned out
+            load_modifier *= 0.75
             logger.info(f"Adaptive Load: User {uid} burnout >70%, enforcing lighter day.")
 
-        # Deduct calendar busy time from available hours
         busy_hours = sum(
             float(e.get("duration_hours", 0))
             for e in cal_events
             if e.get("blocks_study", True)
         )
-        available_hours = max(1.0, (available_hours - busy_hours) * load_modifier)
+        return max(1.0, (available_hours - busy_hours) * load_modifier)
 
-        day_start = datetime.combine(today, time(day_start_hour, 0))
-        slot_mgr  = SlotManager(day_start, available_hours)
-
-        # 2. Build subject contexts
+    def _build_subject_contexts(
+        self,
+        uid: str,
+        hydrator: FirestoreHydrator,
+        analytics: dict,
+        today: date
+    ) -> List[SubjectContext]:
         raw_subjects = hydrator.load_subjects()
         contexts: List[SubjectContext] = [
             ctx
@@ -1368,15 +1359,18 @@ class DailyPlannerServiceV2:
             for ctx in [self._ctx_builder.build(raw, hydrator, analytics, today)]
             if ctx is not None
         ]
-
         if not contexts:
             logger.warning(f"No active subjects found for {uid}")
             return []
-
-        # Prioritise by urgency (nearest exam first, highest grade gap breaks ties)
         contexts.sort(key=lambda c: (c.days_to_exam, -c.grade_gap))
+        return contexts
 
-        # 3. Score all objectives
+    def _score_and_interleave_candidates(
+        self,
+        contexts: List[SubjectContext],
+        cw_proficiency: Dict[str, float],
+        today: date
+    ) -> List[Tuple[float, SyllabusObjective, SubjectContext]]:
         candidates: List[Tuple[float, SyllabusObjective, SubjectContext]] = []
         for ctx in contexts:
             topo_objs = self._topo_sort(ctx)
@@ -1384,11 +1378,15 @@ class DailyPlannerServiceV2:
                 s = self._scorer.score(obj, ctx, cw_proficiency, today)
                 candidates.append((s, obj, ctx))
 
-        # Sort globally by score, then interleave subjects
         candidates.sort(key=lambda x: -x[0])
-        candidates = self._interleave_subjects(candidates)
+        return self._interleave_subjects(candidates)
 
-        # 4. Allocate tasks
+    def _allocate_tasks(
+        self,
+        candidates: List[Tuple[float, SyllabusObjective, SubjectContext]],
+        slot_mgr: SlotManager,
+        today_str: str
+    ) -> List[PlannerTask]:
         tasks: List[PlannerTask] = []
         for score, obj, ctx in candidates:
             paper_override = self._paper_override(obj, ctx)
@@ -1409,11 +1407,47 @@ class DailyPlannerServiceV2:
             slot_start, window = result
             task = self._builder.build(obj, ctx, score, task_type, slot_start, window, today_str)
             tasks.append(task)
+        return tasks
 
-        # 5. Inject command-word drills for critical gaps
+    def _calculate_daily_load(
+        self,
+        uid: str,
+        hydrator: FirestoreHydrator,
+        today: date,
+        today_str: str,
+    ) -> List[PlannerTask]:
+
+        # 1. Hydrate settings & calendar
+        settings         = hydrator.load_settings()
+        available_hours  = float(settings.get("target_hours_per_day", 4.0))
+        day_start_hour   = int(settings.get("day_start_hour", 8))
+        analytics        = hydrator.load_analytics()
+        cw_proficiency   = hydrator.load_command_word_proficiency()
+        cal_events       = hydrator.load_calendar_events(today_str)
+
+        # 2. Calculate available time
+        available_hours = self._calculate_available_time(
+            uid, available_hours, analytics, cal_events
+        )
+
+        day_start = datetime.combine(today, time(day_start_hour, 0))
+        slot_mgr  = SlotManager(day_start, available_hours)
+
+        # 3. Build subject contexts
+        contexts = self._build_subject_contexts(uid, hydrator, analytics, today)
+        if not contexts:
+            return []
+
+        # 4. Score all objectives
+        candidates = self._score_and_interleave_candidates(contexts, cw_proficiency, today)
+
+        # 5. Allocate tasks
+        tasks = self._allocate_tasks(candidates, slot_mgr, today_str)
+
+        # 6. Inject command-word drills for critical gaps
         tasks = self._inject_cw_drills(tasks, cw_proficiency, contexts, slot_mgr, today_str)
 
-        # 6. Sort by start time
+        # 7. Sort by start time
         tasks.sort(key=lambda t: t.start_time)
         return tasks
 
