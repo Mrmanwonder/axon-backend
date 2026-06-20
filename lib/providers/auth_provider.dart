@@ -557,7 +557,6 @@ class AuthNotifier extends StateNotifier<AuthState> {
             user: newUser,
           );
 
-          // FIX: Sync to prefs so services like ExamScheduleGenerator can see the latest subjects
           final prefs = await SharedPreferences.getInstance();
           await prefs.setStringList('userSubjects', newUser.subjects);
           await prefs.setString('userBoard', newUser.board);

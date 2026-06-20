@@ -98,24 +98,18 @@ class ExamPlannerService {
     final daysRemaining = examDate.difference(now).inDays;
     final weeksRemaining = (daysRemaining / 7).floor();
 
-    // FIX: phases now have fixed boundary constants (see _calculatePhases).
     final phases = _calculatePhases();
 
-    // FIX: condition was reversed (endDay/startDay swapped).
     // Each phase covers: endDay ≤ daysRemaining ≤ startDay.
     RevisionPhase? currentPhase;
     if (daysRemaining > 0) {
       currentPhase = phases.firstWhere(
         (p) => daysRemaining <= p.startDay && daysRemaining >= p.endDay,
-        // FIX: > 90 days → Foundation (not Final Prep which was the bugged fallback).
         orElse: () => phases.first,
       );
     }
 
-    // FIX: isOver should include the exam day itself (<= 0).
     return ExamCountdown(
-      // FIX: total window = distance from "90 days before exam" to exam date,
-      // OR from today if today is already within the window.
       totalDays:      examDate
           .difference(
             now.isBefore(examDate.subtract(const Duration(days: 90)))
@@ -132,7 +126,6 @@ class ExamPlannerService {
     );
   }
 
-  // FIX: phase boundaries are fixed constants, not derived from live daysRemaining.
   // Phase matching uses: daysRemaining ∈ [endDay, startDay].
   List<RevisionPhase> _calculatePhases() {
     return [
@@ -547,7 +540,6 @@ class ExamPlannerService {
     final prefs = await _p;
     final raw   = prefs.getString(_revisionPlanKey);
 
-    // FIX: was `raw.isEmpty` — condition was inverted, plan never loaded.
     if (raw != null && raw.isNotEmpty) {
       try {
         return RevisionPlan.fromJson(jsonDecode(raw));
@@ -562,7 +554,6 @@ class ExamPlannerService {
     );
   }
 
-  // FIX: original algorithm broke after chaptersPerDay entries and only ever
   // assigned the first subject. Now it cycles round-robin across all subjects.
   Future<void> generateCompressionPlan({
     required List<String> subjects,
@@ -588,7 +579,6 @@ class ExamPlannerService {
       final date       = DateTime.now().add(Duration(days: day));
       final dayTargets = <ChapterRevision>[];
 
-      // FIX: pull chaptersPerDay items from the flat list, cycling correctly.
       for (int i = 0; i < chaptersPerDay && chapterIndex < allChapters.length; i++) {
         final item = allChapters[chapterIndex++];
         dayTargets.add(ChapterRevision(
