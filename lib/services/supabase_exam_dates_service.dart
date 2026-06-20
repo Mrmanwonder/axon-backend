@@ -247,15 +247,18 @@ class SupabaseExamDatesService {
     if (iso != null) return iso;
     // Try "Thursday, 07 May 2026" format
     try {
-      final cleaned = raw.replaceAll(RegExp(r'^[A-Za-z]+,\s*'), '');
-      final parts = cleaned.trim().split(' ');
+      final cleaned = raw.replaceAll(RegExp(r'^[A-Za-z]+,\s*'), '').trim();
+      final parts = cleaned.split(RegExp(r'\s+'));
       if (parts.length >= 3) {
         final day = int.parse(parts[0]);
         const months = {
-          'January': 1, 'February': 2, 'March': 3, 'April': 4, 'May': 5, 'June': 6,
-          'July': 7, 'August': 8, 'September': 9, 'October': 10, 'November': 11, 'December': 12,
+          'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+          'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12,
+          'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'jun': 6,
+          'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
         };
-        final month = months[parts[1]] ?? 1;
+        final monthStr = parts[1].toLowerCase();
+        final month = months[monthStr] ?? 1;
         final year = int.parse(parts[2]);
         if (year >= 2020 && year <= 2100) return DateTime(year, month, day);
       }
