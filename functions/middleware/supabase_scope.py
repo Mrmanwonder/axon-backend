@@ -1,4 +1,3 @@
-# Middleware to enforce user data scoping and table access for Supabase queries
 from typing import Any
 
 USER_COLUMN_BY_TABLE = {
@@ -9,19 +8,18 @@ USER_COLUMN_BY_TABLE = {
 def _user_column(table: str) -> str:
     return USER_COLUMN_BY_TABLE.get(table, "user_id")
 
-# Allowlist - maps to unified curriculum table
 PUBLIC_READ_TABLES = {
     "boards",
     "subjects",
     "chapters",
     "Datesheet",
     "PYQs",
-    "curriculum",  # Unified table (not curriculum_subjects/chapters/subchapters/syllabi)
+    "curriculum",
     "global_notes",
     "subchapter_notes",
     "papers",
     "topics",
-    "sme_questions",  # SaveMyExams scraped questions
+    "sme_questions",
 }
 
 USER_SCOPED_TABLES = {
@@ -62,8 +60,19 @@ def apply_user_scope(
     user_column = _user_column(table)
 
     if method in ("select", "update", "delete"):
-        # Enforce that operations only affect the current user's rows
-        scoped_params[f"eq.{user_column}"] = user_id
+        # We should NOT remove "or" and "and" keys because that breaks legitimate filters (e.g. deleting notes where status=draft OR status=archived).
+        # PostgREST naturally ANDs top-level query parameters. So adding `user_id=eq.user_id` will safely enforce `WHERE user_id=... AND (...)`.
+
+        # However, we DO need to remove any direct top-level keys that conflict with the `user_column` to avoid
+        # ambiguity or error. For example, if the user explicitly provided `user_id=eq.456`, we just overwrite it
+        # by simply setting `scoped_params[user_column] = f"eq.{user_id}"`.
+
+        # We only remove the old buggy `eq.user_id` if it was somehow passed in, to avoid the PGRST100 error.
+        if f"eq.{user_column}" in scoped_params:
+            del scoped_params[f"eq.{user_column}"]
+
+        # PostgREST uses `column=eq.value` for exact match filtering in query params
+        scoped_params[user_column] = f"eq.{user_id}"
     
     if method in ("insert", "update", "upsert") and "body" in scoped_params:
         # Enforce that any inserted/updated data correctly identifies the user
@@ -77,7 +86,6 @@ def assert_table_access(table: str, method: str) -> None:
         if method != "select":
             raise PermissionError(f"Cannot {method} on public table '{table}'")
     elif table in USER_SCOPED_TABLES:
-        # User tables allow any method, but will be scoped to the user ID
         pass
     else:
         raise PermissionError(f"Access to table '{table}' is forbidden")
