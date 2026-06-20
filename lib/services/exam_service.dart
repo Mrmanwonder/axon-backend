@@ -317,6 +317,9 @@ class ExamService {
       if (rowCode == code) return true;
       if (rowCode.startsWith('$code/')) return true;
       if (rowCode.startsWith('$code ')) return true;
+      if (rowCode.startsWith('${code}_')) return true;
+      if (rowCode.startsWith('$code-')) return true;
+      if (rowCode.startsWith(code) && RegExp(r'^\d+$').hasMatch(rowCode.substring(code.length))) return true;
     }
     return false;
   }

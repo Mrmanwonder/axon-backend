@@ -268,6 +268,9 @@ class SupabaseExamDatesService {
       if (rowCode == code) return true;
       if (rowCode.startsWith('$code/')) return true;  // e.g. "9709/11" matches "9709"
       if (rowCode.startsWith('$code ')) return true;  // e.g. "9709 11" matches "9709"
+      if (rowCode.startsWith('${code}_')) return true; // e.g. "9709_11" matches "9709"
+      if (rowCode.startsWith('$code-')) return true;  // e.g. "9709-11" matches "9709"
+      if (rowCode.startsWith(code) && RegExp(r'^\d+$').hasMatch(rowCode.substring(code.length))) return true; // e.g. "970911" matches "9709"
     }
     return false;
   }
