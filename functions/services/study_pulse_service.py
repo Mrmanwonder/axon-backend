@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
 
+
+
+_SYLLABUS_ALL_CACHE = None
+_SYLLABUS_CACHE_TTL_SECONDS = 3600
 
 def _parse_datetime(value: Any) -> datetime | None:
     if value is None:
@@ -30,17 +35,30 @@ class StudyPulseService:
 
     def analyze_user(self, user_id: str, *, session_id: str | None = None) -> dict[str, Any]:
         user_ref = self._db.collection("users_private").document(user_id)
-        syllabus_docs = list(self._db.collection("syllabus_maps").stream())
+
+        # ⚡ Bolt Performance Optimization:
+        # Fetching all syllabus_maps on every request causes N+1 collection reads and slows down the service.
+        # We cache the results in memory for an hour to eliminate these expensive DB reads.
+        global _SYLLABUS_ALL_CACHE
+        current_time = time.time()
+
+        if _SYLLABUS_ALL_CACHE and current_time - _SYLLABUS_ALL_CACHE[0] < _SYLLABUS_CACHE_TTL_SECONDS:
+            syllabus_dicts = _SYLLABUS_ALL_CACHE[1]
+        else:
+            syllabus_docs = list(self._db.collection("syllabus_maps").stream())
+            syllabus_dicts = [doc.to_dict() or {} for doc in syllabus_docs]
+            _SYLLABUS_ALL_CACHE = (current_time, syllabus_dicts)
+
         study_event_docs = list(user_ref.collection("study_events").stream())
         mock_result_docs = list(user_ref.collection("mock_results").stream())
         mastery_docs = list(user_ref.collection("mastery").stream())
 
         now = datetime.now(timezone.utc)
 
-        syllabus_df = pd.DataFrame([doc.to_dict() or {} for doc in syllabus_docs])
+        syllabus_df = pd.DataFrame(syllabus_dicts)
         event_df = pd.DataFrame([doc.to_dict() or {} for doc in study_event_docs])
         mock_df = pd.DataFrame([doc.to_dict() or {} for doc in mock_result_docs])
-        mastery_df = pd.DataFrame([doc.to_dict() or {} for doc in mastery_docs])
+        mastery_df = pd.DataFrame([doc.to_dict() or {} for doc in mastery_docs])  # noqa: F841
 
         if not event_df.empty:
             if "objective_id" not in event_df and "topic_id" in event_df:
