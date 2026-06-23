@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
+
+_SYLLABUS_CACHE = None
+_SYLLABUS_CACHE_TTL = 3600
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -30,14 +34,27 @@ class StudyPulseService:
 
     def analyze_user(self, user_id: str, *, session_id: str | None = None) -> dict[str, Any]:
         user_ref = self._db.collection("users_private").document(user_id)
-        syllabus_docs = list(self._db.collection("syllabus_maps").stream())
+
+        # ⚡ Bolt Optimization:
+        # What: Cache the static `syllabus_maps` collection in memory with a 1-hour TTL.
+        # Why: Prevents expensive, redundant full-collection database reads on every single request.
+        # Impact: Significantly reduces Firestore reads and speeds up analysis execution time for warm invocations.
+        global _SYLLABUS_CACHE
+        current_time = time.time()
+        if _SYLLABUS_CACHE and current_time - _SYLLABUS_CACHE[0] < _SYLLABUS_CACHE_TTL:
+            syllabus_dicts = _SYLLABUS_CACHE[1]
+        else:
+            syllabus_docs = list(self._db.collection("syllabus_maps").stream())
+            syllabus_dicts = [doc.to_dict() or {} for doc in syllabus_docs]
+            _SYLLABUS_CACHE = (current_time, syllabus_dicts)
+
         study_event_docs = list(user_ref.collection("study_events").stream())
         mock_result_docs = list(user_ref.collection("mock_results").stream())
         mastery_docs = list(user_ref.collection("mastery").stream())
 
         now = datetime.now(timezone.utc)
 
-        syllabus_df = pd.DataFrame([doc.to_dict() or {} for doc in syllabus_docs])
+        syllabus_df = pd.DataFrame(syllabus_dicts)
         event_df = pd.DataFrame([doc.to_dict() or {} for doc in study_event_docs])
         mock_df = pd.DataFrame([doc.to_dict() or {} for doc in mock_result_docs])
         mastery_df = pd.DataFrame([doc.to_dict() or {} for doc in mastery_docs])
