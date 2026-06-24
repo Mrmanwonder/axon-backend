@@ -618,11 +618,12 @@ def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    from services.syllabus_cache import get_syllabus_map
     contexts: list[str] = []
+    db = get_firestore()
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
+        data = get_syllabus_map(db, objective_id)
+        if data:
             contexts.append(
                 f"{data.get('board', '')} / {data.get('subject', '')} / "
                 f"{data.get('paper', '')} / {data.get('topic', '')} / "
