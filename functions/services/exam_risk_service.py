@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from services.syllabus_cache import get_cached_syllabus_maps
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,6 +19,7 @@ def _parse_datetime(value: Any) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
 
 
 class PredictiveExamRiskService:
@@ -99,11 +101,15 @@ class PredictiveExamRiskService:
         board = str(deadline.get("board", "")).strip()
         days_remaining = max(0, (exam_at.date() - now.date()).days)
 
-        syllabus_query = self._db.collection("syllabus_maps").where("subject", "==", target_subject)
-        if board:
-            syllabus_query = syllabus_query.where("board", "==", board)
-        syllabus_docs = list(syllabus_query.stream())
-        syllabus_json = [doc.to_dict() or {} for doc in syllabus_docs]
+        # Use globally cached syllabus maps instead of streaming collection every time
+        all_syllabus_json = list(get_cached_syllabus_maps(self._db).values())
+
+        # Filter in-memory
+        syllabus_json = [
+            item for item in all_syllabus_json
+            if item.get("subject") == target_subject
+            and (not board or item.get("board") == board)
+        ]
 
         objective_ids = {
             str(
