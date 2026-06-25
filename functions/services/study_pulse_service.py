@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from services.syllabus_cache import get_cached_syllabus_maps
 import math
 from datetime import datetime, timezone
 from typing import Any
@@ -23,6 +24,7 @@ def _parse_datetime(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+
 class StudyPulseService:
     def __init__(self, db, advisor_model=None) -> None:
         self._db = db
@@ -30,14 +32,18 @@ class StudyPulseService:
 
     def analyze_user(self, user_id: str, *, session_id: str | None = None) -> dict[str, Any]:
         user_ref = self._db.collection("users_private").document(user_id)
-        syllabus_docs = list(self._db.collection("syllabus_maps").stream())
+
+        # Use globally cached syllabus maps instead of streaming collection every time
+        syllabus_maps_dict = get_cached_syllabus_maps(self._db)
+        syllabus_json = list(syllabus_maps_dict.values())
+
         study_event_docs = list(user_ref.collection("study_events").stream())
         mock_result_docs = list(user_ref.collection("mock_results").stream())
         mastery_docs = list(user_ref.collection("mastery").stream())
 
         now = datetime.now(timezone.utc)
 
-        syllabus_df = pd.DataFrame([doc.to_dict() or {} for doc in syllabus_docs])
+        syllabus_df = pd.DataFrame(syllabus_json)
         event_df = pd.DataFrame([doc.to_dict() or {} for doc in study_event_docs])
         mock_df = pd.DataFrame([doc.to_dict() or {} for doc in mock_result_docs])
         mastery_df = pd.DataFrame([doc.to_dict() or {} for doc in mastery_docs])

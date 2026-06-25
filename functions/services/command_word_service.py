@@ -154,23 +154,18 @@ command_word, awarded_score, max_score, depth_satisfied, missing_depth, feedback
         return parsed
 
     def _fetch_objective(self, objective_id: str) -> dict[str, Any]:
-        snapshots = (
-            self._db.collection("syllabus_maps")
-            .where("objective_id", "==", objective_id)
-            .limit(1)
-            .stream()
-        )
-        for snapshot in snapshots:
-            return snapshot.to_dict() or {}
+        from services.syllabus_cache import get_cached_syllabus_maps
 
-        snapshots = (
-            self._db.collection("syllabus_maps")
-            .where("code", "==", objective_id)
-            .limit(1)
-            .stream()
-        )
-        for snapshot in snapshots:
-            return snapshot.to_dict() or {}
+        # Use globally cached syllabus maps instead of streaming collection every time
+        syllabus_maps = get_cached_syllabus_maps(self._db)
+
+        for data in syllabus_maps.values():
+            if data.get("objective_id") == objective_id:
+                return data
+
+        for data in syllabus_maps.values():
+            if data.get("code") == objective_id:
+                return data
 
         raise HTTPException(status_code=404, detail="Objective not found")
 

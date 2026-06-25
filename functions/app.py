@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import os
 import tempfile
 import uuid
@@ -12,7 +11,6 @@ from urllib.parse import urlparse
 
 import uvicorn
 
-import time
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -34,7 +32,6 @@ from middleware.rate_limit import cors_allowed_origins, is_rate_limited
 
 
 from fastapi import Depends
-from typing import Annotated
 
 # Global dependency to make auth optional
 async def optional_user():
@@ -618,11 +615,22 @@ def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    from services.syllabus_cache import get_cached_syllabus_maps
+
     contexts: list[str] = []
+
+    # Use globally cached syllabus maps
+    syllabus_maps = get_cached_syllabus_maps(get_firestore())
+
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
+        # Search the cache for a map with matching code
+        data = None
+        for sm_data in syllabus_maps.values():
+            if sm_data.get("code") == objective_id:
+                data = sm_data
+                break
+
+        if data:
             contexts.append(
                 f"{data.get('board', '')} / {data.get('subject', '')} / "
                 f"{data.get('paper', '')} / {data.get('topic', '')} / "
@@ -1271,7 +1279,6 @@ async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
     """
     from datetime import date, datetime, timedelta
     import hashlib
-    import math
     import random
 
     today = (date.fromisoformat(payload.client_date) if payload.client_date else date.today()).isoformat()
@@ -1515,7 +1522,7 @@ async def import_sme_questions(
 
     try:
         result = supabase.table("sme_questions").upsert(records).execute()
-    except Exception as e:
+    except Exception:
         # Try creating table first
         try:
             supabase.rpc("create_sme_questions_table").execute()
