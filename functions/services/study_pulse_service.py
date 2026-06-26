@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
+
+# Cache syllabus_maps for 15 minutes to reduce Firestore N+1 collection reads across user requests
+_SYLLABUS_MAPS_CACHE: tuple[float, list[dict[str, Any]]] | None = None
+_SYLLABUS_CACHE_TTL = 900
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -29,15 +34,24 @@ class StudyPulseService:
         self._advisor_model = advisor_model
 
     def analyze_user(self, user_id: str, *, session_id: str | None = None) -> dict[str, Any]:
+        global _SYLLABUS_MAPS_CACHE
         user_ref = self._db.collection("users_private").document(user_id)
-        syllabus_docs = list(self._db.collection("syllabus_maps").stream())
+
+        now_ts = time.time()
+        if _SYLLABUS_MAPS_CACHE is not None and (now_ts - _SYLLABUS_MAPS_CACHE[0]) < _SYLLABUS_CACHE_TTL:
+            syllabus_dicts = _SYLLABUS_MAPS_CACHE[1]
+        else:
+            syllabus_docs = list(self._db.collection("syllabus_maps").stream())
+            syllabus_dicts = [doc.to_dict() or {} for doc in syllabus_docs]
+            _SYLLABUS_MAPS_CACHE = (now_ts, syllabus_dicts)
+
         study_event_docs = list(user_ref.collection("study_events").stream())
         mock_result_docs = list(user_ref.collection("mock_results").stream())
         mastery_docs = list(user_ref.collection("mastery").stream())
 
         now = datetime.now(timezone.utc)
 
-        syllabus_df = pd.DataFrame([doc.to_dict() or {} for doc in syllabus_docs])
+        syllabus_df = pd.DataFrame(syllabus_dicts)
         event_df = pd.DataFrame([doc.to_dict() or {} for doc in study_event_docs])
         mock_df = pd.DataFrame([doc.to_dict() or {} for doc in mock_result_docs])
         mastery_df = pd.DataFrame([doc.to_dict() or {} for doc in mastery_docs])
