@@ -31,6 +31,7 @@ from services.university_program_crawler import UniversityProgramCrawler
 from services.ai_proxy_service import AiProxyService
 from services.deepgram_auth_service import DeepgramAuthService
 from middleware.rate_limit import cors_allowed_origins, is_rate_limited
+from utils.syllabus_cache import get_syllabus_map
 
 
 from fastapi import Depends
@@ -619,10 +620,10 @@ def build_syllabus_context(learning_objective_ids: list[str]) -> str:
         return ""
 
     contexts: list[str] = []
+    db = get_firestore()
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
+        data = get_syllabus_map(db, objective_id)
+        if data:
             contexts.append(
                 f"{data.get('board', '')} / {data.get('subject', '')} / "
                 f"{data.get('paper', '')} / {data.get('topic', '')} / "

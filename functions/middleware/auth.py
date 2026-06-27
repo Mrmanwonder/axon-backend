@@ -5,7 +5,7 @@ import os
 from typing import Any
 
 import firebase_admin
-from fastapi import HTTPException, Request
+from fastapi import Request
 from firebase_admin import auth, credentials
 
 
