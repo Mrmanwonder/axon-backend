@@ -7,7 +7,8 @@ import os
 import tempfile
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
+import threading
 from urllib.parse import urlparse
 
 import uvicorn
@@ -614,20 +615,104 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_syllabus_cache: dict[str, Optional[dict[str, Any]]] = {}
+_syllabus_cache_time: float = 0.0
+_syllabus_cache_lock = threading.Lock()
+SYLLABUS_CACHE_TTL = 3600  # 1 hour
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
+    global _syllabus_cache, _syllabus_cache_time
+
     if not learning_objective_ids:
         return ""
 
+    # Capture a local reference to the cache dictionary to prevent race conditions
+    # if the global dictionary gets replaced by another thread.
+    local_cache = _syllabus_cache
+
+    # Check TTL and clear cache if expired (with lock)
+    current_time = time.time()
+    if (current_time - _syllabus_cache_time) > SYLLABUS_CACHE_TTL:
+        with _syllabus_cache_lock:
+            if (time.time() - _syllabus_cache_time) > SYLLABUS_CACHE_TTL:
+                # Create a new dictionary instead of clearing the old one
+                # so threads holding the old reference don't suddenly lose data
+                _syllabus_cache = {}
+                _syllabus_cache_time = time.time()
+                local_cache = _syllabus_cache
+
+    missing_ids = set()
+
+    # Fast path: check local cache without lock
+    for objective_id in learning_objective_ids:
+        if objective_id not in local_cache:
+            missing_ids.add(objective_id)
+
+    if missing_ids:
+        missing_ids_list = list(missing_ids)
+
+        # Batch fetch missing IDs in chunks of 30 (Firestore IN limit is 30)
+        # We do this without holding the lock to avoid blocking other threads during I/O
+        for i in range(0, len(missing_ids_list), 30):
+            chunk = missing_ids_list[i:i + 30]
+            try:
+                # The "in" operator is supported by Firestore for querying multiple IDs
+                snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+
+                fetched_docs = {}
+                for doc in snapshot:
+                    data = doc.to_dict() or {}
+                    code = data.get("code")
+                    if code:
+                        fetched_docs[code] = data
+
+                # Update cache with lock
+                with _syllabus_cache_lock:
+                    for code in chunk:
+                        if code in fetched_docs:
+                            _syllabus_cache[code] = fetched_docs[code]
+                            local_cache[code] = fetched_docs[code]
+                        else:
+                            # Cache misses so we don't repeatedly query for them
+                            _syllabus_cache[code] = None
+                            local_cache[code] = None
+
+            except Exception as e:
+                # Fallback to single queries if 'in' is not supported by custom wrapper
+                print(f"Batch query failed, falling back to single queries: {e}")
+                for objective_id in chunk:
+                    try:
+                        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
+
+                        found = False
+                        data = None
+                        for doc in snapshot:
+                            data = doc.to_dict() or {}
+                            found = True
+
+                        with _syllabus_cache_lock:
+                            if found:
+                                _syllabus_cache[objective_id] = data
+                                local_cache[objective_id] = data
+                            else:
+                                _syllabus_cache[objective_id] = None
+                                local_cache[objective_id] = None
+                    except Exception as fallback_err:
+                        print(f"Fallback query failed for {objective_id}: {fallback_err}")
+                        # On real database errors, do NOT cache None.
+                        # This allows the next request to retry rather than being permanently poisoned.
+
+    # Reconstruct contexts maintaining original order
     contexts: list[str] = []
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
+        data = local_cache.get(objective_id)
+        if data is not None:
             contexts.append(
                 f"{data.get('board', '')} / {data.get('subject', '')} / "
                 f"{data.get('paper', '')} / {data.get('topic', '')} / "
                 f"{data.get('code', objective_id)}: {data.get('description', '')}"
             )
+
     return " | ".join(contexts)
 
 
