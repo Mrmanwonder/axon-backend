@@ -5,6 +5,8 @@ import base64
 import json
 import os
 import tempfile
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -155,6 +157,9 @@ _uni_catalog_service = None
 _ai_proxy_service = None
 _deepgram_auth_service: DeepgramAuthService | None = None
 _drive_service = None
+
+_syllabus_cache = {}
+_syllabus_cache_lock = threading.Lock()
 
 MAX_DRIVE_DOWNLOAD_BYTES = 600 * 1024 * 1024
 _DRIVE_FILE_ID_PATTERN = r"^[a-zA-Z0-9_-]{10,}$"
@@ -618,16 +623,51 @@ def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
-    contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
+    # 1. Deduplicate requested IDs
+    unique_ids = list(set(learning_objective_ids))
+    now = time.time()
+
+    # 2. Check cache for missing IDs (TTL: 1 hour)
+    missing_ids = []
+    with _syllabus_cache_lock:
+        for obj_id in unique_ids:
+            cached = _syllabus_cache.get(obj_id)
+            if cached is None or (now - cached.get("ts", 0)) > 3600:
+                missing_ids.append(obj_id)
+
+    # 3. Fetch missing IDs in batches of 30
+    fetched_data = {}
+    for i in range(0, len(missing_ids), 30):
+        chunk = missing_ids[i:i + 30]
+        snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
         for doc in snapshot:
             data = doc.to_dict() or {}
+            code = data.get("code")
+            if code:
+                fetched_data[code] = data
+
+    # 4. Update cache inside lock
+    if missing_ids:
+        with _syllabus_cache_lock:
+            for obj_id in missing_ids:
+                data = fetched_data.get(obj_id)
+                # Store even if None to prevent repeated lookups (negative caching)
+                _syllabus_cache[obj_id] = {"ts": now, "data": data}
+
+    # 5. Build context strings in original order (ignoring duplicates in return)
+    contexts: list[str] = []
+    for objective_id in learning_objective_ids:
+        with _syllabus_cache_lock:
+            cached = _syllabus_cache.get(objective_id)
+            data = cached["data"] if cached else None
+
+        if data:
             contexts.append(
                 f"{data.get('board', '')} / {data.get('subject', '')} / "
                 f"{data.get('paper', '')} / {data.get('topic', '')} / "
                 f"{data.get('code', objective_id)}: {data.get('description', '')}"
             )
+
     return " | ".join(contexts)
 
 
