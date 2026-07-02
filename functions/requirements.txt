@@ -12,4 +12,9 @@ httpx>=0.28.1
 beautifulsoup4>=4.12.3
 networkx>=3.0
 python-multipart>=0.0.9
-supabase
+supabase>=2.31.0
+google-api-core>=2.31.0
+protobuf>=5.29.6
+google-ai-generativelanguage>=0.6.15
+googleapis-common-protos>=1.75.0
+grpcio-status>=1.71.2
