@@ -9,10 +9,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
+import threading
+import time
 
 import uvicorn
 
-import time
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -614,20 +615,62 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_SYLLABUS_CACHE = {}
+_SYLLABUS_CACHE_LOCK = threading.Lock()
+_SYLLABUS_CACHE_TTL = 3600  # 1 hour
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    now = time.time()
+    missing_ids = []
+    cached_data = {}
+
+    with _SYLLABUS_CACHE_LOCK:
+        for obj_id in learning_objective_ids:
+            if obj_id in _SYLLABUS_CACHE:
+                cached_time, data = _SYLLABUS_CACHE[obj_id]
+                if now - cached_time < _SYLLABUS_CACHE_TTL:
+                    cached_data[obj_id] = data
+                    continue
+            missing_ids.append(obj_id)
+
+    if missing_ids:
+        fetched_data = {}
+        # Deduplicate missing IDs to minimize queries
+        unique_missing_ids = list(set(missing_ids))
+
+        # Firestore 'in' queries are limited to 30 items
+        for i in range(0, len(unique_missing_ids), 30):
+            batch_ids = unique_missing_ids[i:i + 30]
+            # Fetch using 'in' operator to solve N+1 problem
+            # Let exceptions bubble up to avoid caching negative results on transient errors
+            snapshot = syllabus_maps_collection().where("code", "in", batch_ids).get()
+            for doc in snapshot:
+                data = doc.to_dict() or {}
+                code = data.get("code")
+                if code:
+                    fetched_data[code] = data
+
+        with _SYLLABUS_CACHE_LOCK:
+            for obj_id in unique_missing_ids:
+                # Cache both hits and misses (as empty dict) to avoid poisoning/repeated lookups
+                data_to_cache = fetched_data.get(obj_id, {})
+                _SYLLABUS_CACHE[obj_id] = (time.time(), data_to_cache)
+                cached_data[obj_id] = data_to_cache
+
     contexts: list[str] = []
+    # Build context in original order of requested IDs
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
+        data = cached_data.get(objective_id)
+        if data:
             contexts.append(
                 f"{data.get('board', '')} / {data.get('subject', '')} / "
                 f"{data.get('paper', '')} / {data.get('topic', '')} / "
                 f"{data.get('code', objective_id)}: {data.get('description', '')}"
             )
+
     return " | ".join(contexts)
 
 
