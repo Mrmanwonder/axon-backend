@@ -645,16 +645,13 @@ def build_syllabus_context(learning_objective_ids: list[str]) -> str:
         for i in range(0, len(unique_missing_ids), 30):
             batch_ids = unique_missing_ids[i:i + 30]
             # Fetch using 'in' operator to solve N+1 problem
-            try:
-                snapshot = syllabus_maps_collection().where("code", "in", batch_ids).get()
-                for doc in snapshot:
-                    data = doc.to_dict() or {}
-                    code = data.get("code")
-                    if code:
-                        fetched_data[code] = data
-            except Exception as e:
-                print(f"Error fetching syllabus contexts: {e}")
-                # We do not fail hard, we just don't have the context
+            # Let exceptions bubble up to avoid caching negative results on transient errors
+            snapshot = syllabus_maps_collection().where("code", "in", batch_ids).get()
+            for doc in snapshot:
+                data = doc.to_dict() or {}
+                code = data.get("code")
+                if code:
+                    fetched_data[code] = data
 
         with _SYLLABUS_CACHE_LOCK:
             for obj_id in unique_missing_ids:
