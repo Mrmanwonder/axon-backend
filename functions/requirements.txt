@@ -13,3 +13,6 @@ beautifulsoup4>=4.12.3
 networkx>=3.0
 python-multipart>=0.0.9
 supabase
+google-api-core>=2.30.0
+protobuf==5.29.6
+grpcio>=1.70.0
