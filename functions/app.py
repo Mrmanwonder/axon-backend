@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 import uvicorn
 
+import threading
 import time
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -614,20 +615,64 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_SYLLABUS_CONTEXT_CACHE: dict[str, tuple[float, str]] = {}
+_SYLLABUS_CONTEXT_CACHE_LOCK = threading.Lock()
+_SYLLABUS_CONTEXT_CACHE_TTL = 3600
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
-    contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+    now = time.time()
+    missing_ids = set()
+    contexts = []
+
+    with _SYLLABUS_CONTEXT_CACHE_LOCK:
+        for obj_id in learning_objective_ids:
+            if obj_id in _SYLLABUS_CONTEXT_CACHE and now - _SYLLABUS_CONTEXT_CACHE[obj_id][0] < _SYLLABUS_CONTEXT_CACHE_TTL:
+                pass
+            else:
+                missing_ids.add(obj_id)
+
+    if missing_ids:
+        missing_list = list(missing_ids)
+        fetched_data = {}
+        failed_chunks = set()
+        # Firebase 'in' operator has a limit of 30 items
+        for i in range(0, len(missing_list), 30):
+            chunk = missing_list[i:i+30]
+            try:
+                snapshots = syllabus_maps_collection().where("code", "in", chunk).get()
+                for doc in snapshots:
+                    data = doc.to_dict() or {}
+                    code = data.get("code")
+                    if code:
+                        fetched_data[code] = data
+            except Exception as e:
+                print(f"Error fetching syllabus contexts: {e}")
+                failed_chunks.update(chunk)
+
+        with _SYLLABUS_CONTEXT_CACHE_LOCK:
+            for obj_id in missing_list:
+                if obj_id in failed_chunks:
+                    continue # Do not cache negative hits for failed network requests
+                data = fetched_data.get(obj_id)
+                if data:
+                    formatted = (
+                        f"{data.get('board', '')} / {data.get('subject', '')} / "
+                        f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                        f"{data.get('code', obj_id)}: {data.get('description', '')}"
+                    )
+                    _SYLLABUS_CONTEXT_CACHE[obj_id] = (time.time(), formatted)
+                else:
+                    # Cache the negative result so we don't keep querying for missing keys
+                    _SYLLABUS_CONTEXT_CACHE[obj_id] = (time.time(), "")
+
+    with _SYLLABUS_CONTEXT_CACHE_LOCK:
+        for obj_id in learning_objective_ids:
+            if obj_id in _SYLLABUS_CONTEXT_CACHE and _SYLLABUS_CONTEXT_CACHE[obj_id][1]:
+                contexts.append(_SYLLABUS_CONTEXT_CACHE[obj_id][1])
+
     return " | ".join(contexts)
 
 
