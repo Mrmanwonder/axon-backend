@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import os
 import tempfile
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -12,7 +13,7 @@ from urllib.parse import urlparse
 
 import uvicorn
 
-import time
+from google.cloud.firestore_v1.base_query import FieldFilter
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -34,7 +35,6 @@ from middleware.rate_limit import cors_allowed_origins, is_rate_limited
 
 
 from fastapi import Depends
-from typing import Annotated
 
 # Global dependency to make auth optional
 async def optional_user():
@@ -192,6 +192,11 @@ def public_users_collection():
 
 def syllabus_maps_collection():
     return get_firestore().collection("syllabus_maps")
+
+
+_syllabus_cache = {}
+_syllabus_cache_lock = threading.Lock()
+_SYLLABUS_CACHE_TTL = 3600
 
 
 def save_job(job_id: str, payload: dict[str, Any]) -> None:
@@ -618,17 +623,55 @@ def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
-    contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
-    return " | ".join(contexts)
+    missing_ids: set[str] = set()
+    current_time = time.time()
+
+    with _syllabus_cache_lock:
+        for objective_id in learning_objective_ids:
+            cached = _syllabus_cache.get(objective_id)
+            if not (cached and (current_time - cached['timestamp']) < _SYLLABUS_CACHE_TTL):
+                missing_ids.add(objective_id)
+
+    if missing_ids:
+        missing_list = list(missing_ids)
+        new_results: dict[str, str] = {obj_id: "" for obj_id in missing_list}
+
+        for i in range(0, len(missing_list), 30):
+            chunk = missing_list[i:i+30]
+            try:
+                # Firestore `in` operator allows up to 30 values.
+                snapshot = syllabus_maps_collection().where(filter=FieldFilter("code", "in", chunk)).get()
+                for doc in snapshot:
+                    data = doc.to_dict() or {}
+                    code = data.get("code")
+                    if code in new_results:
+                        formatted = (
+                            f"{data.get('board', '')} / {data.get('subject', '')} / "
+                            f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                            f"{code}: {data.get('description', '')}"
+                        )
+                        new_results[code] = formatted
+            except Exception as e:
+                # On failure, simply skip updating the result cache for these so they fall back to empty strings
+                import logging
+                logging.warning(f"Error fetching syllabus contexts: {e}")
+
+        update_time = time.time()
+        with _syllabus_cache_lock:
+            for obj_id, formatted in new_results.items():
+                _syllabus_cache[obj_id] = {
+                    'data': formatted,
+                    'timestamp': update_time
+                }
+
+    ordered_contexts: list[str] = []
+    with _syllabus_cache_lock:
+        for objective_id in learning_objective_ids:
+            cached = _syllabus_cache.get(objective_id)
+            if cached and cached['data']:
+                ordered_contexts.append(cached['data'])
+
+    return " | ".join(ordered_contexts)
 
 
 def publish_public_user(uid: str) -> dict[str, Any]:
@@ -1271,7 +1314,6 @@ async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
     """
     from datetime import date, datetime, timedelta
     import hashlib
-    import math
     import random
 
     today = (date.fromisoformat(payload.client_date) if payload.client_date else date.today()).isoformat()
@@ -1515,7 +1557,7 @@ async def import_sme_questions(
 
     try:
         result = supabase.table("sme_questions").upsert(records).execute()
-    except Exception as e:
+    except Exception:
         # Try creating table first
         try:
             supabase.rpc("create_sme_questions_table").execute()
