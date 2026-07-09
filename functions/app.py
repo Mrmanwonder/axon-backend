@@ -614,20 +614,74 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+import threading
+
+_syllabus_cache = {}
+_syllabus_cache_lock = threading.Lock()
+_SYLLABUS_CACHE_TTL = 3600  # 1 hour
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
-    contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+    now = time.time()
+
+    # 1. Identify missing IDs while locked
+    missing_ids = []
+    cached_contexts = {}
+    with _syllabus_cache_lock:
+        for obj_id in learning_objective_ids:
+            if obj_id in _syllabus_cache and _syllabus_cache[obj_id]["expiry"] > now:
+                cached_contexts[obj_id] = _syllabus_cache[obj_id]["context"]
+            else:
+                missing_ids.append(obj_id)
+
+    # Ensure we don't fetch duplicates
+    missing_ids = list(set(missing_ids))
+
+    # 2. Fetch missing IDs in batches of 30 (Firestore limit for 'in' queries)
+    fetched_contexts = {}
+    if missing_ids:
+        for i in range(0, len(missing_ids), 30):
+            chunk = missing_ids[i:i + 30]
+            try:
+                # Need to use 'in' operator to batch fetch
+                snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+                for doc in snapshot:
+                    data = doc.to_dict() or {}
+                    code = data.get("code")
+                    if code:
+                        context = (
+                            f"{data.get('board', '')} / {data.get('subject', '')} / "
+                            f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                            f"{code}: {data.get('description', '')}"
+                        )
+                        fetched_contexts[code] = context
+            except Exception as e:
+                print(f"Error fetching syllabus contexts for chunk: {e}")
+
+        # Handle cases where an ID wasn't found in DB to prevent repeated fetching
+        for obj_id in missing_ids:
+            if obj_id not in fetched_contexts:
+                fetched_contexts[obj_id] = ""
+
+        # 3. Update cache with fetched items while locked
+        with _syllabus_cache_lock:
+            for obj_id, context in fetched_contexts.items():
+                _syllabus_cache[obj_id] = {
+                    "context": context,
+                    "expiry": now + _SYLLABUS_CACHE_TTL
+                }
+
+    # 4. Build final result preserving original order and skipping empty results
+    contexts = []
+    for obj_id in learning_objective_ids:
+        ctx = cached_contexts.get(obj_id)
+        if ctx is None:
+            ctx = fetched_contexts.get(obj_id, "")
+        if ctx:
+            contexts.append(ctx)
+
     return " | ".join(contexts)
 
 
