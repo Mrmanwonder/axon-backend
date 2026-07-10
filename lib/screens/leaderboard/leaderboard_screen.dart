@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:go_router/go_router.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../services/leaderboard_service.dart';
 import '../../services/app_state.dart';
 import '../../services/subscription_service.dart';
@@ -497,10 +498,10 @@ class _LeaderboardAvatar extends StatelessWidget {
                     size: size,
                   ),
                 )
-              : Image.network(
-                  trimmedPhotoUrl,
+              : CachedNetworkImage(
+                  imageUrl: trimmedPhotoUrl,
                   fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => _LeaderboardInitials(
+                  errorWidget: (_, __, ___) => _LeaderboardInitials(
                     displayName: displayName,
                     size: size,
                   ),
