@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import os
 import tempfile
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -34,7 +34,6 @@ from middleware.rate_limit import cors_allowed_origins, is_rate_limited
 
 
 from fastapi import Depends
-from typing import Annotated
 
 # Global dependency to make auth optional
 async def optional_user():
@@ -146,6 +145,11 @@ _firestore_client = None
 
 
 _firestore_database_id = os.environ.get("FIRESTORE_DATABASE_ID", "axon")
+
+# Syllabus Maps TTL Cache
+_syllabus_cache = {}
+_syllabus_cache_lock = threading.Lock()
+_SYLLABUS_CACHE_TTL_SEC = 3600
 _gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
 _grading_gateway = None
 _planner_service: "DailyPlannerServiceV2 | None" = None
@@ -618,17 +622,57 @@ def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
-    contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
-    return " | ".join(contexts)
+    contexts_dict: dict[str, str | None] = {}
+    missing_ids = []
+    now = time.time()
+
+    # Step 1: Check cache for all IDs
+    with _syllabus_cache_lock:
+        for obj_id in learning_objective_ids:
+            entry = _syllabus_cache.get(obj_id)
+            if entry and now - entry["timestamp"] < _SYLLABUS_CACHE_TTL_SEC:
+                contexts_dict[obj_id] = entry["data"]
+            else:
+                missing_ids.append(obj_id)
+
+    # Step 2: Fetch missing IDs from Firestore in chunks of 30
+    if missing_ids:
+        new_entries = {}
+        # Pre-populate misses so we cache failures/empty results to avoid re-fetching
+        for obj_id in missing_ids:
+            new_entries[obj_id] = None
+
+        chunk_size = 30
+        for i in range(0, len(missing_ids), chunk_size):
+            chunk = missing_ids[i:i + chunk_size]
+            # Note: Firestore 'in' query has a limit of 30
+            snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+            for doc in snapshot:
+                data = doc.to_dict() or {}
+                obj_id = data.get("code")
+                if obj_id:
+                    ctx = (
+                        f"{data.get('board', '')} / {data.get('subject', '')} / "
+                        f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                        f"{obj_id}: {data.get('description', '')}"
+                    )
+                    new_entries[obj_id] = ctx
+
+        # Step 3: Update Cache and contexts_dict
+        now = time.time()
+        with _syllabus_cache_lock:
+            for obj_id, ctx in new_entries.items():
+                _syllabus_cache[obj_id] = {"timestamp": now, "data": ctx}
+                contexts_dict[obj_id] = ctx
+
+    # Build final list in original order
+    final_contexts = []
+    for obj_id in learning_objective_ids:
+        ctx = contexts_dict.get(obj_id)
+        if ctx:
+            final_contexts.append(ctx)
+
+    return " | ".join(final_contexts)
 
 
 def publish_public_user(uid: str) -> dict[str, Any]:
@@ -1271,7 +1315,6 @@ async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
     """
     from datetime import date, datetime, timedelta
     import hashlib
-    import math
     import random
 
     today = (date.fromisoformat(payload.client_date) if payload.client_date else date.today()).isoformat()
@@ -1515,7 +1558,7 @@ async def import_sme_questions(
 
     try:
         result = supabase.table("sme_questions").upsert(records).execute()
-    except Exception as e:
+    except Exception:
         # Try creating table first
         try:
             supabase.rpc("create_sme_questions_table").execute()
