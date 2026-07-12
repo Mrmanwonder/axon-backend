@@ -5,6 +5,8 @@ import base64
 import json
 import os
 import tempfile
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -142,7 +144,9 @@ _firestore_client = None
 # Removed bounded in-memory job cache; now purely stateless via Firestore
 
 
-
+_SYLLABUS_CACHE: dict[str, tuple[float, dict[str, Any] | None]] = {}
+_syllabus_cache_lock = threading.Lock()
+_SYLLABUS_CACHE_TTL_SECONDS = 3600.0
 
 
 _firestore_database_id = os.environ.get("FIRESTORE_DATABASE_ID", "axon")
@@ -618,16 +622,55 @@ def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    now = time.time()
+    missing_ids = set()
+    results = {}
+
+    with _syllabus_cache_lock:
+        for obj_id in learning_objective_ids:
+            cached = _SYLLABUS_CACHE.get(obj_id)
+            if cached and now - cached[0] < _SYLLABUS_CACHE_TTL_SECONDS:
+                results[obj_id] = cached[1]
+            else:
+                missing_ids.add(obj_id)
+
+    if missing_ids:
+        missing_list = list(missing_ids)
+        fetched_data = {obj_id: None for obj_id in missing_list}
+
+        # Firestore 'in' queries support max 30 items
+        failed_fetches = set()
+        for i in range(0, len(missing_list), 30):
+            batch = missing_list[i : i + 30]
+            try:
+                snapshot = syllabus_maps_collection().where("code", "in", batch).get()
+                for doc in snapshot:
+                    data = doc.to_dict() or {}
+                    code = data.get("code")
+                    if code in fetched_data:
+                        fetched_data[code] = data
+            except Exception as e:
+                print(f"Error fetching syllabus batch: {e}")
+                for obj_id in batch:
+                    failed_fetches.add(obj_id)
+
+        with _syllabus_cache_lock:
+            for obj_id, data in fetched_data.items():
+                if obj_id not in failed_fetches:
+                    _SYLLABUS_CACHE[obj_id] = (now, data)
+                results[obj_id] = data
+
     contexts: list[str] = []
+    # Iterate over original learning_objective_ids to maintain exact order
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
+        data = results.get(objective_id)
+        if data:
             contexts.append(
                 f"{data.get('board', '')} / {data.get('subject', '')} / "
                 f"{data.get('paper', '')} / {data.get('topic', '')} / "
                 f"{data.get('code', objective_id)}: {data.get('description', '')}"
             )
+
     return " | ".join(contexts)
 
 
