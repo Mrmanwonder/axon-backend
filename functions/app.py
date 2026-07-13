@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import uvicorn
 
 import time
+import threading
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -614,20 +615,67 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_SYLLABUS_CACHE = {}
+_SYLLABUS_CACHE_LOCK = threading.Lock()
+_SYLLABUS_CACHE_TTL = 3600  # 1 hour
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    unique_ids = list(set(learning_objective_ids))
+    missing_ids = []
+    results_map = {}
+
+    current_time = time.time()
+
+    with _SYLLABUS_CACHE_LOCK:
+        for obj_id in unique_ids:
+            if obj_id in _SYLLABUS_CACHE:
+                cached_time, cached_data = _SYLLABUS_CACHE[obj_id]
+                if current_time - cached_time < _SYLLABUS_CACHE_TTL:
+                    results_map[obj_id] = cached_data
+                    continue
+            missing_ids.append(obj_id)
+
+    if missing_ids:
+        newly_fetched = {}
+        successful_chunks = []
+        # Firestore 'in' queries are limited to 30 items
+        chunk_size = 30
+        for i in range(0, len(missing_ids), chunk_size):
+            chunk = missing_ids[i:i + chunk_size]
+            try:
+                # Query all matching docs for this chunk
+                snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+                for doc in snapshot:
+                    data = doc.to_dict() or {}
+                    code = data.get("code")
+                    if code and code not in newly_fetched:
+                        newly_fetched[code] = data
+                successful_chunks.extend(chunk)
+            except Exception as e:
+                # Do not swallow the exception, raise it to avoid silent failures
+                raise HTTPException(status_code=500, detail=f"Error fetching syllabus maps batch: {e}") from e
+
+        with _SYLLABUS_CACHE_LOCK:
+            for obj_id in successful_chunks:
+                data = newly_fetched.get(obj_id)
+                # Cache None for missing ids to prevent poisoning, only if the chunk was successfully fetched
+                _SYLLABUS_CACHE[obj_id] = (current_time, data)
+                results_map[obj_id] = data
+
     contexts: list[str] = []
+    # Preserve original ordering
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
+        data = results_map.get(objective_id)
+        if data:
             contexts.append(
                 f"{data.get('board', '')} / {data.get('subject', '')} / "
                 f"{data.get('paper', '')} / {data.get('topic', '')} / "
                 f"{data.get('code', objective_id)}: {data.get('description', '')}"
             )
+
     return " | ".join(contexts)
 
 
