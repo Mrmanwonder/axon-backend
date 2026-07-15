@@ -1,0 +1,3 @@
+## 2024-05-18 - Avoid fetching large static collections in serverless functions
+**Learning:** In the serverless Python backend, fetching entire static collections (e.g., `syllabus_maps_collection().get()`) or performing N+1 `.get()` queries for related entities into memory is an anti-pattern. This causes severe cold-start latency and can lead to OOM errors. Conversely, caching missing elements without exception handling can poison the cache.
+**Action:** When resolving N+1 queries, use a thread-safe in-memory TTL cache combined with batched queries (e.g., Firestore `in` operator chunked to limit of 30) for specific missing keys. Let exceptions propagate instead of caching `None` to prevent transient network errors from permanently dropping data during the TTL period.

@@ -35,6 +35,7 @@ from middleware.rate_limit import cors_allowed_origins, is_rate_limited
 
 from fastapi import Depends
 from typing import Annotated
+import threading
 
 # Global dependency to make auth optional
 async def optional_user():
@@ -614,20 +615,72 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_SYLLABUS_CONTEXT_CACHE: dict[str, tuple[float, str | None]] = {}
+_SYLLABUS_CONTEXT_CACHE_LOCK = threading.Lock()
+_SYLLABUS_CONTEXT_CACHE_TTL = 3600  # 1 hour
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
-    contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+    now = time.time()
+
+    # 1. Identify missing IDs (thread-safe cache read)
+    missing_ids = []
+    cached_results = {}
+    with _SYLLABUS_CONTEXT_CACHE_LOCK:
+        for obj_id in learning_objective_ids:
+            cached = _SYLLABUS_CONTEXT_CACHE.get(obj_id)
+            if cached and (now - cached[0] < _SYLLABUS_CONTEXT_CACHE_TTL):
+                cached_results[obj_id] = cached[1]
+            else:
+                missing_ids.append(obj_id)
+
+    # 2. Fetch missing IDs in batches (without lock)
+    fetched_results = {}
+    if missing_ids:
+        missing_ids = list(set(missing_ids))  # deduplicate
+
+        # Chunk into 30 to respect Firestore 'in' limit
+        chunks = [missing_ids[i:i + 30] for i in range(0, len(missing_ids), 30)]
+        for chunk in chunks:
+            # We don't catch exceptions here so that failures propagate as per original behavior.
+            # This also ensures we don't cache 'None' on transient network errors.
+            snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+
+            # Map fetched results
+            chunk_results = {code: None for code in chunk} # default to None for fetched but missing
+            for doc in snapshot:
+                data = doc.to_dict() or {}
+                code = data.get("code")
+                if code in chunk:
+                    formatted_context = (
+                        f"{data.get('board', '')} / {data.get('subject', '')} / "
+                        f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                        f"{code}: {data.get('description', '')}"
+                    )
+                    # We might have duplicates in the db, just take the first we encounter
+                    if chunk_results[code] is None:
+                        chunk_results[code] = formatted_context
+
+            fetched_results.update(chunk_results)
+
+        # 3. Update cache (thread-safe cache write)
+        with _SYLLABUS_CONTEXT_CACHE_LOCK:
+            for obj_id, result in fetched_results.items():
+                _SYLLABUS_CONTEXT_CACHE[obj_id] = (now, result)
+
+    # 4. Reconstruct order
+    contexts = []
+    for obj_id in learning_objective_ids:
+        # It's either in cached_results or fetched_results
+        context = cached_results.get(obj_id)
+        if context is None:
+            context = fetched_results.get(obj_id)
+
+        if context:
+            contexts.append(context)
+
     return " | ".join(contexts)
 
 
