@@ -1,0 +1,3 @@
+## 2024-05-24 - Firestore N+1 Batching Optimization
+**Learning:** Fetching entire static collections (e.g., `syllabus_maps_collection().get()`) into memory is an anti-pattern causing cold-start latency and OOM errors, while N+1 `.get()` queries cause network latency spikes.
+**Action:** Always replace N+1 sequential Firestore reads with an in-memory TTL cache combined with batched `in` operator queries (chunked into limits of 30) for specific missing keys. Ensure thread locks do not block network I/O, cache failures don't result in negative caching, and explicit result sorting is used since batching alters native query order.

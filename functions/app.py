@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
+import csv
+import io
 import base64
-import json
 import os
 import tempfile
 import uuid
@@ -12,7 +15,6 @@ from urllib.parse import urlparse
 
 import uvicorn
 
-import time
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -34,7 +36,6 @@ from middleware.rate_limit import cors_allowed_origins, is_rate_limited
 
 
 from fastapi import Depends
-from typing import Annotated
 
 # Global dependency to make auth optional
 async def optional_user():
@@ -614,15 +615,69 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+
+
+_SYLLABUS_CACHE = {}
+_SYLLABUS_CACHE_LOCK = threading.Lock()
+_SYLLABUS_CACHE_TTL_SECONDS = 900
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    now = time.time()
+    missing_ids = set()
+    fetched_data = {}
+
+    # 1. Read from cache
+    with _SYLLABUS_CACHE_LOCK:
+        for obj_id in learning_objective_ids:
+            cached = _SYLLABUS_CACHE.get(obj_id)
+            if cached and now - cached[0] < _SYLLABUS_CACHE_TTL_SECONDS:
+                if cached[1] is not None:
+                    fetched_data[obj_id] = cached[1]
+            else:
+                missing_ids.add(obj_id)
+
+    # 2. Batch fetch missing IDs (outside the lock)
+    if missing_ids:
+        missing_list = list(missing_ids)
+        batch_size = 30
+        successful_fetches = {}
+        failed_batches = False
+
+        try:
+            for i in range(0, len(missing_list), batch_size):
+                chunk = missing_list[i:i + batch_size]
+                try:
+                    snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+                    for doc in snapshot:
+                        data = doc.to_dict() or {}
+                        code = data.get("code")
+                        if code:
+                            successful_fetches[code] = data
+                except Exception as e:
+                    print(f"Failed to fetch syllabus batch: {e}")
+                    failed_batches = True
+        except Exception as e:
+            print(f"Failed to fetch syllabus batches: {e}")
+            failed_batches = True
+
+        # 3. Write successful results back to cache
+        with _SYLLABUS_CACHE_LOCK:
+            for obj_id in missing_list:
+                if obj_id in successful_fetches:
+                    _SYLLABUS_CACHE[obj_id] = (time.time(), successful_fetches[obj_id])
+                    fetched_data[obj_id] = successful_fetches[obj_id]
+                elif not failed_batches:
+                    # Only cache misses if the network request didn't fail
+                    _SYLLABUS_CACHE[obj_id] = (time.time(), None)
+
+    # 4. Reconstruct in deterministic order
     contexts: list[str] = []
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
+        data = fetched_data.get(objective_id)
+        if data:
             contexts.append(
                 f"{data.get('board', '')} / {data.get('subject', '')} / "
                 f"{data.get('paper', '')} / {data.get('topic', '')} / "
@@ -782,7 +837,8 @@ async def get_job(job_id: str, user: dict[str, Any] = Depends(current_user)):
             raise HTTPException(status_code=403, detail="Forbidden")
         return job
     except Exception as e:
-        if isinstance(e, HTTPException): raise e
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1271,14 +1327,12 @@ async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
     """
     from datetime import date, datetime, timedelta
     import hashlib
-    import math
     import random
 
     today = (date.fromisoformat(payload.client_date) if payload.client_date else date.today()).isoformat()
     subjects = payload.subjects or ["Mathematics", "Physics", "Chemistry"]
     target_hours = payload.target_hours or 4.0
     exam_dates = payload.exam_dates or {}
-    focus_areas = payload.focus_areas or ""
 
     # ── Phase detection from nearest exam ──
     days_to_exam = 999
@@ -1370,19 +1424,23 @@ async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
     random.shuffle(subject_queue)
 
     for si, subj in enumerate(subject_queue):
-        if slot_idx >= len(slots): break
-        if clu_used >= daily_clu_budget: break
+        if slot_idx >= len(slots):
+            break
+        if clu_used >= daily_clu_budget:
+            break
 
         # Pick task type from phase mix (cycle through)
         tt_name, _ = mix[task_num % len(mix)]
         clu = clu_map.get(tt_name, 5.0)
 
         # Cognitive load guard
-        if clu_used + clu > daily_clu_budget: continue
+        if clu_used + clu > daily_clu_budget:
+            continue
 
         # Max 3 tasks per subject
         subject_counts[subj] = subject_counts.get(subj, 0) + 1
-        if subject_counts[subj] > 3: continue
+        if subject_counts[subj] > 3:
+            continue
 
         # Intensity
         if days_to_exam <= 3 or (days_to_exam <= 14 and task_num <= 1):
@@ -1407,7 +1465,8 @@ async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
                 slot = slots[j]
                 slot_idx = j + 1
                 break
-        if not slot: break
+        if not slot:
+            break
 
         # Consume CLU
         slot["clu_remaining"] -= clu
@@ -1493,7 +1552,6 @@ async def import_sme_questions(
     user: dict[str, Any] = Depends(current_user),
 ):
     """Import questions from SaveMyExams CSV data into Supabase."""
-    import io
 
     # Parse CSV
     reader = csv.DictReader(io.StringIO(payload.csv_content))
@@ -1514,15 +1572,15 @@ async def import_sme_questions(
     supabase = get_supabase_client()
 
     try:
-        result = supabase.table("sme_questions").upsert(records).execute()
-    except Exception as e:
+        supabase.table("sme_questions").upsert(records).execute()
+    except Exception:
         # Try creating table first
         try:
             supabase.rpc("create_sme_questions_table").execute()
-        except:
+        except Exception:
             pass
         try:
-            result = supabase.table("sme_questions").upsert(records).execute()
+            supabase.table("sme_questions").upsert(records).execute()
         except Exception as e2:
             raise HTTPException(status_code=500, detail=f"Import failed: {str(e2)}")
 
