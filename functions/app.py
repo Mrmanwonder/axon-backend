@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
+import time
+import threading
 import os
 import tempfile
 import uuid
@@ -34,7 +35,6 @@ from middleware.rate_limit import cors_allowed_origins, is_rate_limited
 
 
 from fastapi import Depends
-from typing import Annotated
 
 # Global dependency to make auth optional
 async def optional_user():
@@ -614,15 +614,73 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+
+class SyllabusMapCache:
+    def __init__(self, ttl_seconds: int = 3600):
+        self.cache: dict[str, tuple[dict | None, float]] = {}
+        self.lock = threading.Lock()
+        self.ttl = ttl_seconds
+
+    def get_batch(self, codes: list[str]) -> dict[str, dict | None]:
+        now = time.time()
+        results = {}
+        missing_codes = set()
+
+        with self.lock:
+            for code in codes:
+                if code in self.cache:
+                    data, timestamp = self.cache[code]
+                    if now - timestamp < self.ttl:
+                        results[code] = data
+                        continue
+                missing_codes.add(code)
+
+        if not missing_codes:
+            return results
+
+        missing_list = list(missing_codes)
+        fetched_data: dict[str, dict | None] = {code: None for code in missing_list}
+
+        success = True
+        try:
+            for i in range(0, len(missing_list), 30):
+                chunk = missing_list[i:i+30]
+                snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+                for doc in snapshot:
+                    data = doc.to_dict() or {}
+                    code = data.get("code")
+                    if code and code in fetched_data and fetched_data[code] is None:
+                        fetched_data[code] = data
+        except Exception as e:
+            success = False
+            print(f"Error fetching syllabus maps batch: {e}")
+
+        if success:
+            with self.lock:
+                for code in missing_list:
+                    self.cache[code] = (fetched_data[code], time.time())
+
+        results.update(fetched_data)
+        return results
+
+_syllabus_cache = SyllabusMapCache()
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
+    """
+    Builds context string for learning objectives.
+    Performance Optimization: Replaced N+1 Firestore queries with batched `in` queries
+    (chunked to limits of 30) and an in-memory TTL cache to significantly reduce DB load
+    and improve response times for repeated objectives.
+    """
     if not learning_objective_ids:
         return ""
 
+    results = _syllabus_cache.get_batch(learning_objective_ids)
+
     contexts: list[str] = []
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
+        data = results.get(objective_id)
+        if data is not None:
             contexts.append(
                 f"{data.get('board', '')} / {data.get('subject', '')} / "
                 f"{data.get('paper', '')} / {data.get('topic', '')} / "
@@ -782,7 +840,8 @@ async def get_job(job_id: str, user: dict[str, Any] = Depends(current_user)):
             raise HTTPException(status_code=403, detail="Forbidden")
         return job
     except Exception as e:
-        if isinstance(e, HTTPException): raise e
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1271,14 +1330,13 @@ async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
     """
     from datetime import date, datetime, timedelta
     import hashlib
-    import math
     import random
 
     today = (date.fromisoformat(payload.client_date) if payload.client_date else date.today()).isoformat()
     subjects = payload.subjects or ["Mathematics", "Physics", "Chemistry"]
     target_hours = payload.target_hours or 4.0
     exam_dates = payload.exam_dates or {}
-    focus_areas = payload.focus_areas or ""
+    focus_areas = payload.focus_areas or ""  # noqa: F841
 
     # ── Phase detection from nearest exam ──
     days_to_exam = 999
@@ -1370,19 +1428,23 @@ async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
     random.shuffle(subject_queue)
 
     for si, subj in enumerate(subject_queue):
-        if slot_idx >= len(slots): break
-        if clu_used >= daily_clu_budget: break
+        if slot_idx >= len(slots):
+            break
+        if clu_used >= daily_clu_budget:
+            break
 
         # Pick task type from phase mix (cycle through)
         tt_name, _ = mix[task_num % len(mix)]
         clu = clu_map.get(tt_name, 5.0)
 
         # Cognitive load guard
-        if clu_used + clu > daily_clu_budget: continue
+        if clu_used + clu > daily_clu_budget:
+            continue
 
         # Max 3 tasks per subject
         subject_counts[subj] = subject_counts.get(subj, 0) + 1
-        if subject_counts[subj] > 3: continue
+        if subject_counts[subj] > 3:
+            continue
 
         # Intensity
         if days_to_exam <= 3 or (days_to_exam <= 14 and task_num <= 1):
@@ -1407,7 +1469,8 @@ async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
                 slot = slots[j]
                 slot_idx = j + 1
                 break
-        if not slot: break
+        if not slot:
+            break
 
         # Consume CLU
         slot["clu_remaining"] -= clu
@@ -1496,6 +1559,7 @@ async def import_sme_questions(
     import io
 
     # Parse CSV
+    import csv
     reader = csv.DictReader(io.StringIO(payload.csv_content))
     records = []
     for row in reader:
@@ -1514,15 +1578,15 @@ async def import_sme_questions(
     supabase = get_supabase_client()
 
     try:
-        result = supabase.table("sme_questions").upsert(records).execute()
-    except Exception as e:
+        result = supabase.table("sme_questions").upsert(records).execute()  # noqa: F841
+    except Exception:
         # Try creating table first
         try:
             supabase.rpc("create_sme_questions_table").execute()
-        except:
+        except Exception:
             pass
         try:
-            result = supabase.table("sme_questions").upsert(records).execute()
+            result = supabase.table("sme_questions").upsert(records).execute()  # noqa: F841
         except Exception as e2:
             raise HTTPException(status_code=500, detail=f"Import failed: {str(e2)}")
 
