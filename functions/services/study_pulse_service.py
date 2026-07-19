@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import math
+import time as time_module
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -23,21 +25,39 @@ def _parse_datetime(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+
+_SYLLABUS_CACHE: tuple[float, list[dict[str, Any]]] | None = None
+_SYLLABUS_CACHE_TTL_SECONDS = int(os.environ.get("SYLLABUS_CACHE_TTL_SECONDS", "900"))
+
 class StudyPulseService:
     def __init__(self, db, advisor_model=None) -> None:
         self._db = db
         self._advisor_model = advisor_model
 
     def analyze_user(self, user_id: str, *, session_id: str | None = None) -> dict[str, Any]:
+        global _SYLLABUS_CACHE
         user_ref = self._db.collection("users_private").document(user_id)
-        syllabus_docs = list(self._db.collection("syllabus_maps").stream())
+
+        # ⚡ Bolt Optimization: Cache syllabus_maps in memory
+        # 💡 What: Replaced direct Firestore collection `.stream()` with a global TTL cache.
+        # 🎯 Why: Fetching thousands of syllabus objective documents repeatedly on every invocation
+        #        causes severe N+1 cold-start latency and wastes Firestore read quota.
+        # 📊 Impact: Eliminates massive database roundtrips on warm invocations. O(1) cache lookup vs O(N) network call.
+        now_ts = time_module.time()
+        if _SYLLABUS_CACHE and now_ts - _SYLLABUS_CACHE[0] < _SYLLABUS_CACHE_TTL_SECONDS:
+            syllabus_json = _SYLLABUS_CACHE[1]
+        else:
+            syllabus_docs = list(self._db.collection("syllabus_maps").stream())
+            syllabus_json = [doc.to_dict() or {} for doc in syllabus_docs]
+            _SYLLABUS_CACHE = (now_ts, syllabus_json)
+
         study_event_docs = list(user_ref.collection("study_events").stream())
         mock_result_docs = list(user_ref.collection("mock_results").stream())
         mastery_docs = list(user_ref.collection("mastery").stream())
 
         now = datetime.now(timezone.utc)
 
-        syllabus_df = pd.DataFrame([doc.to_dict() or {} for doc in syllabus_docs])
+        syllabus_df = pd.DataFrame(syllabus_json)
         event_df = pd.DataFrame([doc.to_dict() or {} for doc in study_event_docs])
         mock_df = pd.DataFrame([doc.to_dict() or {} for doc in mock_result_docs])
         mastery_df = pd.DataFrame([doc.to_dict() or {} for doc in mastery_docs])
