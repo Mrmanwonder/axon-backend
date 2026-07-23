@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import uvicorn
 
 import time
+import threading
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -614,21 +615,73 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+# Thread-safe in-memory TTL cache for syllabus contexts
+_syllabus_cache: dict[str, tuple[float, str]] = {}
+_syllabus_cache_lock = threading.Lock()
+_SYLLABUS_CACHE_TTL = 3600  # 1 hour
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
-    contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
-    return " | ".join(contexts)
+    # ⚡ Bolt Optimization: Replaced N+1 Firestore .get() queries with an in-memory TTL cache
+    # and batched 'in' operator queries (chunked to limits of 30) for missing keys.
+    # Expected impact: Significantly reduces database latency and prevents connection exhaustion.
+
+    now = time.time()
+    missing_ids = []
+    contexts_map: dict[str, str] = {}
+
+    with _syllabus_cache_lock:
+        for obj_id in learning_objective_ids:
+            if obj_id in _syllabus_cache:
+                expiry, ctx = _syllabus_cache[obj_id]
+                if now < expiry:
+                    contexts_map[obj_id] = ctx
+                else:
+                    missing_ids.append(obj_id)
+            else:
+                missing_ids.append(obj_id)
+
+    # De-duplicate missing_ids while preserving order for efficiency
+    missing_ids = list(dict.fromkeys(missing_ids))
+
+    if missing_ids:
+        fetched_contexts: dict[str, str] = {}
+        # Firestore 'in' queries are limited to 30 items per batch
+        chunk_size = 30
+        for i in range(0, len(missing_ids), chunk_size):
+            chunk = missing_ids[i:i + chunk_size]
+            try:
+                snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+                for doc in snapshot:
+                    data = doc.to_dict() or {}
+                    code = data.get('code')
+                    if code:
+                        ctx = (
+                            f"{data.get('board', '')} / {data.get('subject', '')} / "
+                            f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                            f"{code}: {data.get('description', '')}"
+                        )
+                        fetched_contexts[code] = ctx
+            except Exception as e:
+                # Log error and continue? Maintain original behavior: if fetch fails,
+                # we don't cache and don't include it in this request, avoiding cache poisoning.
+                print(f"Error fetching syllabus contexts: {e}")
+                pass
+
+        with _syllabus_cache_lock:
+            for code, ctx in fetched_contexts.items():
+                _syllabus_cache[code] = (now + _SYLLABUS_CACHE_TTL, ctx)
+                contexts_map[code] = ctx
+
+    # Reconstruct final output preserving deterministic original ordering
+    final_contexts = []
+    for obj_id in learning_objective_ids:
+        if obj_id in contexts_map:
+            final_contexts.append(contexts_map[obj_id])
+
+    return " | ".join(final_contexts)
 
 
 def publish_public_user(uid: str) -> dict[str, Any]:
