@@ -6,6 +6,8 @@ import json
 import os
 import tempfile
 import uuid
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
@@ -614,20 +616,90 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_syllabus_cache = {}
+_syllabus_cache_lock = threading.Lock()
+_SYLLABUS_CACHE_TTL = 300  # 5 minutes
+_SYLLABUS_CACHE_MAX_SIZE = 5000  # Prevent unbounded growth
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
     contexts: list[str] = []
+
+    # Local map for assembling the final result immune to cache eviction
+    local_results_map = {}
+
+    # 1. Deduplicate requested IDs
+    unique_ids = list(set(learning_objective_ids))
+    missing_ids = []
+
+    now = time.time()
+
+    # 2. Check cache (thread-safe)
+    with _syllabus_cache_lock:
+        for obj_id in unique_ids:
+            if obj_id in _syllabus_cache:
+                entry = _syllabus_cache[obj_id]
+                if now - entry['timestamp'] < _SYLLABUS_CACHE_TTL:
+                    local_results_map[obj_id] = entry['data']
+                    continue
+            missing_ids.append(obj_id)
+
+    # 3. Fetch missing IDs in batches of 30 (Firestore limit)
+    if missing_ids:
+        for i in range(0, len(missing_ids), 30):
+            batch_ids = missing_ids[i:i+30]
+            try:
+                snapshot = syllabus_maps_collection().where("code", "in", batch_ids).get()
+                for doc in snapshot:
+                    data = doc.to_dict() or {}
+                    code = data.get('code')
+                    if code:
+                        val = (
+                            f"{data.get('board', '')} / {data.get('subject', '')} / "
+                            f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                            f"{code}: {data.get('description', '')}"
+                        )
+                        local_results_map[code] = val
+
+                # Missing objects that were fetched should be empty string
+                for obj_id in batch_ids:
+                    if obj_id not in local_results_map:
+                        local_results_map[obj_id] = ""
+
+                # Update cache only for successfully fetched batches to avoid poisoning
+                with _syllabus_cache_lock:
+                    for obj_id in batch_ids:
+                        _syllabus_cache[obj_id] = {
+                            'data': local_results_map[obj_id],
+                            'timestamp': now
+                        }
+            except Exception as e:
+                # Fall back to empty string for missing IDs if this specific batch fetch fails
+                # Do not cache failed batches
+                for obj_id in batch_ids:
+                    if obj_id not in local_results_map:
+                        local_results_map[obj_id] = ""
+
+    # 4. Cache eviction (only if we updated the cache)
+    if missing_ids:
+        with _syllabus_cache_lock:
+            if len(_syllabus_cache) > _SYLLABUS_CACHE_MAX_SIZE:
+                # Random eviction to avoid slow O(N log N) sorting under lock
+                import random
+                keys = list(_syllabus_cache.keys())
+                num_to_remove = int(_SYLLABUS_CACHE_MAX_SIZE * 0.2)
+                keys_to_remove = random.sample(keys, min(num_to_remove, len(keys)))
+                for k in keys_to_remove:
+                    _syllabus_cache.pop(k, None)
+
+    # 5. Reconstruct ordered result using local map
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+        val = local_results_map.get(objective_id, "")
+        if val:
+            contexts.append(val)
+
     return " | ".join(contexts)
 
 
