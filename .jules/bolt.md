@@ -1,0 +1,4 @@
+
+## 2024-07-25 - Fixing N+1 Queries with Thread-Safe TTL Caching and Batching in Serverless Python
+**Learning:** In the serverless Python backend, sequential Firestore `.get()` queries for related entities (like syllabus maps) cause significant latency and N+1 query problems. However, you shouldn't fetch the entire static collection into memory because it causes severe cold-start latency and OOM errors. Additionally, simple batching with the `in` operator isn't enough because it changes the native result order.
+**Action:** Always fix N+1 queries by combining batched queries (e.g., Firestore's `in` operator chunked to limits of 30) for missing keys with a thread-safe in-memory TTL cache. Crucially, reconstruct the final output by explicitly iterating over the original list of requested IDs to preserve deterministic ordering, and ensure locks don't block network I/O or that transient errors don't poison the cache with empty values.
