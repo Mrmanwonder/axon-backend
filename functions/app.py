@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import tempfile
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -155,6 +156,11 @@ _uni_catalog_service = None
 _ai_proxy_service = None
 _deepgram_auth_service: DeepgramAuthService | None = None
 _drive_service = None
+
+# Thread-safe in-memory cache for syllabus context
+_syllabus_context_cache: dict[str, tuple[float, str]] = {}
+_syllabus_context_lock = threading.Lock()
+_SYLLABUS_CONTEXT_TTL_SECONDS = 3600  # 1 hour
 
 MAX_DRIVE_DOWNLOAD_BYTES = 600 * 1024 * 1024
 _DRIVE_FILE_ID_PATTERN = r"^[a-zA-Z0-9_-]{10,}$"
@@ -618,16 +624,65 @@ def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    now = time.time()
+    contexts_by_id: dict[str, str] = {}
+    missing_ids: set[str] = set()
+
+    # 1. Check thread-safe cache
+    with _syllabus_context_lock:
+        for obj_id in learning_objective_ids:
+            if obj_id in _syllabus_context_cache:
+                timestamp, ctx = _syllabus_context_cache[obj_id]
+                if now - timestamp < _SYLLABUS_CONTEXT_TTL_SECONDS:
+                    contexts_by_id[obj_id] = ctx
+                else:
+                    missing_ids.add(obj_id)
+            else:
+                missing_ids.add(obj_id)
+
+    # 2. Batch fetch missing ones
+    if missing_ids:
+        missing_list = list(missing_ids)
+        fetched_contexts: dict[str, str] = {}
+        failed_chunks_ids: set[str] = set()
+
+        # Chunk to max 30 for Firestore 'in' queries
+        chunk_size = 30
+        for i in range(0, len(missing_list), chunk_size):
+            chunk = missing_list[i : i + chunk_size]
+            try:
+                snapshots = syllabus_maps_collection().where("code", "in", chunk).get()
+                for doc in snapshots:
+                    data = doc.to_dict() or {}
+                    obj_id = data.get("code")
+                    if obj_id:
+                        ctx = (
+                            f"{data.get('board', '')} / {data.get('subject', '')} / "
+                            f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                            f"{obj_id}: {data.get('description', '')}"
+                        )
+                        fetched_contexts[obj_id] = ctx
+            except Exception as e:
+                print(f"Error fetching syllabus contexts: {e}")
+                failed_chunks_ids.update(chunk)
+
+        # Update cache and our local map
+        with _syllabus_context_lock:
+            for obj_id in missing_list:
+                if obj_id in failed_chunks_ids:
+                    # Do not poison cache on transient network failures
+                    continue
+                ctx = fetched_contexts.get(obj_id, "")  # Cache empty string for missing records
+                _syllabus_context_cache[obj_id] = (now, ctx)
+                contexts_by_id[obj_id] = ctx
+
+    # 3. Reconstruct ordered list
     contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+    for obj_id in learning_objective_ids:
+        ctx = contexts_by_id.get(obj_id, "")
+        if ctx:
+            contexts.append(ctx)
+
     return " | ".join(contexts)
 
 
