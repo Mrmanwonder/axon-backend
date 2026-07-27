@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 import os
 import tempfile
 import uuid
+import threading
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
@@ -614,20 +617,73 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_syllabus_cache = OrderedDict()
+_syllabus_cache_lock = threading.Lock()
+_SYLLABUS_CACHE_MAX_SIZE = 1000
+_SYLLABUS_CACHE_TTL_SECONDS = 900
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
-    contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+    now = time.monotonic()
+    local_cache = {}
+    missing_ids = []
+
+    with _syllabus_cache_lock:
+        for objective_id in learning_objective_ids:
+            if objective_id in _syllabus_cache:
+                cached_time, cached_val = _syllabus_cache[objective_id]
+                if now - cached_time < _SYLLABUS_CACHE_TTL_SECONDS:
+                    local_cache[objective_id] = cached_val
+                    # Move to end (LRU)
+                    _syllabus_cache.move_to_end(objective_id)
+                else:
+                    del _syllabus_cache[objective_id]
+                    missing_ids.append(objective_id)
+            else:
+                missing_ids.append(objective_id)
+
+    # Remove duplicates from missing_ids
+    missing_ids = list(set(missing_ids))
+
+    # Batch fetch missing IDs
+    if missing_ids:
+        chunk_size = 30
+        for i in range(0, len(missing_ids), chunk_size):
+            chunk = missing_ids[i:i + chunk_size]
+            try:
+                snapshot = syllabus_maps_collection().where("code", "in", chunk).stream()
+                fetched_docs = {doc.to_dict().get("code", ""): doc.to_dict() for doc in snapshot if doc.to_dict()}
+
+                new_entries = {}
+                for obj_id in chunk:
+                    data = fetched_docs.get(obj_id)
+                    if data:
+                        context = (
+                            f"{data.get('board', '')} / {data.get('subject', '')} / "
+                            f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                            f"{data.get('code', obj_id)}: {data.get('description', '')}"
+                        )
+                    else:
+                        context = ""
+                    new_entries[obj_id] = context
+                    local_cache[obj_id] = context
+
+                with _syllabus_cache_lock:
+                    for obj_id, context in new_entries.items():
+                        _syllabus_cache[obj_id] = (time.monotonic(), context)
+                        if len(_syllabus_cache) > _SYLLABUS_CACHE_MAX_SIZE:
+                            _syllabus_cache.popitem(last=False)
+            except Exception as e:
+                # Re-raise to prevent cache poisoning or silent failure on DB error
+                raise e
+
+    contexts = []
+    for obj_id in learning_objective_ids:
+        if local_cache.get(obj_id):
+            contexts.append(local_cache[obj_id])
+
     return " | ".join(contexts)
 
 
