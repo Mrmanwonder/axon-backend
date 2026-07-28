@@ -2,39 +2,41 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import os
 import tempfile
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
 import uvicorn
-
-import time
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-from middleware.auth import current_user, optional_current_user, initialize_firebase
+from middleware.auth import current_user, initialize_firebase, optional_current_user
+from middleware.rate_limit import cors_allowed_origins, is_rate_limited
 from middleware.supabase_scope import apply_user_scope, assert_table_access
 from middleware.url_safety import assert_safe_https_url
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from services.ai_proxy_service import AiProxyService
+from services.deepgram_auth_service import DeepgramAuthService
 from services.exam_dates_service import OfficialExamDatesService
 from services.grading_service import HandwritingGradingGateway
 from services.planner_service import DailyPlannerServiceV2
 from services.study_pulse_service import StudyPulseService
 from services.university_catalog_service import UniversityCatalogService
 from services.university_program_crawler import UniversityProgramCrawler
-from services.ai_proxy_service import AiProxyService
-from services.deepgram_auth_service import DeepgramAuthService
-from middleware.rate_limit import cors_allowed_origins, is_rate_limited
 
-
-from fastapi import Depends
-from typing import Annotated
 
 # Global dependency to make auth optional
 async def optional_user():
@@ -148,7 +150,7 @@ _firestore_client = None
 _firestore_database_id = os.environ.get("FIRESTORE_DATABASE_ID", "axon")
 _gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
 _grading_gateway = None
-_planner_service: "DailyPlannerServiceV2 | None" = None
+_planner_service: DailyPlannerServiceV2 | None = None
 _study_pulse_service = None
 _exam_dates_service = None
 _uni_catalog_service = None
@@ -614,20 +616,73 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_SYLLABUS_CACHE = {}
+_SYLLABUS_CACHE_LOCK = threading.Lock()
+_SYLLABUS_CACHE_MAX_SIZE = 1000
+
+def _get_from_syllabus_cache(keys: list[str]) -> dict[str, str]:
+    with _SYLLABUS_CACHE_LOCK:
+        return {k: _SYLLABUS_CACHE[k] for k in keys if k in _SYLLABUS_CACHE}
+
+def _add_to_syllabus_cache(entries: dict[str, str]) -> None:
+    with _SYLLABUS_CACHE_LOCK:
+        for k, v in entries.items():
+            _SYLLABUS_CACHE[k] = v
+        # Size bounding logic
+        if len(_SYLLABUS_CACHE) > _SYLLABUS_CACHE_MAX_SIZE:
+            # Simple eviction: clear cache completely when over capacity
+            # to prevent unbounded memory growth while keeping lock fast
+            _SYLLABUS_CACHE.clear()
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
-    contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+    # 1. Check Cache
+    cached_contexts = _get_from_syllabus_cache(learning_objective_ids)
+
+    # 2. Identify missing IDs
+    missing_ids = [obj_id for obj_id in learning_objective_ids if obj_id not in cached_contexts]
+
+    new_contexts = {}
+    if missing_ids:
+        # 3. Batch fetch missing IDs in chunks of 30 (Firestore limit for `in` is 30)
+        chunk_size = 30
+        for i in range(0, len(missing_ids), chunk_size):
+            chunk = missing_ids[i:i + chunk_size]
+            snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+
+            # Record found ones
+            for doc in snapshot:
+                data = doc.to_dict() or {}
+                obj_id = data.get("code")
+                if not obj_id:
+                    continue
+                context_str = (
+                    f"{data.get('board', '')} / {data.get('subject', '')} / "
+                    f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                    f"{obj_id}: {data.get('description', '')}"
+                )
+                new_contexts[obj_id] = context_str
+
+        # 4. Explicitly cache successful 'not found' queries to prevent N+1 re-querying
+        for missing_id in missing_ids:
+            if missing_id not in new_contexts:
+                new_contexts[missing_id] = ""  # Cache as empty string
+
+        # 5. Add to cache
+        _add_to_syllabus_cache(new_contexts)
+
+    # 6. Reconstruct final output iterating over original list to preserve order
+    contexts = []
+    # Combine maps for easy lookup
+    combined_contexts = {**cached_contexts, **new_contexts}
+
+    for obj_id in learning_objective_ids:
+        ctx = combined_contexts.get(obj_id, "")
+        if ctx:
+            contexts.append(ctx)
+
     return " | ".join(contexts)
 
 
@@ -1269,10 +1324,9 @@ async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
     Returns a complete daily plan using the same algorithm as planner_service.py
     but without any Firestore dependency.
     """
-    from datetime import date, datetime, timedelta
     import hashlib
-    import math
     import random
+    from datetime import date, datetime, timedelta
 
     today = (date.fromisoformat(payload.client_date) if payload.client_date else date.today()).isoformat()
     subjects = payload.subjects or ["Mathematics", "Physics", "Chemistry"]
@@ -1515,7 +1569,7 @@ async def import_sme_questions(
 
     try:
         result = supabase.table("sme_questions").upsert(records).execute()
-    except Exception as e:
+    except Exception:
         # Try creating table first
         try:
             supabase.rpc("create_sme_questions_table").execute()
@@ -1524,7 +1578,7 @@ async def import_sme_questions(
         try:
             result = supabase.table("sme_questions").upsert(records).execute()
         except Exception as e2:
-            raise HTTPException(status_code=500, detail=f"Import failed: {str(e2)}")
+            raise HTTPException(status_code=500, detail=f"Import failed: {e2!s}")
 
     return {
         "imported": len(records),
@@ -1539,8 +1593,9 @@ async def get_sme_questions(
     user: dict[str, Any] | None = Depends(optional_current_user),
 ):
     """Get saved questions from SaveMyExams."""
-    import requests
     import sys
+
+    import requests
     SUPABASE_URL = "https://anmfwzxyvqxyxxeobxti.supabase.co"
     SUPABASE_KEY = "sb_publishable_fIbfGtT5yyFaogq4DQAuxw_tZ54kolM"
     
