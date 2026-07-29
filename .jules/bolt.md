@@ -1,0 +1,3 @@
+## 2024-05-24 - Serverless N+1 Query Cold-Start Impact
+**Learning:** In serverless environments, fetching sequential single documents (e.g. `collection.where().limit(1).get()`) in a loop for related data creates massive latency due to network round-trips for each iteration, worsening cold starts. Simply fetching the entire collection into memory to solve this causes OOM and slow startup.
+**Action:** Replace N+1 queries with batched `in` queries chunked to limit restrictions (e.g. 30 in Firestore). Combine with an in-memory TTL cache with a `threading.Lock` and copy lock hits to a local dictionary, to prevent blocking network I/O and avoid cache poisoning. Specifically, cache successful 'not found' queries.
