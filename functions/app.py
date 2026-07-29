@@ -13,6 +13,8 @@ from urllib.parse import urlparse
 import uvicorn
 
 import time
+import threading
+from collections import OrderedDict
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -614,20 +616,93 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+# ⚡ Bolt Optimization: Thread-safe in-memory TTL cache to prevent N+1 Firestore queries
+# Expected Impact: Reduces cold-start latency and DB load for frequent syllabus fetches.
+_syllabus_cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
+_syllabus_cache_lock = threading.Lock()
+_SYLLABUS_CACHE_MAX_SIZE = 2000
+_SYLLABUS_CACHE_TTL_SEC = 3600 * 12  # 12 hours
+
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    now = time.time()
+    local_cache_hits: dict[str, str] = {}
+    missing_ids: set[str] = set()
+
+    # 1. Read from cache under lock, copy hits to avoid race conditions during eviction
+    with _syllabus_cache_lock:
+        for obj_id in learning_objective_ids:
+            if obj_id in _syllabus_cache:
+                timestamp, cached_val = _syllabus_cache[obj_id]
+                if now - timestamp < _SYLLABUS_CACHE_TTL_SEC:
+                    local_cache_hits[obj_id] = cached_val
+                    # Move to end to mark as recently used (LRU)
+                    _syllabus_cache.move_to_end(obj_id)
+                else:
+                    # Expired
+                    del _syllabus_cache[obj_id]
+                    missing_ids.add(obj_id)
+            else:
+                missing_ids.add(obj_id)
+
+    # 2. Fetch missing IDs from Firestore in batches of 30 (Firestore limit for `in`)
+    fetched_data: dict[str, str] = {}
+    if missing_ids:
+        missing_list = list(missing_ids)
+        chunk_size = 30
+        for i in range(0, len(missing_list), chunk_size):
+            chunk = missing_list[i:i + chunk_size]
+            try:
+                # Batch query outside the lock to avoid blocking other threads
+                docs = syllabus_maps_collection().where("code", "in", chunk).stream()
+
+                # Create a set of found IDs in this chunk
+                found_in_chunk = set()
+
+                for doc in docs:
+                    data = doc.to_dict() or {}
+                    code = data.get("code")
+                    if code:
+                        context_str = (
+                            f"{data.get('board', '')} / {data.get('subject', '')} / "
+                            f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                            f"{code}: {data.get('description', '')}"
+                        )
+                        fetched_data[code] = context_str
+                        found_in_chunk.add(code)
+
+                # IMPORTANT: Cache successful 'not found' queries as empty strings to prevent repeated misses
+                for missing_id in chunk:
+                    if missing_id not in found_in_chunk:
+                        fetched_data[missing_id] = ""
+
+            except Exception as e:
+                print(f"Error fetching syllabus contexts: {e}")
+                raise
+
+    # 3. Update cache with fetched data
+    if fetched_data:
+        with _syllabus_cache_lock:
+            for obj_id, val in fetched_data.items():
+                _syllabus_cache[obj_id] = (now, val)
+
+            # Enforce size bound
+            while len(_syllabus_cache) > _SYLLABUS_CACHE_MAX_SIZE:
+                _syllabus_cache.popitem(last=False)
+
+    # 4. Reconstruct final list preserving original order
     contexts: list[str] = []
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+        val = local_cache_hits.get(objective_id)
+        if val is None:
+            val = fetched_data.get(objective_id, "")
+
+        if val:
+            contexts.append(val)
+
     return " | ".join(contexts)
 
 
