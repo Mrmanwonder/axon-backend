@@ -5,6 +5,8 @@ import base64
 import json
 import os
 import tempfile
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -192,6 +194,11 @@ def public_users_collection():
 
 def syllabus_maps_collection():
     return get_firestore().collection("syllabus_maps")
+
+
+_syllabus_cache: dict[str, tuple[float, str]] = {}
+_syllabus_cache_lock = threading.Lock()
+_syllabus_cache_ttl = 300  # 5 minutes
 
 
 def save_job(job_id: str, payload: dict[str, Any]) -> None:
@@ -618,16 +625,70 @@ def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    now = time.time()
+    local_cache: dict[str, str] = {}
+    missing_ids: set[str] = set()
+
+    # 1. Read from global cache safely
+    with _syllabus_cache_lock:
+        for obj_id in learning_objective_ids:
+            if obj_id in _syllabus_cache:
+                timestamp, context_str = _syllabus_cache[obj_id]
+                if now - timestamp < _syllabus_cache_ttl:
+                    local_cache[obj_id] = context_str
+                else:
+                    missing_ids.add(obj_id)
+            else:
+                missing_ids.add(obj_id)
+
+    # 2. Fetch missing IDs in chunks (Firestore `in` limit is 30)
+    missing_list = list(missing_ids)
+    new_cache_entries: dict[str, str] = {}
+    chunk_size = 30
+
+    for i in range(0, len(missing_list), chunk_size):
+        chunk = missing_list[i:i + chunk_size]
+        try:
+            # Batch query for this chunk
+            snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+
+            # Map results
+            found_ids = set()
+            for doc in snapshot:
+                data = doc.to_dict() or {}
+                obj_id = data.get("code")
+                if obj_id:
+                    context_str = (
+                        f"{data.get('board', '')} / {data.get('subject', '')} / "
+                        f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                        f"{obj_id}: {data.get('description', '')}"
+                    )
+                    new_cache_entries[obj_id] = context_str
+                    found_ids.add(obj_id)
+
+            # Cache empty string for IDs not found to prevent N+1 query loops
+            for obj_id in chunk:
+                if obj_id not in found_ids:
+                    new_cache_entries[obj_id] = ""
+
+        except Exception:
+            # Re-raise the exception to maintain original failure behavior without modifying exception type
+            raise
+
+    # 3. Update global cache safely
+    if new_cache_entries:
+        with _syllabus_cache_lock:
+            for k, v in new_cache_entries.items():
+                _syllabus_cache[k] = (now, v)
+                local_cache[k] = v
+
+    # 4. Reconstruct list preserving original order
     contexts: list[str] = []
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+        ctx = local_cache.get(objective_id, "")
+        if ctx:
+            contexts.append(ctx)
+
     return " | ".join(contexts)
 
 
