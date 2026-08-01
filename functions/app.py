@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import uvicorn
 
 import time
+import threading
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -614,15 +615,70 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_SYLLABUS_CACHE: dict[str, dict[str, Any]] = {}
+_SYLLABUS_CACHE_TS: dict[str, float] = {}
+_SYLLABUS_CACHE_LOCK = threading.Lock()
+_SYLLABUS_CACHE_TTL_SECONDS = 900
+
+def get_syllabus_maps_batched(objective_ids: list[str]) -> dict[str, dict[str, Any]]:
+    if not objective_ids:
+        return {}
+
+    now = time.time()
+    missing_ids = []
+    results = {}
+
+    with _SYLLABUS_CACHE_LOCK:
+        for obj_id in objective_ids:
+            if obj_id in _SYLLABUS_CACHE and now - _SYLLABUS_CACHE_TS.get(obj_id, 0) < _SYLLABUS_CACHE_TTL_SECONDS:
+                results[obj_id] = _SYLLABUS_CACHE[obj_id]
+            else:
+                missing_ids.append(obj_id)
+                # Deduplicate missing_ids
+                missing_ids = list(set(missing_ids))
+
+    if missing_ids:
+        fetched_results = {}
+        fetch_success = True
+        # Chunk to max 30 for firestore IN query
+        for i in range(0, len(missing_ids), 30):
+            chunk = missing_ids[i:i+30]
+            try:
+                docs = syllabus_maps_collection().where("code", "in", chunk).stream()
+                for doc in docs:
+                    data = doc.to_dict() or {}
+                    code = data.get("code")
+                    if code and code in chunk:
+                        fetched_results[code] = data
+            except Exception as e:
+                print(f"Error fetching syllabus maps for {chunk}: {e}")
+                fetch_success = False
+
+        # Only populate missing values if fetch was successful to prevent cache poisoning
+        if fetch_success:
+            for missing_id in missing_ids:
+                if missing_id not in fetched_results:
+                    fetched_results[missing_id] = {}
+
+            with _SYLLABUS_CACHE_LOCK:
+                for missing_id in missing_ids:
+                    if missing_id in fetched_results:
+                        _SYLLABUS_CACHE[missing_id] = fetched_results[missing_id]
+                        _SYLLABUS_CACHE_TS[missing_id] = now
+                        results[missing_id] = fetched_results[missing_id]
+
+    return results
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    batched_results = get_syllabus_maps_batched(learning_objective_ids)
+
     contexts: list[str] = []
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
+        data = batched_results.get(objective_id)
+        if data:
             contexts.append(
                 f"{data.get('board', '')} / {data.get('subject', '')} / "
                 f"{data.get('paper', '')} / {data.get('topic', '')} / "
