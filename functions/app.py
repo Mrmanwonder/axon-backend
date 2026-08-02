@@ -5,6 +5,8 @@ import base64
 import json
 import os
 import tempfile
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -614,20 +616,75 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_SYLLABUS_CACHE: dict[str, tuple[float, str]] = {}
+_SYLLABUS_CACHE_LOCK = threading.Lock()
+_SYLLABUS_CACHE_TTL = 3600  # 1 hour
+_SYLLABUS_CACHE_MAX_SIZE = 5000
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    now = time.time()
+    missing_ids = []
+    local_cache_hits = {}
+
+    with _SYLLABUS_CACHE_LOCK:
+        for obj_id in learning_objective_ids:
+            if obj_id in _SYLLABUS_CACHE:
+                cached_time, cached_val = _SYLLABUS_CACHE[obj_id]
+                if now - cached_time < _SYLLABUS_CACHE_TTL:
+                    local_cache_hits[obj_id] = cached_val
+                else:
+                    del _SYLLABUS_CACHE[obj_id]
+                    missing_ids.append(obj_id)
+            else:
+                missing_ids.append(obj_id)
+
+    unique_missing_ids = list(set(missing_ids))
+    fetched_data = {}
+
+    if unique_missing_ids:
+        for i in range(0, len(unique_missing_ids), 30):
+            chunk = unique_missing_ids[i:i + 30]
+            for cid in chunk:
+                fetched_data[cid] = ""
+
+            try:
+                # Firestore `where` signature supports kwargs based query fields
+                # Or op_string as the second positional arg
+                snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+                for doc in snapshot:
+                    data = doc.to_dict() or {}
+                    code = data.get("code")
+                    if code and code in chunk:
+                        context_str = (
+                            f"{data.get('board', '')} / {data.get('subject', '')} / "
+                            f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                            f"{code}: {data.get('description', '')}"
+                        )
+                        fetched_data[code] = context_str
+            except Exception as e:
+                import logging
+                logging.error(f"Error fetching syllabus contexts: {e}")
+                # Don't cache silent failures as 'not found', propagate the error or re-raise
+                # Since failing silently breaks grading, we should raise it to fail the operation.
+                raise
+
+        with _SYLLABUS_CACHE_LOCK:
+            if len(_SYLLABUS_CACHE) + len(fetched_data) > _SYLLABUS_CACHE_MAX_SIZE:
+                _SYLLABUS_CACHE.clear()
+            for k, v in fetched_data.items():
+                _SYLLABUS_CACHE[k] = (now, v)
+
     contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+    for obj_id in learning_objective_ids:
+        val = local_cache_hits.get(obj_id)
+        if val is None:
+            val = fetched_data.get(obj_id, "")
+        if val:
+            contexts.append(val)
+
     return " | ".join(contexts)
 
 
