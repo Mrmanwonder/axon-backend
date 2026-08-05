@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import uvicorn
 
 import time
+import threading
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -614,20 +615,81 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_syllabus_cache = {}
+_syllabus_cache_lock = threading.Lock()
+_syllabus_cache_ttl = 3600  # 1 hour
+_syllabus_cache_max_size = 1000
+
+def _format_syllabus_data(data: dict, default_code: str) -> str:
+    if not data:
+        return ""
+    return (
+        f"{data.get('board', '')} / {data.get('subject', '')} / "
+        f"{data.get('paper', '')} / {data.get('topic', '')} / "
+        f"{data.get('code', default_code)}: {data.get('description', '')}"
+    )
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    # Remove duplicates but preserve order for final output
+    unique_ids = list(dict.fromkeys(learning_objective_ids))
+    now = time.time()
+
+    # 1. Check cache safely
+    cached_results = {}
+    missing_ids = []
+
+    with _syllabus_cache_lock:
+        # Copy cache hits into a local dictionary to avoid race conditions later
+        for objective_id in unique_ids:
+            entry = _syllabus_cache.get(objective_id)
+            if entry and (now - entry['timestamp'] < _syllabus_cache_ttl):
+                cached_results[objective_id] = entry['data']
+            else:
+                missing_ids.append(objective_id)
+
+    # 2. Fetch missing items in batches (Firestore 'in' limits to 30)
+    fetched_data = {}
+    if missing_ids:
+        chunk_size = 30
+        for i in range(0, len(missing_ids), chunk_size):
+            chunk = missing_ids[i:i + chunk_size]
+            # Query firestore using the 'in' operator
+            # Exceptions will propagate naturally so we don't cache poison
+            snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+
+            # Map results by code
+            chunk_results = {doc.to_dict().get("code", ""): doc.to_dict() for doc in snapshot if doc.exists}
+
+            for obj_id in chunk:
+                # Cache successful 'not found' as empty dict to avoid N+1 on missing IDs
+                data = chunk_results.get(obj_id, {})
+                fetched_data[obj_id] = data
+
+    # 3. Update cache safely
+    if fetched_data:
+        with _syllabus_cache_lock:
+            # Enforce size bounds (simple random eviction by clearing if too big)
+            if len(_syllabus_cache) + len(fetched_data) > _syllabus_cache_max_size:
+                _syllabus_cache.clear()
+
+            for obj_id, data in fetched_data.items():
+                _syllabus_cache[obj_id] = {'data': data, 'timestamp': now}
+
+    # Combine results
+    all_results = {**cached_results, **fetched_data}
+
+    # 4. Reconstruct output maintaining the original request order
     contexts: list[str] = []
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+        data = all_results.get(objective_id)
+        if data:
+            formatted = _format_syllabus_data(data, objective_id)
+            if formatted:
+                contexts.append(formatted)
+
     return " | ".join(contexts)
 
 
