@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 import base64
-import json
 import os
 import tempfile
 import uuid
@@ -12,7 +13,6 @@ from urllib.parse import urlparse
 
 import uvicorn
 
-import time
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -34,7 +34,6 @@ from middleware.rate_limit import cors_allowed_origins, is_rate_limited
 
 
 from fastapi import Depends
-from typing import Annotated
 
 # Global dependency to make auth optional
 async def optional_user():
@@ -614,20 +613,93 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+class SyllabusCache:
+    """Thread-safe, bounded, TTL cache for syllabus mapping contexts."""
+    def __init__(self, max_size: int = 1000, ttl: int = 3600):
+        self._cache: dict[str, dict[str, Any]] = {}
+        self._lock = threading.Lock()
+        self._max_size = max_size
+        self._ttl = ttl
+
+    def get_many(self, ids: list[str]) -> dict[str, str]:
+        now = time.time()
+        results: dict[str, str] = {}
+        missing: list[str] = []
+
+        with self._lock:
+            for uid in ids:
+                if uid in self._cache:
+                    entry = self._cache[uid]
+                    if now - entry['time'] < self._ttl:
+                        results[uid] = entry['value']
+                    else:
+                        del self._cache[uid]
+                        missing.append(uid)
+                else:
+                    missing.append(uid)
+
+        if missing:
+            fetched_results: dict[str, str] = {}
+            missing_unique = list(set(missing))
+            failed_chunks = set()
+
+            for i in range(0, len(missing_unique), 30):
+                chunk = missing_unique[i:i + 30]
+                try:
+                    snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+                    for doc in snapshot:
+                        data = doc.to_dict() or {}
+                        code = data.get("code")
+                        if code:
+                            val = (
+                                f"{data.get('board', '')} / {data.get('subject', '')} / "
+                                f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                                f"{code}: {data.get('description', '')}"
+                            )
+                            fetched_results[code] = val
+                except Exception as e:
+                    print(f"Error fetching syllabus contexts from Firestore: {e}")
+                    failed_chunks.update(chunk)
+                    pass
+
+            with self._lock:
+                now = time.time()
+                for uid in missing_unique:
+                    # Do not cache items that failed to fetch due to an error to prevent cache poisoning
+                    if uid in failed_chunks:
+                        continue
+
+                    val = fetched_results.get(uid, "")
+
+                    if len(self._cache) >= self._max_size and uid not in self._cache:
+                        oldest_key = next(iter(self._cache))
+                        del self._cache[oldest_key]
+
+                    self._cache[uid] = {'value': val, 'time': now}
+                    results[uid] = val
+
+        return results
+
+_syllabus_cache = SyllabusCache()
+
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
+    """
+    Build syllabus context efficiently by using a batched cache strategy
+    to avoid N+1 queries. Results are returned in the deterministic order
+    requested.
+    """
     if not learning_objective_ids:
         return ""
 
+    results_map = _syllabus_cache.get_many(learning_objective_ids)
+
     contexts: list[str] = []
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+        val = results_map.get(objective_id, "")
+        if val:
+            contexts.append(val)
+
     return " | ".join(contexts)
 
 
@@ -1271,7 +1343,6 @@ async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
     """
     from datetime import date, datetime, timedelta
     import hashlib
-    import math
     import random
 
     today = (date.fromisoformat(payload.client_date) if payload.client_date else date.today()).isoformat()
@@ -1515,7 +1586,7 @@ async def import_sme_questions(
 
     try:
         result = supabase.table("sme_questions").upsert(records).execute()
-    except Exception as e:
+    except Exception:
         # Try creating table first
         try:
             supabase.rpc("create_sme_questions_table").execute()
