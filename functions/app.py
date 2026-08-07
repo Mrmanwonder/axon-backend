@@ -7,12 +7,14 @@ import os
 import tempfile
 import uuid
 from datetime import datetime, timezone
+from google.cloud import firestore
 from typing import Any
 from urllib.parse import urlparse
 
 import uvicorn
 
 import time
+import threading
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -614,15 +616,77 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+
+_syllabus_cache = {}
+_syllabus_cache_lock = threading.Lock()
+SYLLABUS_CACHE_TTL = 3600
+MAX_SYLLABUS_CACHE_SIZE = 1000
+
+def _get_syllabus_data_batch(codes: list[str]) -> dict[str, dict]:
+    now = time.time()
+    results = {}
+    missing_codes = set()
+
+    with _syllabus_cache_lock:
+        for code in codes:
+            if code in _syllabus_cache:
+                expiry, data = _syllabus_cache[code]
+                if now < expiry:
+                    results[code] = data
+                else:
+                    del _syllabus_cache[code]
+                    missing_codes.add(code)
+            else:
+                missing_codes.add(code)
+
+    if not missing_codes:
+        return results
+
+    missing_list = list(missing_codes)
+    new_results = {}
+
+    chunk_size = 30
+    try:
+        for i in range(0, len(missing_list), chunk_size):
+            chunk = missing_list[i:i+chunk_size]
+            snapshot = syllabus_maps_collection().where(filter=firestore.FieldFilter("code", "in", chunk)).get()
+
+            found_in_chunk = set()
+            for doc in snapshot:
+                data = doc.to_dict() or {}
+                code = data.get("code")
+                if code:
+                    new_results[code] = data
+                    found_in_chunk.add(code)
+
+            for code in chunk:
+                if code not in found_in_chunk:
+                    new_results[code] = {}
+    except Exception:
+        raise
+
+    with _syllabus_cache_lock:
+        if len(_syllabus_cache) > MAX_SYLLABUS_CACHE_SIZE:
+            _syllabus_cache.clear()
+
+        expire_time = time.time() + SYLLABUS_CACHE_TTL
+        for code, data in new_results.items():
+            _syllabus_cache[code] = (expire_time, data)
+            results[code] = data
+
+    return results
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    unique_ids = list(dict.fromkeys(learning_objective_ids))
+    data_map = _get_syllabus_data_batch(unique_ids)
+
     contexts: list[str] = []
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
+        data = data_map.get(objective_id, {})
+        if data:
             contexts.append(
                 f"{data.get('board', '')} / {data.get('subject', '')} / "
                 f"{data.get('paper', '')} / {data.get('topic', '')} / "

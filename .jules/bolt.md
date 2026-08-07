@@ -1,0 +1,4 @@
+
+## 2024-08-07 - Fix N+1 queries in syllabus context generation
+**Learning:** In the serverless Python backend, sequential database queries (e.g., Firestore `.get()` for each ID in `build_syllabus_context`) cause extreme N+1 latency bottlenecks, and fetching entire static collections (e.g., `syllabus_maps_collection().get()`) into memory is an anti-pattern that causes severe cold-start latency and OOM errors. Additionally, we must handle successful 'not found' queries (caching negative results) to prevent repeatedly querying missing IDs and poisoning the cache.
+**Action:** Use a size-bounded TTL cache (`threading.Lock` protected) combined with batched queries via Firestore `in` operator (chunked to limits of 30) for specific missing keys, and ensure to cache both successful hits and successful misses to prevent N+1 query bottlenecks on non-existent IDs.
