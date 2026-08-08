@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import tempfile
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -614,20 +615,65 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_SYLLABUS_CONTEXT_CACHE: dict[str, tuple[float, str]] = {}
+_syllabus_context_lock = threading.Lock()
+_SYLLABUS_CACHE_TTL_SECONDS = 3600  # 1 hour
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    now = time.time()
+
+    with _syllabus_context_lock:
+        # Evict expired entries
+        expired_keys = [k for k, v in _SYLLABUS_CONTEXT_CACHE.items() if now - v[0] > _SYLLABUS_CACHE_TTL_SECONDS]
+        for k in expired_keys:
+            del _SYLLABUS_CONTEXT_CACHE[k]
+
+        local_cache = {k: v[1] for k, v in _SYLLABUS_CONTEXT_CACHE.items() if k in learning_objective_ids}
+
+    missing_ids = [obj_id for obj_id in learning_objective_ids if obj_id not in local_cache]
+    newly_fetched = {}
+
+    if missing_ids:
+        try:
+            # Firestore 'in' limit is 30
+            for i in range(0, len(missing_ids), 30):
+                chunk = missing_ids[i:i + 30]
+                snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+                for doc in snapshot:
+                    data = doc.to_dict() or {}
+                    code = data.get('code')
+                    if code:
+                        context_str = (
+                            f"{data.get('board', '')} / {data.get('subject', '')} / "
+                            f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                            f"{code}: {data.get('description', '')}"
+                        )
+                        newly_fetched[code] = context_str
+
+            # Record negative cache for missing IDs to prevent repeated queries
+            for obj_id in missing_ids:
+                if obj_id not in newly_fetched:
+                    newly_fetched[obj_id] = ""
+
+            with _syllabus_context_lock:
+                for k, v in newly_fetched.items():
+                    _SYLLABUS_CONTEXT_CACHE[k] = (now, v)
+        except Exception:
+            # On error, gracefully fall back and do not poison the cache
+            pass
+
+    # Reconstruct contexts preserving the original list's order
     contexts: list[str] = []
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+        ctx = local_cache.get(objective_id)
+        if ctx is None:
+            ctx = newly_fetched.get(objective_id, "")
+        if ctx:
+            contexts.append(ctx)
+
     return " | ".join(contexts)
 
 
