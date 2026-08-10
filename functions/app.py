@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import tempfile
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -614,21 +615,90 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_syllabus_cache: dict[str, tuple[float, str]] = {}
+_syllabus_cache_lock = threading.Lock()
+_SYLLABUS_CACHE_TTL = 3600  # 1 hour
+_SYLLABUS_CACHE_MAX_SIZE = 1000
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
-    contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
-    return " | ".join(contexts)
+    now = time.time()
+    contexts_by_id: dict[str, str] = {}
+    missing_ids: list[str] = []
+
+    # 1. Check Cache
+    with _syllabus_cache_lock:
+        # Evict if cache gets too large (simple clear for bounding)
+        if len(_syllabus_cache) > _SYLLABUS_CACHE_MAX_SIZE:
+            _syllabus_cache.clear()
+
+        for obj_id in learning_objective_ids:
+            if obj_id in _syllabus_cache:
+                expiry, ctx = _syllabus_cache[obj_id]
+                if now < expiry:
+                    # Found in cache, copy to local dict
+                    if ctx: # Don't add empty strings to contexts_by_id, but they are cached as valid misses
+                        contexts_by_id[obj_id] = ctx
+                else:
+                    # Expired
+                    del _syllabus_cache[obj_id]
+                    missing_ids.append(obj_id)
+            else:
+                missing_ids.append(obj_id)
+
+    # 2. Fetch missing IDs from Firestore in batches
+    if missing_ids:
+        unique_missing_ids = list(set(missing_ids))
+        chunk_size = 30
+
+        for i in range(0, len(unique_missing_ids), chunk_size):
+            chunk = unique_missing_ids[i:i + chunk_size]
+            chunk_success = False
+            chunk_fetched: dict[str, str] = {}
+
+            try:
+                snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+                for doc in snapshot:
+                    data = doc.to_dict() or {}
+                    code = data.get("code")
+                    if code:
+                        context_str = (
+                            f"{data.get('board', '')} / {data.get('subject', '')} / "
+                            f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                            f"{code}: {data.get('description', '')}"
+                        )
+                        chunk_fetched[code] = context_str
+                chunk_success = True
+            except Exception as e:
+                print(f"Error fetching syllabus contexts for chunk: {e}")
+                # chunk_success remains False
+
+            if chunk_success:
+                # Update cache and local dict for this successful chunk
+                with _syllabus_cache_lock:
+                    for obj_id in chunk:
+                        ctx = chunk_fetched.get(obj_id, "")
+                        _syllabus_cache[obj_id] = (now + _SYLLABUS_CACHE_TTL, ctx)
+                        if ctx:
+                            contexts_by_id[obj_id] = ctx
+            else:
+                # On failure, we don't cache anything to avoid cache poisoning,
+                # but we can still use whatever was successfully fetched (if any)
+                pass
+
+    # 3. Reconstruct final list in the original requested order
+    final_contexts: list[str] = []
+    # Use a set to avoid adding duplicates if the same ID was requested multiple times
+    seen_contexts = set()
+    for obj_id in learning_objective_ids:
+        ctx = contexts_by_id.get(obj_id)
+        if ctx and ctx not in seen_contexts:
+            final_contexts.append(ctx)
+            seen_contexts.add(ctx)
+
+    return " | ".join(final_contexts)
 
 
 def publish_public_user(uid: str) -> dict[str, Any]:
