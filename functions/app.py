@@ -5,6 +5,8 @@ import base64
 import json
 import os
 import tempfile
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -12,7 +14,6 @@ from urllib.parse import urlparse
 
 import uvicorn
 
-import time
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -614,20 +615,70 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_SYLLABUS_CACHE: dict[str, tuple[float, str]] = {}
+_SYLLABUS_CACHE_LOCK = threading.Lock()
+_SYLLABUS_CACHE_TTL = 3600  # 1 hour
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
+    """
+    Build syllabus context efficiently using batched fetching and an in-memory TTL cache
+    to avoid N+1 query bottlenecks.
+    """
     if not learning_objective_ids:
         return ""
 
-    contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
+    now = time.time()
+    local_cache_snapshot = {}
+    missing_ids = []
+
+    # 1. Read from cache while holding lock
+    with _SYLLABUS_CACHE_LOCK:
+        for obj_id in learning_objective_ids:
+            if obj_id in _SYLLABUS_CACHE:
+                cached_time, cached_val = _SYLLABUS_CACHE[obj_id]
+                if now - cached_time < _SYLLABUS_CACHE_TTL:
+                    local_cache_snapshot[obj_id] = cached_val
+                    continue
+            missing_ids.append(obj_id)
+
+    # 2. Batch fetch missing IDs (Firestore 'in' limit is 30)
+    for i in range(0, len(missing_ids), 30):
+        chunk = missing_ids[i:i + 30]
+        # Fetch all docs matching the codes in this chunk
+        snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+
+        newly_fetched = {}
+        # Record found docs
         for doc in snapshot:
             data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+            code = data.get("code")
+            if code:
+                val = (
+                    f"{data.get('board', '')} / {data.get('subject', '')} / "
+                    f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                    f"{code}: {data.get('description', '')}"
+                )
+                newly_fetched[code] = val
+
+        # Any requested code from this chunk that wasn't found is cached as ""
+        # to prevent repeating queries for missing objectives (N+1 bottleneck)
+        for obj_id in chunk:
+            if obj_id not in newly_fetched:
+                newly_fetched[obj_id] = ""
+
+        # Update cache with newly fetched values from this chunk
+        with _SYLLABUS_CACHE_LOCK:
+            for obj_id, val in newly_fetched.items():
+                _SYLLABUS_CACHE[obj_id] = (time.time(), val)
+                local_cache_snapshot[obj_id] = val
+
+    # 3. Reconstruct list in originally requested deterministic order
+    contexts: list[str] = []
+    for obj_id in learning_objective_ids:
+        val = local_cache_snapshot.get(obj_id)
+        if val:
+            contexts.append(val)
+
     return " | ".join(contexts)
 
 
