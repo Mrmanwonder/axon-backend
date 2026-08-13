@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import uvicorn
 
 import time
+import threading
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -614,20 +615,76 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_syllabus_cache: dict[str, tuple[float, str]] = {}
+_syllabus_cache_lock = threading.Lock()
+SYLLABUS_CACHE_TTL = 3600  # 1 hour
+
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    now = time.time()
+
+    # Clean up expired items periodically if cache gets large
+    if len(_syllabus_cache) > 1000:
+        with _syllabus_cache_lock:
+            if len(_syllabus_cache) > 1000:
+                expired = [k for k, (ts, _) in _syllabus_cache.items() if now - ts > SYLLABUS_CACHE_TTL]
+                for k in expired:
+                    del _syllabus_cache[k]
+
+                # If cache is still too large after removing expired items, clear it all to prevent memory leak
+                if len(_syllabus_cache) > 1000:
+                    _syllabus_cache.clear()
+
+    local_cache_hits = {}
+    missing_ids = []
+
+    with _syllabus_cache_lock:
+        for obj_id in learning_objective_ids:
+            if obj_id in _syllabus_cache and now - _syllabus_cache[obj_id][0] <= SYLLABUS_CACHE_TTL:
+                local_cache_hits[obj_id] = _syllabus_cache[obj_id][1]
+            else:
+                if obj_id not in missing_ids:
+                    missing_ids.append(obj_id)
+
+    fetched_contexts = {}
+    if missing_ids:
+        # Firestore 'in' operator supports up to 30 elements
+        chunk_size = 30
+        for i in range(0, len(missing_ids), chunk_size):
+            chunk = missing_ids[i:i + chunk_size]
+            # Execute batch query
+            snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+
+            chunk_results = {code: "" for code in chunk}
+            for doc in snapshot:
+                data = doc.to_dict() or {}
+                code = data.get('code')
+                if code in chunk_results:
+                    context_str = (
+                        f"{data.get('board', '')} / {data.get('subject', '')} / "
+                        f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                        f"{code}: {data.get('description', '')}"
+                    )
+                    chunk_results[code] = context_str
+
+            fetched_contexts.update(chunk_results)
+
+        # Update cache with fetched items (including empty strings for not-found items)
+        with _syllabus_cache_lock:
+            for k, v in fetched_contexts.items():
+                _syllabus_cache[k] = (now, v)
+                local_cache_hits[k] = v
+
+    # Reconstruct exact results
     contexts: list[str] = []
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+        ctx = local_cache_hits.get(objective_id, "")
+        if ctx:
+            contexts.append(ctx)
+
     return " | ".join(contexts)
 
 
