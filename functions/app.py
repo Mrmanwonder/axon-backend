@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import uuid
+import threading
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
@@ -614,20 +615,68 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_SYLLABUS_CONTEXT_CACHE: dict[str, tuple[float, str]] = {}
+_SYLLABUS_CONTEXT_CACHE_LOCK = threading.Lock()
+_SYLLABUS_CONTEXT_CACHE_TTL_SECONDS = 3600  # 1 hour
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
     contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+    now = time.time()
+    missing_ids = []
+    cached_hits = {}
+
+    with _SYLLABUS_CONTEXT_CACHE_LOCK:
+        for obj_id in learning_objective_ids:
+            cached = _SYLLABUS_CONTEXT_CACHE.get(obj_id)
+            if cached and now - cached[0] < _SYLLABUS_CONTEXT_CACHE_TTL_SECONDS:
+                cached_hits[obj_id] = cached[1]
+            else:
+                missing_ids.append(obj_id)
+
+    fetched_contexts = {}
+    if missing_ids:
+        # Deduplicate missing IDs to avoid redundant queries
+        missing_ids_unique = list(set(missing_ids))
+        chunk_size = 30
+        for i in range(0, len(missing_ids_unique), chunk_size):
+            chunk = missing_ids_unique[i:i + chunk_size]
+            snapshot = syllabus_maps_collection().where("code", "in", chunk).stream()
+
+            # Map retrieved docs to their code
+            retrieved = {}
+            for doc in snapshot:
+                data = doc.to_dict() or {}
+                code = data.get("code")
+                if code:
+                    retrieved[code] = (
+                        f"{data.get('board', '')} / {data.get('subject', '')} / "
+                        f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                        f"{code}: {data.get('description', '')}"
+                    )
+
+            for obj_id in chunk:
+                fetched_contexts[obj_id] = retrieved.get(obj_id, "") # empty string for not found
+
+        with _SYLLABUS_CONTEXT_CACHE_LOCK:
+            # Enforce max size of 1000 items (simple random eviction by clearing)
+            if len(_SYLLABUS_CONTEXT_CACHE) > 1000:
+                _SYLLABUS_CONTEXT_CACHE.clear()
+            for obj_id, ctx in fetched_contexts.items():
+                _SYLLABUS_CONTEXT_CACHE[obj_id] = (now, ctx)
+
+    # Reconstruct in original order
+    for obj_id in learning_objective_ids:
+        if obj_id in cached_hits:
+            ctx = cached_hits[obj_id]
+        else:
+            ctx = fetched_contexts.get(obj_id, "")
+
+        if ctx:
+            contexts.append(ctx)
+
     return " | ".join(contexts)
 
 
