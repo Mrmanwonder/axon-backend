@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import uvicorn
 
 import time
+import threading
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -614,20 +615,84 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_syllabus_cache: dict[str, tuple[float, str]] = {}
+_syllabus_cache_lock = threading.Lock()
+_SYLLABUS_CACHE_TTL = 3600  # 1 hour
+_SYLLABUS_CACHE_MAX_SIZE = 1000
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
-    contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+    now = time.time()
+    results: dict[str, str] = {}
+    missing_ids: list[str] = []
+
+    # 1. Read from cache (fast locked read)
+    with _syllabus_cache_lock:
+        for obj_id in learning_objective_ids:
+            if obj_id in _syllabus_cache:
+                timestamp, context = _syllabus_cache[obj_id]
+                if now - timestamp < _SYLLABUS_CACHE_TTL:
+                    results[obj_id] = context
+                    continue
+                else:
+                    del _syllabus_cache[obj_id]
+            missing_ids.append(obj_id)
+
+    # 2. Fetch missing items in batches
+    if missing_ids:
+        new_results: dict[str, str] = {}
+        # Pre-fill with empty strings (not found)
+        for obj_id in missing_ids:
+            new_results[obj_id] = ""
+
+        # Firestore 'in' queries are limited to 30 items
+        for i in range(0, len(missing_ids), 30):
+            batch = missing_ids[i:i + 30]
+            try:
+                # Use standard where syntax: where("code", "in", batch)
+                snapshot = syllabus_maps_collection().where("code", "in", batch).get()
+                for doc in snapshot:
+                    data = doc.to_dict() or {}
+                    code = data.get('code')
+                    if code and code in new_results:
+                        new_results[code] = (
+                            f"{data.get('board', '')} / {data.get('subject', '')} / "
+                            f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                            f"{code}: {data.get('description', '')}"
+                        )
+            except Exception as e:
+                print(f"Error fetching syllabus contexts: {e}")
+                # Ensure we don't cache on failure
+                for obj_id in batch:
+                    if obj_id in new_results:
+                        del new_results[obj_id]
+                raise e # Fail fast on network/DB errors
+
+        results.update(new_results)
+
+        # 3. Write back to cache (bounded)
+        with _syllabus_cache_lock:
+            # Evict if cache is too large
+            if len(_syllabus_cache) + len(new_results) > _SYLLABUS_CACHE_MAX_SIZE:
+                # Remove oldest 20%
+                sorted_keys = sorted(_syllabus_cache.keys(), key=lambda k: _syllabus_cache[k][0])
+                num_to_remove = int(len(_syllabus_cache) * 0.2) + len(new_results)
+                for k in sorted_keys[:num_to_remove]:
+                    if k in _syllabus_cache:
+                        del _syllabus_cache[k]
+
+            for obj_id, context in new_results.items():
+                _syllabus_cache[obj_id] = (now, context)
+
+    # 4. Construct final deterministic output based on requested order
+    contexts = []
+    for obj_id in learning_objective_ids:
+        ctx = results.get(obj_id)
+        if ctx:
+            contexts.append(ctx)
+
     return " | ".join(contexts)
 
 
