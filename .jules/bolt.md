@@ -1,0 +1,3 @@
+## 2024-05-24 - Batched Fetching & Thread-Safe Caching for Static Firestore Collections
+**Learning:** Sequential `firestore_collection.get()` or query `limit(1).get()` calls for static or slowly-changing datasets in a request loop result in severe N+1 bottlenecks and increased latency (and potentially OOM when attempting to fetch entire collections instead).
+**Action:** When repeatedly resolving IDs to data from static collections (e.g. syllabus items), fetch them using batched `in` queries (limited to max 30 per query in Firestore) combined with a size-bounded, thread-safe in-memory TTL cache (`threading.Lock`). Crucially, cache "not found" results as well to prevent repeated failing queries, and rebuild output deterministically.
