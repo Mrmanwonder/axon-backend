@@ -1,0 +1,5 @@
+## 2024-06-25 - In-Memory Caching for Firestore Syllabus Contexts
+
+**Learning:** In the serverless Python backend (`functions/app.py`), fetching Firestore documents in a loop (N+1 queries) inside a synchronous utility function (`build_syllabus_context`) creates significant latency when fetching contexts for multiple learning objectives (e.g., during grading or plan generation). A previous implementation loaded the entire collection to memory, causing OOMs. The `in` operator query in Firestore combined with a thread-safe `TTLCache` (maxsize=1000, ttl=3600) limits round-trips to the DB and handles repeated lookups efficiently without unbounded memory growth.
+
+**Action:** When implementing in-memory caching for batched Firestore lookups, I will chunk requests into sizes of 30 (Firestore's limit for `in` queries), reconstruct the final output in the order of the originally requested IDs (since `in` alters native result order), and importantly, cache successful 'not found' queries (using empty strings) to prevent re-querying missing IDs and bottlenecking the cache.

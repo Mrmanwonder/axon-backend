@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import threading
+import cachetools
+
 import asyncio
 import base64
 import json
@@ -614,20 +617,83 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+
+
+# Thread-safe TTL cache for syllabus contexts
+# Max 1000 items, expires in 1 hour
+_syllabus_context_cache = cachetools.TTLCache(maxsize=1000, ttl=3600)
+_syllabus_context_lock = threading.Lock()
+
+def _get_from_cache(ids: list[str]) -> tuple[dict[str, str], list[str]]:
+    cached = {}
+    missing = []
+    with _syllabus_context_lock:
+        for obj_id in ids:
+            val = _syllabus_context_cache.get(obj_id)
+            if val is not None:
+                cached[obj_id] = val
+            else:
+                missing.append(obj_id)
+    return cached, missing
+
+def _update_cache(new_data: dict[str, str]):
+    with _syllabus_context_lock:
+        for obj_id, ctx_str in new_data.items():
+            _syllabus_context_cache[obj_id] = ctx_str
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
-    contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
+    # Deduplicate requested IDs to avoid redundant lookups
+    unique_ids = list(dict.fromkeys(learning_objective_ids))
+
+    # 1. Fetch from cache first
+    cached_contexts, missing_ids = _get_from_cache(unique_ids)
+
+    # 2. Fetch missing items from DB in batches of 30 (Firestore 'in' limit)
+    new_contexts: dict[str, str] = {}
+
+    for i in range(0, len(missing_ids), 30):
+        batch_ids = missing_ids[i:i+30]
+
+        # We need to find by code. Since code is not the document ID,
+        # we still use a query but with 'in' operator to batch them
+        snapshot = syllabus_maps_collection().where("code", "in", batch_ids).get()
+
+        # Group returned docs by code
+        batch_results = {}
         for doc in snapshot:
             data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+            code = data.get("code")
+            if code and code not in batch_results:
+                ctx_str = (
+                    f"{data.get('board', '')} / {data.get('subject', '')} / "
+                    f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                    f"{code}: {data.get('description', '')}"
+                )
+                batch_results[code] = ctx_str
+
+        # Handle missing ones (cache empty string to avoid N+1 on missing IDs)
+        for obj_id in batch_ids:
+            if obj_id in batch_results:
+                new_contexts[obj_id] = batch_results[obj_id]
+            else:
+                new_contexts[obj_id] = ""
+
+    # 3. Update cache with newly fetched items
+    if new_contexts:
+        _update_cache(new_contexts)
+
+    # 4. Reconstruct final string keeping original requested order
+    all_contexts = {**cached_contexts, **new_contexts}
+
+    contexts: list[str] = []
+    for objective_id in learning_objective_ids:
+        ctx_str = all_contexts.get(objective_id, "")
+        if ctx_str:
+            contexts.append(ctx_str)
+
     return " | ".join(contexts)
 
 
