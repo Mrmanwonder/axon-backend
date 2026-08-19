@@ -78,6 +78,8 @@ class _FakeCollectionRef:
         for doc_id, data in self._docs.items():
             if op == "==" and data.get(field) == value:
                 matched.append(_FakeDocSnapshot(doc_id, data))
+            elif op == "in" and data.get(field) in value:
+                matched.append(_FakeDocSnapshot(doc_id, data))
         return _FakeQuery(matched)
 
 

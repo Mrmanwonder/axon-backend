@@ -5,6 +5,8 @@ import base64
 import json
 import os
 import tempfile
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -12,7 +14,6 @@ from urllib.parse import urlparse
 
 import uvicorn
 
-import time
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -614,20 +615,61 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_SYLLABUS_CACHE = {}
+_SYLLABUS_CACHE_LOCK = threading.Lock()
+_SYLLABUS_CACHE_TTL_SEC = 900
+
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
     contexts: list[str] = []
+    now = time.time()
+
+    missing_ids = []
+    cached_data_map = {}
+
+    with _SYLLABUS_CACHE_LOCK:
+        for obj_id in learning_objective_ids:
+            cached = _SYLLABUS_CACHE.get(obj_id)
+            if cached and now - cached[0] < _SYLLABUS_CACHE_TTL_SEC:
+                cached_data_map[obj_id] = cached[1]
+            else:
+                missing_ids.append(obj_id)
+
+    if missing_ids:
+        # Batch query in chunks of 30 (Firestore limit is 30 for 'in' queries)
+        chunk_size = 30
+        fetched_data = {}
+        for i in range(0, len(missing_ids), chunk_size):
+            chunk = missing_ids[i:i + chunk_size]
+            snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+
+            # Map retrieved docs
+            for doc in snapshot:
+                data = doc.to_dict() or {}
+                code = data.get("code")
+                if code in chunk:
+                    fetched_data[code] = data
+
+        # Write to cache
+        with _SYLLABUS_CACHE_LOCK:
+            for obj_id in missing_ids:
+                # Store empty dict for 'not found' to prevent N+1 misses
+                data = fetched_data.get(obj_id, {})
+                _SYLLABUS_CACHE[obj_id] = (now, data)
+                cached_data_map[obj_id] = data
+
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
+        data = cached_data_map.get(objective_id, {})
+        if data:
             contexts.append(
                 f"{data.get('board', '')} / {data.get('subject', '')} / "
                 f"{data.get('paper', '')} / {data.get('topic', '')} / "
                 f"{data.get('code', objective_id)}: {data.get('description', '')}"
             )
+
     return " | ".join(contexts)
 
 
