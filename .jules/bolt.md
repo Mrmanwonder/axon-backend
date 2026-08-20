@@ -1,0 +1,3 @@
+## 2024-05-15 - Batched Firestore Queries & Standard Library Imports
+**Learning:** Sequential `.get()` queries inside loops (e.g., `where().limit(1).get()`) cause severe N+1 bottlenecks. Using Firestore's `in` operator allows batching up to 30 keys. When building a thread-safe TTL cache around these batches, `threading.Lock` avoids race conditions but cache hits must be copied locally during the read phase. Finally, standard library imports like `time` and `threading` must be at the very top of the file before other imports.
+**Action:** When pulling multiple records by ID, always use batched `in` queries. Cache both hits and misses (empty values) safely with `threading.Lock`, copying the dictionary contents locally to avoid concurrent iteration/eviction errors.
