@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import time
+import threading
 import asyncio
 import base64
-import json
 import os
 import tempfile
 import uuid
@@ -12,7 +13,6 @@ from urllib.parse import urlparse
 
 import uvicorn
 
-import time
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -34,7 +34,6 @@ from middleware.rate_limit import cors_allowed_origins, is_rate_limited
 
 
 from fastapi import Depends
-from typing import Annotated
 
 # Global dependency to make auth optional
 async def optional_user():
@@ -614,21 +613,66 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_SYLLABUS_CONTEXT_CACHE: dict[str, tuple[float, str]] = {}
+_SYLLABUS_CONTEXT_LOCK = threading.Lock()
+_SYLLABUS_CONTEXT_TTL = 900  # 15 minutes
+
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
-    contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
-    return " | ".join(contexts)
+    now = time.time()
+
+    # Fast lock phase: copy cache hits to avoid race conditions during dict updates
+    local_cache_hits = {}
+    with _SYLLABUS_CONTEXT_LOCK:
+        for obj_id in learning_objective_ids:
+            if obj_id in _SYLLABUS_CONTEXT_CACHE:
+                cached_time, cached_val = _SYLLABUS_CONTEXT_CACHE[obj_id]
+                if now - cached_time < _SYLLABUS_CONTEXT_TTL:
+                    local_cache_hits[obj_id] = cached_val
+                else:
+                    del _SYLLABUS_CONTEXT_CACHE[obj_id]
+
+    missing_ids = [obj_id for obj_id in learning_objective_ids if obj_id not in local_cache_hits]
+
+    new_results = {}
+
+    if missing_ids:
+        # Batch in groups of 30 due to Firestore limits
+        for i in range(0, len(missing_ids), 30):
+            chunk = missing_ids[i:i + 30]
+            snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+
+            for doc in snapshot:
+                data = doc.to_dict() or {}
+                obj_code = data.get("code")
+                if not obj_code:
+                    continue
+
+                context_str = (
+                    f"{data.get('board', '')} / {data.get('subject', '')} / "
+                    f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                    f"{obj_code}: {data.get('description', '')}"
+                )
+                new_results[obj_code] = context_str
+
+        # Cache results, including empty strings for missing objects to avoid repeated N+1 queries
+        with _SYLLABUS_CONTEXT_LOCK:
+            for obj_id in missing_ids:
+                val = new_results.get(obj_id, "")
+                _SYLLABUS_CONTEXT_CACHE[obj_id] = (time.time(), val)
+                local_cache_hits[obj_id] = val
+
+    # Explicitly reconstruct final output to maintain deterministic order
+    final_contexts = []
+    for obj_id in learning_objective_ids:
+        val = local_cache_hits.get(obj_id, "")
+        if val:
+            final_contexts.append(val)
+
+    return " | ".join(final_contexts)
 
 
 def publish_public_user(uid: str) -> dict[str, Any]:
@@ -1271,7 +1315,6 @@ async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
     """
     from datetime import date, datetime, timedelta
     import hashlib
-    import math
     import random
 
     today = (date.fromisoformat(payload.client_date) if payload.client_date else date.today()).isoformat()
@@ -1515,7 +1558,7 @@ async def import_sme_questions(
 
     try:
         result = supabase.table("sme_questions").upsert(records).execute()
-    except Exception as e:
+    except Exception:
         # Try creating table first
         try:
             supabase.rpc("create_sme_questions_table").execute()
