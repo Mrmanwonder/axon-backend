@@ -4,6 +4,7 @@ import time
 import threading
 import asyncio
 import base64
+import json
 import os
 import tempfile
 import uuid
@@ -34,6 +35,7 @@ from middleware.rate_limit import cors_allowed_origins, is_rate_limited
 
 
 from fastapi import Depends
+from typing import Annotated
 
 # Global dependency to make auth optional
 async def optional_user():
@@ -640,9 +642,12 @@ def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     new_results = {}
 
     if missing_ids:
+        # Deduplicate missing ids for efficiency
+        unique_missing_ids = list(set(missing_ids))
+
         # Batch in groups of 30 due to Firestore limits
-        for i in range(0, len(missing_ids), 30):
-            chunk = missing_ids[i:i + 30]
+        for i in range(0, len(unique_missing_ids), 30):
+            chunk = unique_missing_ids[i:i + 30]
             snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
 
             for doc in snapshot:
@@ -660,7 +665,7 @@ def build_syllabus_context(learning_objective_ids: list[str]) -> str:
 
         # Cache results, including empty strings for missing objects to avoid repeated N+1 queries
         with _SYLLABUS_CONTEXT_LOCK:
-            for obj_id in missing_ids:
+            for obj_id in unique_missing_ids:
                 val = new_results.get(obj_id, "")
                 _SYLLABUS_CONTEXT_CACHE[obj_id] = (time.time(), val)
                 local_cache_hits[obj_id] = val
@@ -1315,6 +1320,7 @@ async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
     """
     from datetime import date, datetime, timedelta
     import hashlib
+    import math
     import random
 
     today = (date.fromisoformat(payload.client_date) if payload.client_date else date.today()).isoformat()
@@ -1558,7 +1564,7 @@ async def import_sme_questions(
 
     try:
         result = supabase.table("sme_questions").upsert(records).execute()
-    except Exception:
+    except Exception as e:
         # Try creating table first
         try:
             supabase.rpc("create_sme_questions_table").execute()
