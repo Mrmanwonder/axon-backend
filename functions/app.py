@@ -5,14 +5,14 @@ import base64
 import json
 import os
 import tempfile
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
 import uvicorn
-
-import time
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -614,20 +614,84 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_SYLLABUS_CONTEXT_CACHE_LOCK = threading.Lock()
+_SYLLABUS_CONTEXT_CACHE: dict[str, tuple[float, str]] = {}
+_SYLLABUS_CONTEXT_TTL = 3600  # 1 hour
+_SYLLABUS_CONTEXT_MAX_SIZE = 1000
+
+def _get_syllabus_contexts_from_cache(keys: list[str]) -> tuple[dict[str, str], list[str]]:
+    hits = {}
+    missing = []
+    now = time.time()
+
+    with _SYLLABUS_CONTEXT_CACHE_LOCK:
+        for key in keys:
+            if key in _SYLLABUS_CONTEXT_CACHE:
+                cached_time, val = _SYLLABUS_CONTEXT_CACHE[key]
+                if now - cached_time < _SYLLABUS_CONTEXT_TTL:
+                    hits[key] = val
+                else:
+                    del _SYLLABUS_CONTEXT_CACHE[key]
+                    missing.append(key)
+            else:
+                missing.append(key)
+    return hits, missing
+
+def _update_syllabus_context_cache(updates: dict[str, str]) -> None:
+    now = time.time()
+    with _SYLLABUS_CONTEXT_CACHE_LOCK:
+        for k, v in updates.items():
+            _SYLLABUS_CONTEXT_CACHE[k] = (now, v)
+        if len(_SYLLABUS_CONTEXT_CACHE) > _SYLLABUS_CONTEXT_MAX_SIZE:
+            to_remove = len(_SYLLABUS_CONTEXT_CACHE) - _SYLLABUS_CONTEXT_MAX_SIZE
+            oldest = sorted(_SYLLABUS_CONTEXT_CACHE.items(), key=lambda x: x[1][0])[:to_remove]
+            for k, _ in oldest:
+                if k in _SYLLABUS_CONTEXT_CACHE:
+                    del _SYLLABUS_CONTEXT_CACHE[k]
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    # Deduplicate requested IDs
+    unique_ids = list(dict.fromkeys(learning_objective_ids))
+    hits, missing = _get_syllabus_contexts_from_cache(unique_ids)
+
+    if missing:
+        # Fetch missing in batches (max 30 per 'in' query)
+        BATCH_SIZE = 30
+        new_updates = {}
+        for i in range(0, len(missing), BATCH_SIZE):
+            chunk = missing[i:i + BATCH_SIZE]
+            snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+
+            # Map retrieved docs to their code
+            retrieved = {}
+            for doc in snapshot:
+                data = doc.to_dict() or {}
+                code = data.get("code")
+                if code in chunk and code not in retrieved:
+                    retrieved[code] = (
+                        f"{data.get('board', '')} / {data.get('subject', '')} / "
+                        f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                        f"{code}: {data.get('description', '')}"
+                    )
+
+            # Update missing items, treating those not found as empty string to prevent retry loops
+            for key in chunk:
+                val = retrieved.get(key, "")
+                new_updates[key] = val
+                hits[key] = val
+
+        _update_syllabus_context_cache(new_updates)
+
+    # Reconstruct final result preserving original array order
     contexts: list[str] = []
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+        ctx = hits.get(objective_id, "")
+        if ctx:
+            contexts.append(ctx)
+
     return " | ".join(contexts)
 
 
