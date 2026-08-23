@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import uvicorn
 
 import time
+import threading
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -614,21 +615,74 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+
+_SYLLABUS_CONTEXT_CACHE: dict[str, tuple[float, str]] = {}
+_SYLLABUS_CONTEXT_CACHE_LOCK = threading.Lock()
+_SYLLABUS_CONTEXT_CACHE_TTL = 3600  # 1 hour
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
-    contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
-    return " | ".join(contexts)
+    now = time.time()
+    contexts_by_id = {}
+    missing_ids = []
+
+    # 1. Check Cache
+    with _SYLLABUS_CONTEXT_CACHE_LOCK:
+        for obj_id in learning_objective_ids:
+            cached = _SYLLABUS_CONTEXT_CACHE.get(obj_id)
+            if cached and now - cached[0] < _SYLLABUS_CONTEXT_CACHE_TTL:
+                contexts_by_id[obj_id] = cached[1]
+            else:
+                missing_ids.append(obj_id)
+
+    # 2. Fetch Missing IDs in Batches of 30
+    fetched_contexts = {}
+    if missing_ids:
+        # Deduplicate missing IDs to avoid redundant queries
+        unique_missing_ids = list(set(missing_ids))
+        for i in range(0, len(unique_missing_ids), 30):
+            chunk = unique_missing_ids[i:i+30]
+            try:
+                # Use Firestore 'in' operator to batch fetch
+                snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+                for doc in snapshot:
+                    data = doc.to_dict() or {}
+                    code = data.get('code')
+                    if code:
+                        # Emulate the behavior of limit(1) by only setting the first seen entry for a given code.
+                        if code not in fetched_contexts:
+                            context = (
+                                f"{data.get('board', '')} / {data.get('subject', '')} / "
+                                f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                                f"{code}: {data.get('description', '')}"
+                            )
+                            fetched_contexts[code] = context
+
+            except Exception as e:
+                # Log error and continue; we don't want to swallow completely, but it shouldn't poison the cache
+                print(f"Error fetching syllabus context batch: {e}")
+                # Don't cache negative results on error to prevent cache poisoning
+                # Re-raise to fail fast according to memory rules? Let's just let the exceptions bubble up if it's a real failure
+                raise
+
+        # 3. Update Cache with both hits and misses
+        with _SYLLABUS_CONTEXT_CACHE_LOCK:
+            for obj_id in unique_missing_ids:
+                # Cache successful misses as empty strings to prevent N+1 query bottlenecks
+                ctx = fetched_contexts.get(obj_id, "")
+                _SYLLABUS_CONTEXT_CACHE[obj_id] = (now, ctx)
+                contexts_by_id[obj_id] = ctx
+
+    # 4. Reconstruct in original order
+    final_contexts = []
+    for obj_id in learning_objective_ids:
+        ctx = contexts_by_id.get(obj_id)
+        if ctx:
+            final_contexts.append(ctx)
+
+    return " | ".join(final_contexts)
 
 
 def publish_public_user(uid: str) -> dict[str, Any]:
