@@ -651,12 +651,15 @@ def build_syllabus_context(learning_objective_ids: list[str]) -> str:
                     data = doc.to_dict() or {}
                     code = data.get('code')
                     if code:
-                        context = (
-                            f"{data.get('board', '')} / {data.get('subject', '')} / "
-                            f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                            f"{code}: {data.get('description', '')}"
-                        )
-                        fetched_contexts[code] = context
+                        # Emulate the behavior of limit(1) by only setting the first seen entry for a given code.
+                        if code not in fetched_contexts:
+                            context = (
+                                f"{data.get('board', '')} / {data.get('subject', '')} / "
+                                f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                                f"{code}: {data.get('description', '')}"
+                            )
+                            fetched_contexts[code] = context
+
             except Exception as e:
                 # Log error and continue; we don't want to swallow completely, but it shouldn't poison the cache
                 print(f"Error fetching syllabus context batch: {e}")
