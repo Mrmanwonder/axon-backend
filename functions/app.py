@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
+import threading
 import uvicorn
 
 import time
@@ -614,20 +615,65 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_SYLLABUS_CACHE = {}
+_SYLLABUS_CACHE_LOCK = threading.Lock()
+_SYLLABUS_CACHE_TTL = 3600
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    now = time.time()
+    missing_ids = []
+
+    with _SYLLABUS_CACHE_LOCK:
+        for obj_id in learning_objective_ids:
+            if obj_id in _SYLLABUS_CACHE:
+                cached_time, _ = _SYLLABUS_CACHE[obj_id]
+                if now - cached_time > _SYLLABUS_CACHE_TTL:
+                    missing_ids.append(obj_id)
+            else:
+                missing_ids.append(obj_id)
+
+    if missing_ids:
+        unique_missing = list(set(missing_ids))
+        fetched = {}
+
+        # Firestore 'in' queries are limited to 30 items
+        for i in range(0, len(unique_missing), 30):
+            chunk = unique_missing[i:i + 30]
+            try:
+                snapshots = syllabus_maps_collection().where("code", "in", chunk).get()
+                for doc in snapshots:
+                    data = doc.to_dict() or {}
+                    code = data.get("code")
+                    if code:
+                        fetched[code] = (
+                            f"{data.get('board', '')} / {data.get('subject', '')} / "
+                            f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                            f"{code}: {data.get('description', '')}"
+                        )
+            except Exception as e:
+                # Log or swallow error? Better to raise and let fast fail logic handle it.
+                raise e
+
+        with _SYLLABUS_CACHE_LOCK:
+            fetch_time = time.time()
+            for obj_id in unique_missing:
+                # Cache missing as empty strings to avoid repeated queries for nonexistent IDs
+                _SYLLABUS_CACHE[obj_id] = (fetch_time, fetched.get(obj_id, ""))
+
+    # Reconstruct preserving the exact requested order
     contexts: list[str] = []
-    for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+    with _SYLLABUS_CACHE_LOCK:
+        # Copy to local to prevent eviction mid-iteration
+        local_cache_copy = {obj_id: _SYLLABUS_CACHE.get(obj_id) for obj_id in learning_objective_ids}
+
+    for obj_id in learning_objective_ids:
+        cache_entry = local_cache_copy.get(obj_id)
+        if cache_entry and cache_entry[1]:
+            contexts.append(cache_entry[1])
+
     return " | ".join(contexts)
 
 
