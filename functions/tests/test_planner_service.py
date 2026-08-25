@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from functions.services.planner_service import DailyPlannerServiceV2, PlannerTask
+from functions.services.planner_service import DailyPlannerServiceV2
 
 
 class _FakeDocSnapshot:
@@ -77,6 +77,8 @@ class _FakeCollectionRef:
         matched = []
         for doc_id, data in self._docs.items():
             if op == "==" and data.get(field) == value:
+                matched.append(_FakeDocSnapshot(doc_id, data))
+            elif op == "in" and isinstance(value, list) and data.get(field) in value:
                 matched.append(_FakeDocSnapshot(doc_id, data))
         return _FakeQuery(matched)
 
