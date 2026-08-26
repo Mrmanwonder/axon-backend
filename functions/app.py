@@ -5,14 +5,15 @@ import base64
 import json
 import os
 import tempfile
-import time
-import threading
 import uuid
+import threading
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
 import uvicorn
+
+import time
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -147,10 +148,6 @@ _firestore_client = None
 
 _firestore_database_id = os.environ.get("FIRESTORE_DATABASE_ID", "axon")
 _gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
-
-_SYLLABUS_CONTEXT_CACHE: dict[str, tuple[float, dict[str, Any] | None]] = {}
-_SYLLABUS_CONTEXT_CACHE_LOCK = threading.Lock()
-_SYLLABUS_CONTEXT_CACHE_TTL_SECONDS = 900
 _grading_gateway = None
 _planner_service: "DailyPlannerServiceV2 | None" = None
 _study_pulse_service = None
@@ -618,61 +615,67 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_SYLLABUS_CONTEXT_CACHE: dict[str, tuple[float, str]] = {}
+_SYLLABUS_CONTEXT_CACHE_LOCK = threading.Lock()
+_SYLLABUS_CONTEXT_CACHE_TTL = 900  # 15 minutes
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
     now = time.time()
-    missing_ids = []
+
+    # Fast path: Check cache
     local_cache = {}
+    missing_ids = []
 
     with _SYLLABUS_CONTEXT_CACHE_LOCK:
         for obj_id in learning_objective_ids:
-            entry = _SYLLABUS_CONTEXT_CACHE.get(obj_id)
-            if entry and now - entry[0] < _SYLLABUS_CONTEXT_CACHE_TTL_SECONDS:
-                local_cache[obj_id] = entry[1]
+            cached = _SYLLABUS_CONTEXT_CACHE.get(obj_id)
+            if cached and now - cached[0] < _SYLLABUS_CONTEXT_CACHE_TTL:
+                local_cache[obj_id] = cached[1]
             else:
                 missing_ids.append(obj_id)
 
+    # Fetch missing IDs in batches of 30 (Firestore 'in' query limit)
+    fetched_data = {}
     if missing_ids:
-        # Fetch missing in chunks of 30 (Firestore in limit)
-        fetched_data = {}
-        # Pre-fill all missing as None so we don't requery non-existent ones
-        for obj_id in missing_ids:
-            fetched_data[obj_id] = None
-
-        chunks = [missing_ids[i : i + 30] for i in range(0, len(missing_ids), 30)]
-        for chunk in chunks:
+        unique_missing = list(set(missing_ids))
+        for i in range(0, len(unique_missing), 30):
+            chunk = unique_missing[i:i+30]
             try:
-                snaps = syllabus_maps_collection().where("code", "in", chunk).stream()
-                for snap in snaps:
-                    data = snap.to_dict() or {}
-                    code = data.get("code")
-                    if code and code in fetched_data:
-                        fetched_data[code] = data
+                snapshot = syllabus_maps_collection().where("code", "in", chunk).stream()
+                for doc in snapshot:
+                    data = doc.to_dict() or {}
+                    obj_id = data.get('code')
+                    if obj_id in chunk:
+                        context_str = (
+                            f"{data.get('board', '')} / {data.get('subject', '')} / "
+                            f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                            f"{data.get('code', obj_id)}: {data.get('description', '')}"
+                        )
+                        fetched_data[obj_id] = context_str
             except Exception as e:
-                # In case of fetch failure (e.g. timeout), do not cache these missing_ids
-                # by simply removing them from fetched_data to prevent cache poisoning.
-                print(f"Error fetching syllabus_maps: {e}")
-                for obj_id in chunk:
-                    fetched_data.pop(obj_id, None)
+                print(f"Error fetching syllabus contexts: {e}")
+                # On error, raise it rather than swallowing to prevent partial missing context
+                # and avoid cache poisoning on transient errors
+                raise HTTPException(status_code=500, detail="Error fetching syllabus data") from e
 
+        # Update cache with fetched data and 'not found' empty strings
         with _SYLLABUS_CONTEXT_CACHE_LOCK:
-            current_time = time.time()
-            for obj_id, data in fetched_data.items():
-                _SYLLABUS_CONTEXT_CACHE[obj_id] = (current_time, data)
-                local_cache[obj_id] = data
+            for obj_id in unique_missing:
+                # Cache empty string for 'not found' to prevent N+1 on missing IDs
+                context_str = fetched_data.get(obj_id, "")
+                _SYLLABUS_CONTEXT_CACHE[obj_id] = (now, context_str)
+                local_cache[obj_id] = context_str
 
-    contexts: list[str] = []
-    # Reconstruct iterating through original ordered list
+    # Reconstruct in original order
+    contexts = []
     for obj_id in learning_objective_ids:
-        data = local_cache.get(obj_id)
-        if data:
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', obj_id)}: {data.get('description', '')}"
-            )
+        context_str = local_cache.get(obj_id, "")
+        if context_str:
+            contexts.append(context_str)
+
     return " | ".join(contexts)
 
 
