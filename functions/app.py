@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import uvicorn
 
 import time
+import threading
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -614,20 +615,83 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+# Thread-safe TTL cache for syllabus contexts to avoid N+1 query overhead
+_SYLLABUS_CACHE: dict[str, tuple[float, str]] = {}
+_SYLLABUS_CACHE_LOCK = threading.Lock()
+_SYLLABUS_CACHE_TTL_SEC = 3600  # 1 hour TTL
+
+def _get_syllabus_from_cache(objective_ids: set[str]) -> dict[str, str]:
+    now = time.time()
+    results = {}
+    with _SYLLABUS_CACHE_LOCK:
+        for obj_id in objective_ids:
+            if obj_id in _SYLLABUS_CACHE:
+                cached_time, context = _SYLLABUS_CACHE[obj_id]
+                if now - cached_time < _SYLLABUS_CACHE_TTL_SEC:
+                    results[obj_id] = context
+    return results
+
+def _set_syllabus_to_cache(updates: dict[str, str]):
+    now = time.time()
+    with _SYLLABUS_CACHE_LOCK:
+        # Simple size bound to prevent OOM
+        if len(_SYLLABUS_CACHE) > 5000:
+            # Evict oldest 1000 items
+            oldest = sorted(_SYLLABUS_CACHE.keys(), key=lambda k: _SYLLABUS_CACHE[k][0])[:1000]
+            for k in oldest:
+                _SYLLABUS_CACHE.pop(k, None)
+        for obj_id, context in updates.items():
+            _SYLLABUS_CACHE[obj_id] = (now, context)
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
     if not learning_objective_ids:
         return ""
 
+    unique_ids = set(learning_objective_ids)
+    cached_results = _get_syllabus_from_cache(unique_ids)
+    missing_ids = [uid for uid in unique_ids if uid not in cached_results]
+
+    new_results = {}
+    if missing_ids:
+        # Firestore 'in' query supports up to 30 values
+        chunk_size = 30
+        for i in range(0, len(missing_ids), chunk_size):
+            chunk = missing_ids[i:i + chunk_size]
+            try:
+                # Query all documents matching the chunk of codes
+                snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+
+                # Group by code as multiple docs might have the same code, though usually it's unique
+                for doc in snapshot:
+                    data = doc.to_dict() or {}
+                    code = data.get('code')
+                    if code and code in chunk and code not in new_results:
+                        new_results[code] = (
+                            f"{data.get('board', '')} / {data.get('subject', '')} / "
+                            f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                            f"{code}: {data.get('description', '')}"
+                        )
+            except Exception:
+                # Let exceptions bubble up but we ensure we don't cache partial fails as successful misses later
+                raise
+
+        # Mark missing ones that weren't found in DB as empty string to prevent re-fetching
+        for obj_id in missing_ids:
+            if obj_id not in new_results:
+                new_results[obj_id] = ""
+
+        _set_syllabus_to_cache(new_results)
+
+    # Combine cached and newly fetched results
+    all_results = {**cached_results, **new_results}
+
+    # Reconstruct final contexts in original deterministic order
     contexts: list[str] = []
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+        ctx = all_results.get(objective_id)
+        if ctx:  # Note: skips empty strings for unfound objective IDs
+            contexts.append(ctx)
+
     return " | ".join(contexts)
 
 
