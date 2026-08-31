@@ -2,39 +2,42 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import os
 import tempfile
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
 import uvicorn
-
-import time
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-from middleware.auth import current_user, optional_current_user, initialize_firebase
+from middleware.auth import current_user, initialize_firebase, optional_current_user
+from middleware.rate_limit import cors_allowed_origins, is_rate_limited
 from middleware.supabase_scope import apply_user_scope, assert_table_access
 from middleware.url_safety import assert_safe_https_url
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from services.ai_proxy_service import AiProxyService
+from services.deepgram_auth_service import DeepgramAuthService
 from services.exam_dates_service import OfficialExamDatesService
 from services.grading_service import HandwritingGradingGateway
 from services.planner_service import DailyPlannerServiceV2
 from services.study_pulse_service import StudyPulseService
 from services.university_catalog_service import UniversityCatalogService
 from services.university_program_crawler import UniversityProgramCrawler
-from services.ai_proxy_service import AiProxyService
-from services.deepgram_auth_service import DeepgramAuthService
-from middleware.rate_limit import cors_allowed_origins, is_rate_limited
 
-
-from fastapi import Depends
-from typing import Annotated
 
 # Global dependency to make auth optional
 async def optional_user():
@@ -148,7 +151,7 @@ _firestore_client = None
 _firestore_database_id = os.environ.get("FIRESTORE_DATABASE_ID", "axon")
 _gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
 _grading_gateway = None
-_planner_service: "DailyPlannerServiceV2 | None" = None
+_planner_service: DailyPlannerServiceV2 | None = None
 _study_pulse_service = None
 _exam_dates_service = None
 _uni_catalog_service = None
@@ -614,20 +617,77 @@ async def load_pdf_bytes(payload: AnalyzePdfRequest) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_syllabus_cache: dict[str, tuple[float, str]] = {}
+_syllabus_cache_lock = threading.Lock()
+_SYLLABUS_CACHE_TTL = 3600  # 1 hour
+
 def build_syllabus_context(learning_objective_ids: list[str]) -> str:
+    """
+    Build syllabus context using chunked Firestore 'in' queries (N+1 query fix)
+    and an in-memory TTL cache to improve performance.
+    """
     if not learning_objective_ids:
         return ""
 
+    # Remove duplicates to query less, but we'll rebuild using original order
+    unique_ids = list(dict.fromkeys(learning_objective_ids))
+
+    local_cache: dict[str, str] = {}
+    missing_ids: list[str] = []
+    now = time.time()
+
+    # 1. Check Cache
+    with _syllabus_cache_lock:
+        for obj_id in unique_ids:
+            if obj_id in _syllabus_cache:
+                timestamp, val = _syllabus_cache[obj_id]
+                if now - timestamp < _SYLLABUS_CACHE_TTL:
+                    local_cache[obj_id] = val
+                    continue
+            missing_ids.append(obj_id)
+
+    # 2. Fetch Missing IDs in Chunks (Firestore 'in' limit is 30)
+    fetched_data: dict[str, str] = {}
+    if missing_ids:
+        chunk_size = 30
+        for i in range(0, len(missing_ids), chunk_size):
+            chunk = missing_ids[i:i + chunk_size]
+            try:
+                # Firestore query using 'in' operator
+                snapshot = syllabus_maps_collection().where("code", "in", chunk).get()
+                for doc in snapshot:
+                    data = doc.to_dict() or {}
+                    code = data.get('code')
+                    if code:
+                        val = (
+                            f"{data.get('board', '')} / {data.get('subject', '')} / "
+                            f"{data.get('paper', '')} / {data.get('topic', '')} / "
+                            f"{code}: {data.get('description', '')}"
+                        )
+                        fetched_data[code] = val
+            except Exception:
+                # Re-raise to fail fast rather than returning incomplete data (cache poisoning prevention)
+                raise
+
+        # Fill in 'not found' items with empty string
+        for obj_id in missing_ids:
+            if obj_id not in fetched_data:
+                fetched_data[obj_id] = ""
+
+    # 3. Update Global Cache
+    if fetched_data:
+        with _syllabus_cache_lock:
+            for k, v in fetched_data.items():
+                _syllabus_cache[k] = (now, v)
+                local_cache[k] = v
+
+    # 4. Reconstruct original ordering
     contexts: list[str] = []
     for objective_id in learning_objective_ids:
-        snapshot = syllabus_maps_collection().where("code", is_equal_to=objective_id).limit(1).get()
-        for doc in snapshot:
-            data = doc.to_dict() or {}
-            contexts.append(
-                f"{data.get('board', '')} / {data.get('subject', '')} / "
-                f"{data.get('paper', '')} / {data.get('topic', '')} / "
-                f"{data.get('code', objective_id)}: {data.get('description', '')}"
-            )
+        val = local_cache.get(objective_id, "")
+        if val:
+            contexts.append(val)
+
     return " | ".join(contexts)
 
 
@@ -1269,10 +1329,9 @@ async def v2_generate_daily_plan(payload: V2DailyPlanRequest):
     Returns a complete daily plan using the same algorithm as planner_service.py
     but without any Firestore dependency.
     """
-    from datetime import date, datetime, timedelta
     import hashlib
-    import math
     import random
+    from datetime import date, datetime, timedelta
 
     today = (date.fromisoformat(payload.client_date) if payload.client_date else date.today()).isoformat()
     subjects = payload.subjects or ["Mathematics", "Physics", "Chemistry"]
@@ -1515,7 +1574,7 @@ async def import_sme_questions(
 
     try:
         result = supabase.table("sme_questions").upsert(records).execute()
-    except Exception as e:
+    except Exception:
         # Try creating table first
         try:
             supabase.rpc("create_sme_questions_table").execute()
@@ -1524,7 +1583,7 @@ async def import_sme_questions(
         try:
             result = supabase.table("sme_questions").upsert(records).execute()
         except Exception as e2:
-            raise HTTPException(status_code=500, detail=f"Import failed: {str(e2)}")
+            raise HTTPException(status_code=500, detail=f"Import failed: {e2!s}")
 
     return {
         "imported": len(records),
@@ -1539,8 +1598,9 @@ async def get_sme_questions(
     user: dict[str, Any] | None = Depends(optional_current_user),
 ):
     """Get saved questions from SaveMyExams."""
-    import requests
     import sys
+
+    import requests
     SUPABASE_URL = "https://anmfwzxyvqxyxxeobxti.supabase.co"
     SUPABASE_KEY = "sb_publishable_fIbfGtT5yyFaogq4DQAuxw_tZ54kolM"
     
