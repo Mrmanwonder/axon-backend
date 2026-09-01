@@ -8,4 +8,6 @@ export * from "./attribution.js";
 export * from "./reconcile.js";
 export * from "./confidence.js";
 export * from "./quality_floor.js";
+export * from "./page.js";
+export * from "./crop.js";
 export * from "./prompts.js";

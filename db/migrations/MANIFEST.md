@@ -61,3 +61,39 @@ Note the three entries whose *names* carry an earlier date
 (`20260811120000_board_caie` etc., applied 20260824) — they were written
 earlier and applied later. Not investigated further here; flagging it so a
 future migration-tooling change doesn't get confused by the mismatch.
+
+
+## Added 2026-09-01 (WP3 / WP4)
+
+Four migrations, applied live in this order:
+
+| version | name | what it does |
+| --- | --- | --- |
+| `20260901120000` | `crop_stage_enum_and_status` | `cropping` in `extraction_status`, `paper_page.crop_status` |
+| `20260901120100` | `crop_stage_functions` | `advance_after_structure` hands off to cropping; `advance_after_crop`; `apply_region_crops` |
+| `20260901120200` | `sweep_covers_crop` | the sweep closes out a crop left running under a run it fails |
+| `20260901120300` | `crop_functions_revoke_direct_grants` | the grants correction below |
+
+The last one is worth reading before writing any new `SECURITY DEFINER`
+function against this project, because it is the *second* time the same
+question has been got wrong from the opposite direction.
+
+On 2026-08-31, `apply_region_confidence` was fixed by revoking from
+`PUBLIC` after revoking from `anon` and `authenticated` turned out to be a
+no-op — Postgres grants `EXECUTE` to `PUBLIC` on creation and both roles
+inherit through it.
+
+On 2026-09-01, revoking from `PUBLIC` alone turned out to be insufficient:
+this project also runs `ALTER DEFAULT PRIVILEGES` on the `public` schema
+(Axon-Site's `20260826074500_public_schema_default_grants.sql`), which
+grants `EXECUTE` to `anon` and `authenticated` **directly** on every new
+function. A new function therefore carries both kinds of grant at once.
+
+**Revoke from all three, and then read `pg_proc.proacl` to check.** A
+correct-looking `REVOKE` proves nothing; the ACL is the only thing that
+answers the question. Both crop functions now read
+`{postgres=X/postgres,service_role=X/postgres}`.
+
+The `page_source` enum gained `'camera'` and `'pdf'` in the same session
+(`20260901090000`, applied from the Axon-Site repo, where the rest of the
+`page_source` history lives).

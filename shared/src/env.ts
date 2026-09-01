@@ -43,6 +43,7 @@ export interface Env {
   // a deliberate gap tracked for §9.2, not an omission here).
   TRIAGE_QUEUE?: Queue;
   STRUCTURE_QUEUE?: Queue;
+  CROP_QUEUE?: Queue;
   CONTENT_QUEUE?: Queue;
   RECONCILE_QUEUE?: Queue;
   ADJUDICATE_QUEUE?: Queue;

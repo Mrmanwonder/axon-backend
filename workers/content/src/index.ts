@@ -2,6 +2,7 @@ import { callModel } from "@mastery/shared/openrouter.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
 import { imageRef } from "@mastery/shared/r2.js";
 import { takeBox } from "@mastery/shared/contract.js";
+import { pageDimensions } from "@mastery/shared/page.js";
 import { SYSTEM, instruction, SCHEMA, validate } from "@mastery/shared/prompts/content.v1.js";
 import type { Env } from "@mastery/shared/env.js";
 
@@ -77,7 +78,7 @@ const handler = consumeQueue<ContentMessage>(
     const { data: marks } = await sb.from("teacher_mark").select("shape, mark_class, page_number").eq("region_id", regionId);
     const { data: firstPage } = await sb
       .from("paper_page")
-      .select("layer_fallback, conditioning_meta")
+      .select("layer_fallback, conditioning_meta, quality_signals")
       .eq("paper_id", region.paper_id)
       .eq("page_number", spans[0].page)
       .maybeSingle();
@@ -105,9 +106,27 @@ const handler = consumeQueue<ContentMessage>(
     });
 
     try {
-      const meta = (firstPage?.conditioning_meta as any) ?? {};
-      const width = meta.width ?? 2400;
-      const height = meta.height ?? 3200;
+      // See @mastery/shared/page.ts for why there is no default here. A region
+      // on a page whose size cannot be established is flagged for review rather
+      // than filled in against a guessed page shape — every box it produced
+      // would be wrong by an unknown amount, which is worse than an admitted
+      // gap (CLAUDE.md rule 4).
+      const dims = pageDimensions((firstPage ?? {}) as any);
+      if (!dims) {
+        await sb
+          .from("question_region")
+          .update({
+            extract_status: "done",
+            confidence_tier: "unreadable",
+            needs_review: true,
+            confidence_signals: { unreadable_reason: "We could not work out the size of this page, so we cannot say where anything on it sits." },
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", regionId);
+        await advanceAndEnqueue(env, sb, runId);
+        return { detail: { unreadable: "no page dimensions" } };
+      }
+      const { width, height } = dims;
 
       const label = field(parsed.question_label as any, spans, width, height);
       const question = field(parsed.question_text, spans, width, height);
