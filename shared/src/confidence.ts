@@ -1,7 +1,18 @@
-// The confidence-tier logic behind AXON_FIX_BRIEF.md §4.A4: two of these four
-// signals are currently paper-scoped rather than question-scoped, which is
-// why 0 of 48 live regions have ever reached "confident" (see the brief for
-// why that isn't safe to just relax — §6.3 is the tracked fix, not this file).
+// The confidence-tier logic behind AXON_FIX_BRIEF.md §4.A4. Originally two of
+// these four signals were paper-scoped rather than question-scoped — a
+// discrepancy anywhere on the paper, or a layer-fallback page anywhere in the
+// booklet, vetoed *every* question's confidence, which is why 0 of 48 live
+// regions ever reached "confident" and the bulk-accept path was permanently
+// empty. Both are region-scoped now (§6.3):
+//
+//   - `arithmeticOk` is computed per region by the caller (mastery-reconcile),
+//     using reconcile()'s own suspect ranking — only the region(s) actually
+//     implicated in the discrepancy fail this signal; a clean question on a
+//     paper with one bad total can still reach confident.
+//   - a layer-fallback page no longer vetoes the tier outright. The caller
+//     downgrades that region's `recognition` by one step instead (see
+//     workers/reconcile/src/index.ts), scoped to the pages the region's own
+//     spans actually touch.
 
 export type ConfidenceTier = "confident" | "unsure" | "unreadable";
 export type Recognition = "high" | "medium" | "low" | null;
@@ -9,12 +20,10 @@ export type Recognition = "high" | "medium" | "low" | null;
 export interface AssessInput {
   recognition: Recognition;
   numberingSound: boolean;
-  /** Paper-level today (AXON_FIX_BRIEF.md §4.A4) — whether the whole paper's totals reconcile. */
-  paperReconciled: boolean;
+  /** Region-scoped (§6.3): whether this specific region is implicated in the paper's reconciliation discrepancy, if it has one. True (passes) for a region the discrepancy isn't attributable to, even on an otherwise-unreconciled paper. */
+  arithmeticOk: boolean;
   awarded: number | null;
   available: number | null;
-  /** Paper-level today (AXON_FIX_BRIEF.md §4.A4) — true if any page on the paper used the non-red-ink or student-wrote-in-red fallback. */
-  layerFallback: boolean;
   unreadable: boolean;
 }
 
@@ -37,7 +46,7 @@ export function assess(input: AssessInput): AssessResult {
     // other three signals are what turn that into confidence.
     recognition: input.recognition === "high" || input.recognition === "medium",
     structural: input.numberingSound,
-    arithmetic: input.paperReconciled,
+    arithmetic: input.arithmeticOk,
     plausibility: plausible(input.awarded, input.available),
   };
   if (input.unreadable || input.recognition === null) {
@@ -45,8 +54,16 @@ export function assess(input: AssessInput): AssessResult {
   }
   if (input.recognition === "low") return { tier: "unsure", signals };
   const allPass = Object.values(signals).every(Boolean);
-  if (allPass && !input.layerFallback) return { tier: "confident", signals };
+  if (allPass) return { tier: "confident", signals };
   return { tier: "unsure", signals };
+}
+
+/** One step down the recognition ladder — used to fold a page-scoped
+    layer-fallback into the recognition signal instead of a paper-wide veto. */
+export function downgradeRecognition(recognition: Recognition): Recognition {
+  if (recognition === "high") return "medium";
+  if (recognition === "medium") return "low";
+  return recognition;
 }
 
 function plausible(awarded: number | null, available: number | null): boolean {

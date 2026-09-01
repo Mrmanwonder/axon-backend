@@ -30,6 +30,19 @@ Project `dlgcqieyevoebefhcggi`. Version, then name. Newest last.
 | 20260826073419 | phase3_3_missing_fk_indexes |
 | 20260826074533 | public_schema_default_grants |
 | 20260827075741 | model_call_error_detail |
+| 20260901045632 | apply_region_confidence_rpc |
+| 20260901045730 | sweep_resets_done_pages_too |
+| 20260901045753 | sweep_resets_done_pages_too_fix |
+
+The last three are from this branch (AXON_FIX_BRIEF.md §9.1 and §9.3):
+`apply_region_confidence_rpc` adds the single-statement confidence update
+`workers/reconcile/src/index.ts` now calls instead of one UPDATE per region;
+the two `sweep_resets_done_pages_too*` migrations replace
+`private.sweep_stuck_runs()` so it also resets a page stuck at
+`structure_status = 'done'` under a run it just failed, not only `'running'`
+(the `_fix` migration corrects the first attempt, which had also changed the
+existing `'running'` -> `'failed'` behavior instead of leaving it alone —
+`functions.sql` reflects only the corrected, final version).
 
 Note the three entries whose *names* carry an earlier date
 (`20260811120000_board_caie` etc., applied 20260824) — they were written

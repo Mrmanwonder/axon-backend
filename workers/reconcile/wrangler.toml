@@ -7,13 +7,14 @@ compatibility_flags = ["nodejs_compat"]
 binding = "ADJUDICATE_QUEUE"
 queue = "adjudicate-queue"
 
-# NOTE: unlike every other consumer in this pipeline, mastery-reconcile has
-# no SELF_QUEUE binding. That is not an oversight in this file — it is a
-# faithful reconstruction of the live worker, tracked as a real gap in
-# AXON_FIX_BRIEF.md §4.D2: a retryable failure here falls through to the
+# Added per AXON_FIX_BRIEF.md §9.2 — every other consumer in this pipeline
+# already has this. Without it, a retryable failure here fell through to the
 # queue's native message.retry() instead of shared/worker.ts's manual
-# re-enqueue path. §9.2 is "add a SELF_QUEUE producer here"; not done in
-# this port, which reconstructs current live behaviour rather than fixing it.
+# re-enqueue path (§4.D2). Not a functional bug on its own (the native
+# fallback works), just an inconsistency the shared retry path assumes away.
+[[queues.producers]]
+binding = "SELF_QUEUE"
+queue = "reconcile-queue"
 
 [[queues.consumers]]
 queue = "reconcile-queue"
