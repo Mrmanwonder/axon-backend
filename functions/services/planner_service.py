@@ -54,12 +54,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import networkx as nx
 from google.cloud import firestore
+from .syllabus_cache import get_all_syllabus_maps
 
 logger = logging.getLogger(__name__)
 
 _SYLLABUS_CACHE_TTL_SECONDS = int(os.environ.get("SYLLABUS_CACHE_TTL_SECONDS", "900"))
 _SYLLABUS_SUBJECT_CACHE: Dict[str, Tuple[float, Dict[str, dict]]] = {}
-_SYLLABUS_ALL_CACHE: Tuple[float, Dict[str, dict]] | None = None
 
 # ══════════════════════════════════════════════════════════════
 # §1  ENUMERATIONS & CONSTANTS
@@ -860,14 +860,7 @@ class FirestoreHydrator:
             return []
 
     def _load_all_syllabus_maps(self) -> Dict[str, dict]:
-        global _SYLLABUS_ALL_CACHE
-        now = time_module.time()
-        if _SYLLABUS_ALL_CACHE and now - _SYLLABUS_ALL_CACHE[0] < _SYLLABUS_CACHE_TTL_SECONDS:
-            return {k: dict(v) for k, v in _SYLLABUS_ALL_CACHE[1].items()}
-        snaps = self.db.collection("syllabus_maps").stream()
-        all_maps = {s.id: s.to_dict() for s in snaps}
-        _SYLLABUS_ALL_CACHE = (now, all_maps)
-        return {k: dict(v) for k, v in all_maps.items()}
+        return get_all_syllabus_maps(self.db)
 
     def load_analytics(self) -> dict:
         return self._safe_doc("analytics", "summary")
