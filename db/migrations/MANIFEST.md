@@ -33,8 +33,21 @@ Project `dlgcqieyevoebefhcggi`. Version, then name. Newest last.
 | 20260901045632 | apply_region_confidence_rpc |
 | 20260901045730 | sweep_resets_done_pages_too |
 | 20260901045753 | sweep_resets_done_pages_too_fix |
+| 20260901050006 | revoke_subscribers_public_access |
+| 20260901050315 | document_service_role_only_tables |
+| 20260901050352 | restrict_apply_region_confidence_to_service_role |
+| 20260901050418 | restrict_apply_region_confidence_to_service_role_v2 |
 
-The last three are from this branch (AXON_FIX_BRIEF.md §9.1 and §9.3):
+The last four are §9.4 security fixes (E2, E5) from this same branch — see
+`docs/SECURITY.md`. `restrict_apply_region_confidence_to_service_role` (no
+suffix) turned out to be a no-op — it revoked from `anon`/`authenticated`
+directly, which doesn't touch the `PUBLIC`-pseudo-role grant Postgres
+creates by default and that those roles inherit through; `_v2` is the real
+fix (`REVOKE ... FROM PUBLIC`). Both are kept in this history rather than
+silently replaced, since it's exactly the mistake `docs/SECURITY.md`
+documents finding.
+
+The three before those are also from this branch (AXON_FIX_BRIEF.md §9.1 and §9.3):
 `apply_region_confidence_rpc` adds the single-statement confidence update
 `workers/reconcile/src/index.ts` now calls instead of one UPDATE per region;
 the two `sweep_resets_done_pages_too*` migrations replace

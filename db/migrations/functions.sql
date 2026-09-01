@@ -525,6 +525,16 @@ end; $function$;
 -- mastery-content before batch_size was capped at 1 (§3.3), which is fine
 -- at today's <=7-question papers and would not be at ~35+. Verified against
 -- a synthetic 60-row batch before this shipped.
+--
+-- SECURITY DEFINER, service_role only — EXECUTE is explicitly revoked from
+-- PUBLIC (Postgres grants it there by default on CREATE FUNCTION, which
+-- anon/authenticated then inherit; revoking from anon/authenticated
+-- directly does NOT remove that, a mistake this function's own first
+-- migration made and get_advisors(type:"security") caught within minutes —
+-- see the two REVOKE statements below, applied as a follow-up on this same
+-- branch). Worker-only: called solely from
+-- workers/reconcile/src/index.ts's service-role client, never by a
+-- browser/authenticated session.
 -- ============================================================
 CREATE OR REPLACE FUNCTION public.apply_region_confidence(p_rows jsonb)
  RETURNS integer
@@ -545,6 +555,9 @@ begin
   return v_count;
 end;
 $$;
+
+revoke execute on function public.apply_region_confidence(jsonb) from public;
+grant execute on function public.apply_region_confidence(jsonb) to service_role;
 
 -- ============================================================
 -- public.claim_deletions / public.finish_deletion — the R2 garbage
