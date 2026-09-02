@@ -1,0 +1,24 @@
+name = "mastery-api"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[r2_buckets]]
+binding = "ORIGINALS"
+bucket_name = "axon-originals"
+
+[[r2_buckets]]
+binding = "DERIVED"
+bucket_name = "axon-derived"
+
+[[queues.producers]]
+binding = "TRIAGE_QUEUE"
+queue = "triage-queue"
+
+[[queues.producers]]
+binding = "EXPLAIN_QUEUE"
+queue = "explain-queue"
+
+# Secrets: ASSET_SIGNING_SECRET, MASTERY_ASSET_URL, R2_ACCESS_KEY_ID,
+# R2_BUCKET_DERIVED, R2_BUCKET_ORIGINALS, R2_ENDPOINT, R2_SECRET_ACCESS_KEY,
+# SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL

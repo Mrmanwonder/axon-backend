@@ -1,0 +1,33 @@
+name = "mastery-content"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[r2_buckets]]
+binding = "ORIGINALS"
+bucket_name = "axon-originals"
+
+[[r2_buckets]]
+binding = "DERIVED"
+bucket_name = "axon-derived"
+
+[[queues.producers]]
+binding = "RECONCILE_QUEUE"
+queue = "reconcile-queue"
+
+[[queues.producers]]
+binding = "SELF_QUEUE"
+queue = "content-queue"
+
+[[queues.consumers]]
+queue = "content-queue"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 10
+dead_letter_queue = "content-dlq"
+
+# Secrets: ASSET_SIGNING_SECRET, GOOGLE_API_KEY, GROQ_API_KEY (legacy, unused),
+# MASTERY_ASSET_URL, OPENCODE_API_KEY (legacy, unused), OPENROUTER_API_KEY
+# (legacy, unused — see AXON_FIX_BRIEF.md §F3), SUPABASE_SERVICE_ROLE_KEY,
+# SUPABASE_URL

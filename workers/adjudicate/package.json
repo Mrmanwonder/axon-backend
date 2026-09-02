@@ -1,0 +1,17 @@
+{
+  "name": "@mastery/adjudicate",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "dependencies": {
+    "@mastery/shared": "*"
+  },
+  "devDependencies": {
+    "wrangler": "^4.127.0"
+  }
+}

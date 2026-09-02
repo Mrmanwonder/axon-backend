@@ -1,0 +1,35 @@
+name = "mastery-triage"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[r2_buckets]]
+binding = "ORIGINALS"
+bucket_name = "axon-originals"
+
+[[r2_buckets]]
+binding = "DERIVED"
+bucket_name = "axon-derived"
+
+[[queues.producers]]
+binding = "STRUCTURE_QUEUE"
+queue = "structure-queue"
+
+# Manual re-enqueue target for shared/worker.ts's retry path (see
+# AXON_FIX_BRIEF.md §4.D2 — this binding is what reconcile is missing).
+[[queues.producers]]
+binding = "SELF_QUEUE"
+queue = "triage-queue"
+
+[[queues.consumers]]
+queue = "triage-queue"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "triage-dlq"
+
+# Secrets (set via `wrangler secret put`, not stored here):
+#   ASSET_SIGNING_SECRET, GOOGLE_API_KEY, GROQ_API_KEY (legacy, unused — see
+#   AXON_FIX_BRIEF.md §F3), MASTERY_ASSET_URL, SUPABASE_SERVICE_ROLE_KEY,
+#   SUPABASE_URL

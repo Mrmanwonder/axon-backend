@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  typecheck-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  dry-run:
+    runs-on: ubuntu-latest
+    needs: typecheck-and-test
+    strategy:
+      matrix:
+        worker: [triage, structure, content, reconcile, adjudicate, explain, sweep, api]
+      # One worker's dry-run failing should not hide the result for the rest.
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # A dry run parse-checks and bundles the worker without deploying or
+      # touching any live binding — it does not need account credentials.
+      - run: npx wrangler deploy --dry-run
+        working-directory: workers/${{ matrix.worker }}
+
+  # Deploys only run from main, and only once typecheck/tests/dry-run have
+  # passed on this exact commit. See docs/DEPLOY.md for the manual
+  # keep_bindings requirement this workflow relies on wrangler to handle —
+  # `wrangler deploy` preserves existing secrets by default, but ALWAYS
+  # verify bindings after the first deploy from this repo per
+  # AXON_FIX_BRIEF.md §5.3.5.
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [typecheck-and-test, dry-run]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    strategy:
+      matrix:
+        worker: [triage, structure, content, reconcile, adjudicate, explain, sweep, api]
+      # One worker's deploy failing should not silently skip verifying the
+      # rest — each is independent and every failure should be visible.
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx wrangler deploy
+        working-directory: workers/${{ matrix.worker }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

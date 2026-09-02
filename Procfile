@@ -1,1 +1,0 @@
-web: cd functions && gunicorn -c gunicorn.conf.py app:app
