@@ -11,12 +11,23 @@ bucket_name = "axon-originals"
 binding = "DERIVED"
 bucket_name = "axon-derived"
 
-# Structure hands off to cropping, not straight to content (AXON_FIX_BRIEF.md
-# §8). The content producer binding is gone with it: mastery-crop is what
-# enqueues content now, once a page's crops have settled.
+# Structure hands off to cropping when the crop stage is switched on
+# (AXON_FIX_BRIEF.md §8), and straight to content when it is not — the flag
+# lives in the database (`private.feature_flag`, key `crop_stage`) and can be
+# flipped without a redeploy. So this worker binds BOTH producers and lets
+# `advance_after_structure` decide which one it uses.
+#
+# The content binding was briefly removed when the crop stage was added, on the
+# assumption that mastery-crop would always be the thing enqueuing content.
+# That assumption is what made the flag-off path impossible and the deploy
+# ordering load-bearing. Both bindings, always.
 [[queues.producers]]
 binding = "CROP_QUEUE"
 queue = "crop-queue"
+
+[[queues.producers]]
+binding = "CONTENT_QUEUE"
+queue = "content-queue"
 
 [[queues.producers]]
 binding = "RECONCILE_QUEUE"
