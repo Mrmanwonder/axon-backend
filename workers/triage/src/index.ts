@@ -15,6 +15,7 @@ interface Page {
   page_number: number;
   r2_bucket: string | null;
   r2_key: string;
+  thumb_key: string | null;
   quality_verdict: string | null;
   quality_signals: QualitySignals | null;
 }
@@ -37,7 +38,7 @@ const handler = consumeQueue<TriageMessage>(
 
     const { data: pages } = await sb
       .from("paper_page")
-      .select("page_number, r2_bucket, r2_key, quality_verdict, quality_signals")
+      .select("page_number, r2_bucket, r2_key, thumb_key, quality_verdict, quality_signals")
       .eq("paper_id", run.paper_id)
       .not("r2_key", "is", null)
       .order("page_number")
@@ -55,14 +56,23 @@ const handler = consumeQueue<TriageMessage>(
     await sb.rpc("run_advance", { p_run_id: runId, p_to: "triaging" });
     await beat();
 
+    // The thumbnail, where there is one. The question at this stage is "is this
+    // a marked exam paper", not "what does it say" — the code comment had said
+    // so for months while the stage went on sending whole 2400px pages, at
+    // 27-43 seconds for a two-page paper (AXON_FIX_BRIEF.md §7.5 / B9). A 512px
+    // copy settles the same question, and the payload is what the latency was.
+    //
+    // The full page is still the fallback, not an error: every page written
+    // before the client started producing thumbnails has `thumb_key` null, and
+    // triage refusing to read them would turn a latency fix into an outage for
+    // the existing library. A thumbnail always lives in `derived` regardless of
+    // where the page itself went.
     const images = await Promise.all(
-      pages.map((p: Page) =>
-        // Low detail: the question here is "is there marking on this", not "what
-        // does it say", and full detail would cost several times as much to
-        // answer a question a thumbnail settles.
-        imageRef(env, (p.r2_bucket as any) ?? "derived", p.r2_key, "low")
-      )
+      pages.map((p: Page) => (p.thumb_key
+        ? imageRef(env, "derived", p.thumb_key, "low")
+        : imageRef(env, (p.r2_bucket as any) ?? "derived", p.r2_key, "low")))
     );
+    const onThumbs = pages.filter((p: Page) => !!p.thumb_key).length;
 
     const { parsed } = await callModel({
       env,
@@ -102,13 +112,27 @@ const handler = consumeQueue<TriageMessage>(
     // Reset every page's structure_status to pending before fan-out — a
     // second run over the same paper otherwise finds every page already
     // "done" from the first run and skips them all. See AXON_FIX_BRIEF.md §3.2.
-    await sb.from("paper_page").update({ structure_status: "pending" }).eq("paper_id", run.paper_id);
+    // `crop_status` goes with it for exactly the same reason: the crop stage
+    // has the same "already done, advance and skip" re-entry path, so leaving
+    // it terminal would make a second run's cropping a no-op that reused the
+    // first run's crops — cut against the first run's boxes.
+    await sb.from("paper_page").update({ structure_status: "pending", crop_status: "pending" }).eq("paper_id", run.paper_id);
     const { data: allPages } = await sb.from("paper_page").select("id").eq("paper_id", run.paper_id).not("r2_key", "is", null);
     if (env.STRUCTURE_QUEUE && allPages?.length) {
       await env.STRUCTURE_QUEUE.sendBatch(allPages.map((page: { id: string }) => ({ body: { run_id: runId, page_id: page.id } })));
     }
 
-    return { detail: { classification: parsed.classification, pages: allPages?.length ?? 0 } };
+    // Recorded so §7.7's "triage latency drops to single-digit seconds" can be
+    // read straight off the data: `model_call.latency_ms` alone cannot say
+    // whether a given call was on thumbnails or on full pages.
+    return {
+      detail: {
+        classification: parsed.classification,
+        pages: allPages?.length ?? 0,
+        looked_at: pages.length,
+        on_thumbnails: onThumbs,
+      },
+    };
   },
   async ({ sb, msg }, error) => {
     const runId = msg.run_id;

@@ -16,6 +16,14 @@ schema and the RPC definitions... They exist only in the live database."
   on 2026-09-01. Read-only reference — reapplying these is a
   `CREATE OR REPLACE FUNCTION`, safe to run against the same schema, but
   this directory is not wired into any migration runner.
+- **`2026*.sql`** — the migrations written *from this repository*, applied
+  live and kept here in full. These are replayable, unlike the reference
+  material above: every statement in them was applied exactly as written.
+  The WP3/WP4 set (`20260901120000` through `20260901120300`) adds the
+  `cropping` run status, `paper_page.crop_status`, `advance_after_crop`,
+  `apply_region_crops`, the crop clauses in the sweep, and the grant
+  correction that followed from reading the advisor rather than trusting
+  the revoke.
 - **`MANIFEST.md`** — the ordered list of the 26 migrations Supabase has
   actually recorded for this project (version + name only; Supabase's
   migration history table does not retain the SQL body, so the statements

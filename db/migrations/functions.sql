@@ -1,7 +1,8 @@
 -- Reference snapshot of RPC/trigger functions the pipeline and frontend
 -- depend on, pulled verbatim via pg_get_functiondef() against the live
--- project (dlgcqieyevoebefhcggi) on 2026-09-01. See README.md — this is
--- documentation, not a migration this repo's tooling runs.
+-- project (dlgcqieyevoebefhcggi) on 2026-09-01, and kept in step with it as
+-- this repo's own migrations land. See README.md — this is documentation,
+-- not a migration this repo's tooling runs.
 
 -- ============================================================
 -- private.run_lock — per-run advisory lock used by run_advance and the
@@ -69,11 +70,78 @@ $function$;
 -- ============================================================
 -- public.advance_after_structure — called after every page's structure
 -- pass; only actually advances the run once every page on the paper is
--- past 'pending'/'running'. Returns which regions to fan out to
--- CONTENT_QUEUE, and whether to skip straight to RECONCILE_QUEUE for a
--- paper with no regions at all.
+-- past 'pending'/'running'.
+--
+-- Rewritten 2026-09-01 for the crop stage (AXON_FIX_BRIEF.md §8): it used
+-- to advance straight to 'content' and return the region ids to fan out to
+-- CONTENT_QUEUE. It now advances to 'cropping' and returns the *page* ids
+-- for CROP_QUEUE; advance_after_crop is what returns the region ids once
+-- the crops have settled. `enqueue_reconcile` keeps its old meaning
+-- exactly — a paper with no regions at all has nothing to crop and nothing
+-- to read, and goes straight to reconciliation rather than sitting in a
+-- stage with no work in it.
 -- ============================================================
 CREATE OR REPLACE FUNCTION public.advance_after_structure(p_run_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_paper   uuid;
+  v_pending integer;
+  v_regions integer;
+  v_pages   uuid[];
+begin
+  perform private.run_lock(p_run_id);
+  select paper_id into v_paper from public.extraction_run where id = p_run_id;
+  if v_paper is null then return jsonb_build_object('advanced', false); end if;
+
+  select count(*) into v_pending from public.paper_page
+   where paper_id = v_paper and structure_status in ('pending', 'running');
+  if v_pending > 0 then return jsonb_build_object('advanced', false); end if;
+
+  if (select status from public.extraction_run where id = p_run_id) <> 'structure' then
+    return jsonb_build_object('advanced', false);
+  end if;
+
+  select count(*) into v_regions
+    from public.question_region
+   where run_id = p_run_id and extract_status = 'pending';
+
+  if v_regions = 0 then
+    perform public.run_advance(p_run_id, 'content');
+    return jsonb_build_object('advanced', true, 'enqueue_crop', '[]'::jsonb, 'enqueue_reconcile', true);
+  end if;
+
+  perform public.run_advance(p_run_id, 'cropping');
+
+  select array_agg(distinct pp.id) into v_pages
+    from public.paper_page pp
+    join public.question_region qr on qr.paper_id = pp.paper_id
+    join lateral jsonb_array_elements(qr.page_spans) span on true
+   where qr.run_id = p_run_id
+     and pp.paper_id = v_paper
+     and pp.r2_key is not null
+     and (span ->> 'page')::int = pp.page_number;
+
+  return jsonb_build_object(
+    'advanced', true,
+    'enqueue_crop', coalesce(to_jsonb(v_pages), '[]'::jsonb),
+    'enqueue_reconcile', false);
+end; $function$;
+
+-- ============================================================
+-- public.advance_after_crop — the gate between cropping and content.
+--
+-- Counts only pages still 'pending' or 'running', so a page whose crop
+-- FAILED is counted as finished and the run moves on. That one omission is
+-- the whole "content waits for crops but is never blocked by a crop
+-- failure" requirement (§8.2): a page that could not be cropped leaves its
+-- regions' crop_key null, and content falls back to the full page exactly
+-- as it did before this stage existed.
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.advance_after_crop(p_run_id uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
  SECURITY DEFINER
@@ -89,10 +157,10 @@ begin
   if v_paper is null then return jsonb_build_object('advanced', false); end if;
 
   select count(*) into v_pending from public.paper_page
-   where paper_id = v_paper and structure_status in ('pending', 'running');
+   where paper_id = v_paper and crop_status in ('pending', 'running');
   if v_pending > 0 then return jsonb_build_object('advanced', false); end if;
 
-  if (select status from public.extraction_run where id = p_run_id) <> 'structure' then
+  if (select status from public.extraction_run where id = p_run_id) <> 'cropping' then
     return jsonb_build_object('advanced', false);
   end if;
 
@@ -105,8 +173,49 @@ begin
   return jsonb_build_object(
     'advanced', true,
     'enqueue_content', coalesce(to_jsonb(v_regions), '[]'::jsonb),
-    'enqueue_reconcile', coalesce(array_length(v_regions, 1), 0) = 0
-  );
+    'enqueue_reconcile', coalesce(array_length(v_regions, 1), 0) = 0);
+end; $function$;
+
+-- ============================================================
+-- public.apply_region_crops — one statement for a page's worth of crop
+-- keys. §8.2 names the subrequest budget as the constraint and it is the
+-- failure that took the content stage down once; a forty-question page is
+-- one call rather than forty. Scoped by run_id as well as region id, and
+-- writes only the two key columns — nothing here can touch a mark, a
+-- confidence tier, or a student's correction.
+--
+-- EXECUTE is revoked from PUBLIC *and* from anon and authenticated by
+-- name. See MANIFEST.md: this project's default privileges grant directly
+-- to those two roles as well as through PUBLIC, so revoking either alone
+-- leaves the other standing.
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.apply_region_crops(p_run_id uuid, p_rows jsonb)
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare v_count integer;
+begin
+  if jsonb_typeof(p_rows) <> 'array' then
+    raise exception 'apply_region_crops expects an array' using errcode = '22023';
+  end if;
+
+  update public.question_region qr
+     set crop_key     = row_in.crop_key,
+         cropmask_key = row_in.cropmask_key,
+         updated_at   = now()
+    from (
+      select (value ->> 'id')::uuid       as id,
+             value ->> 'crop_key'         as crop_key,
+             value ->> 'cropmask_key'     as cropmask_key
+        from jsonb_array_elements(p_rows)
+    ) row_in
+   where qr.id = row_in.id
+     and qr.run_id = p_run_id;
+
+  get diagnostics v_count = row_count;
+  return v_count;
 end; $function$;
 
 -- ============================================================
@@ -461,6 +570,12 @@ end; $function$;
 -- completed-then-stalled page used to only get reset by a *new* run's
 -- triage-side pass (§3.2), which never fired if no new run was ever
 -- started. The sweep no longer depends on that.
+--
+-- Updated again 2026-09-01 for the crop stage: crop_status gets the same
+-- two clauses. A crop left 'running' under a swept run is failed (no
+-- worker is coming back for it), and one that finished is reset so a fresh
+-- run re-cuts it — the page image may itself be why the run stalled, and
+-- reusing last run's crops would carry that forward.
 -- ============================================================
 CREATE OR REPLACE FUNCTION private.sweep_stuck_runs(p_stale interval DEFAULT '00:10:00'::interval)
  RETURNS integer
@@ -513,6 +628,16 @@ begin
      set structure_status = 'pending'
    where paper_id in (select paper_id from public.extraction_run where id = any(v_run_ids))
      and structure_status = 'done';
+
+  update public.paper_page
+     set crop_status = 'failed'
+   where paper_id in (select paper_id from public.extraction_run where id = any(v_run_ids))
+     and crop_status = 'running';
+
+  update public.paper_page
+     set crop_status = 'pending'
+   where paper_id in (select paper_id from public.extraction_run where id = any(v_run_ids))
+     and crop_status in ('done', 'skipped');
 
   return v_swept;
 end; $function$;

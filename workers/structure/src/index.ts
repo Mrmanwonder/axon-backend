@@ -2,6 +2,7 @@ import { callModel } from "@mastery/shared/openrouter.js";
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
 import { imageRef } from "@mastery/shared/r2.js";
 import { takeBox } from "@mastery/shared/contract.js";
+import { pageDimensions, UNPLACEABLE_PAGE_REASON } from "@mastery/shared/page.js";
 import { attribute, type RawMark } from "@mastery/shared/attribution.js";
 import { SYSTEM, instruction, SCHEMA, validate } from "@mastery/shared/prompts/structure.v1.js";
 import type { Env } from "@mastery/shared/env.js";
@@ -14,14 +15,17 @@ interface StructureMessage {
 
 interface AdvanceResult {
   advanced?: boolean;
-  enqueue_content?: string[];
+  /** Page ids for the crop stage (AXON_FIX_BRIEF.md §8). Structure used to hand
+      region ids straight to content; cropping now sits between the two and
+      `advance_after_crop` is what returns the region ids. */
+  enqueue_crop?: string[];
   enqueue_reconcile?: boolean;
 }
 
 async function enqueueFromAdvance(env: Env, runId: string, advance: AdvanceResult): Promise<void> {
-  const regionIds = advance.enqueue_content ?? [];
-  if (env.CONTENT_QUEUE && regionIds.length) {
-    await env.CONTENT_QUEUE.sendBatch(regionIds.map((regionId) => ({ body: { run_id: runId, region_id: regionId } })));
+  const pageIds = advance.enqueue_crop ?? [];
+  if (env.CROP_QUEUE && pageIds.length) {
+    await env.CROP_QUEUE.sendBatch(pageIds.map((pageId) => ({ body: { run_id: runId, page_id: pageId } })));
   }
   if (advance.enqueue_reconcile && env.RECONCILE_QUEUE) {
     await env.RECONCILE_QUEUE.send({ run_id: runId });
@@ -34,7 +38,7 @@ const handler = consumeQueue<StructureMessage>(
     const pageId = msg.page_id;
     const { data: page } = await sb
       .from("paper_page")
-      .select("id, paper_id, student_id, page_number, r2_bucket, r2_key, mask_key, structure_status, layer_fallback, teacher_marks, conditioning_meta")
+      .select("id, paper_id, student_id, page_number, r2_bucket, r2_key, mask_key, structure_status, layer_fallback, teacher_marks, conditioning_meta, quality_signals")
       .eq("id", pageId)
       .single();
     if (!page) return { detail: { skipped: "no such page" } };
@@ -93,9 +97,26 @@ const handler = consumeQueue<StructureMessage>(
       return { detail: { unreadable: true } };
     }
 
-    const meta = (page.conditioning_meta as any) ?? {};
-    const width = meta.width ?? 2400;
-    const height = meta.height ?? 3200;
+    // Every box below is scaled against these two numbers. There is no default
+    // for them any more: `?? 2400` / `?? 3200` was not a fallback, it was the
+    // only branch that ever ran, and it silently mis-scaled every box on every
+    // page in the database. A page whose size cannot be established is a page
+    // nothing can be placed on, and that is said out loud rather than papered
+    // over. See @mastery/shared/page.ts.
+    const dims = pageDimensions(page as any);
+    if (!dims) {
+      await sb.from("page_unreadable").insert({
+        paper_id: page.paper_id,
+        page_number: page.page_number,
+        storage_path: page.r2_key,
+        reason: UNPLACEABLE_PAGE_REASON,
+      });
+      await sb.from("paper_page").update({ structure_status: "unreadable" }).eq("id", pageId);
+      const { data: advanceNoDims } = await sb.rpc("advance_after_structure", { p_run_id: runId });
+      if (advanceNoDims?.advanced) await enqueueFromAdvance(env, runId, advanceNoDims);
+      return { detail: { unreadable: "no page dimensions" } };
+    }
+    const { width, height } = dims;
 
     const { data: existing } = await sb
       .from("question_region")

@@ -23,7 +23,7 @@ jobs:
     needs: typecheck-and-test
     strategy:
       matrix:
-        worker: [triage, structure, content, reconcile, adjudicate, explain, sweep, api]
+        worker: [triage, structure, crop, content, reconcile, adjudicate, explain, sweep, api]
       # One worker's dry-run failing should not hide the result for the rest.
       fail-fast: false
     steps:
@@ -50,7 +50,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     strategy:
       matrix:
-        worker: [triage, structure, content, reconcile, adjudicate, explain, sweep, api]
+        worker: [triage, structure, crop, content, reconcile, adjudicate, explain, sweep, api]
       # One worker's deploy failing should not silently skip verifying the
       # rest — each is independent and every failure should be visible.
       fail-fast: false

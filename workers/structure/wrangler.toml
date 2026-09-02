@@ -11,9 +11,12 @@ bucket_name = "axon-originals"
 binding = "DERIVED"
 bucket_name = "axon-derived"
 
+# Structure hands off to cropping, not straight to content (AXON_FIX_BRIEF.md
+# §8). The content producer binding is gone with it: mastery-crop is what
+# enqueues content now, once a page's crops have settled.
 [[queues.producers]]
-binding = "CONTENT_QUEUE"
-queue = "content-queue"
+binding = "CROP_QUEUE"
+queue = "crop-queue"
 
 [[queues.producers]]
 binding = "RECONCILE_QUEUE"
