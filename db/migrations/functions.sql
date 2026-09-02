@@ -456,9 +456,11 @@ end; $function$;
 -- private.sweep_stuck_runs — mastery-sweep's cron (*/15 * * * *) calls this
 -- first. Fails a run stale past p_stale (default 10 minutes) with no
 -- heartbeat, and closes out any question_region/paper_page left 'running'
--- under it. See AXON_FIX_BRIEF.md §4.D3: this resets paper_page only where
--- structure_status = 'running', not where a completed-then-failed run left
--- it 'done' — that gap is what §9.3 is for.
+-- under it. Updated on this branch per AXON_FIX_BRIEF.md §4.D3/§9.3: also
+-- resets a page stuck at structure_status = 'done' back to 'pending' — a
+-- completed-then-stalled page used to only get reset by a *new* run's
+-- triage-side pass (§3.2), which never fired if no new run was ever
+-- started. The sweep no longer depends on that.
 -- ============================================================
 CREATE OR REPLACE FUNCTION private.sweep_stuck_runs(p_stale interval DEFAULT '00:10:00'::interval)
  RETURNS integer
@@ -506,8 +508,56 @@ begin
    where paper_id in (select paper_id from public.extraction_run where id = any(v_run_ids))
      and structure_status = 'running';
 
+  -- AXON_FIX_BRIEF.md §4.D3 / §9.3.
+  update public.paper_page
+     set structure_status = 'pending'
+   where paper_id in (select paper_id from public.extraction_run where id = any(v_run_ids))
+     and structure_status = 'done';
+
   return v_swept;
 end; $function$;
+
+-- ============================================================
+-- public.apply_region_confidence — mastery-reconcile's confidence-tier
+-- update, added on this branch per AXON_FIX_BRIEF.md §9.1. One statement
+-- for every region on a run instead of one UPDATE per region inside a
+-- Promise.all — the same shape of subrequest-ceiling bug that took down
+-- mastery-content before batch_size was capped at 1 (§3.3), which is fine
+-- at today's <=7-question papers and would not be at ~35+. Verified against
+-- a synthetic 60-row batch before this shipped.
+--
+-- SECURITY DEFINER, service_role only — EXECUTE is explicitly revoked from
+-- PUBLIC (Postgres grants it there by default on CREATE FUNCTION, which
+-- anon/authenticated then inherit; revoking from anon/authenticated
+-- directly does NOT remove that, a mistake this function's own first
+-- migration made and get_advisors(type:"security") caught within minutes —
+-- see the two REVOKE statements below, applied as a follow-up on this same
+-- branch). Worker-only: called solely from
+-- workers/reconcile/src/index.ts's service-role client, never by a
+-- browser/authenticated session.
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.apply_region_confidence(p_rows jsonb)
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $$
+declare v_count integer;
+begin
+  update public.question_region r
+     set confidence_tier    = (e->>'tier')::public.confidence_tier,
+         confidence_signals = coalesce(r.confidence_signals, '{}'::jsonb) || (e->'signals'),
+         needs_review       = (e->>'needs_review')::boolean,
+         updated_at         = now()
+    from jsonb_array_elements(p_rows) e
+   where r.id = (e->>'id')::uuid;
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+revoke execute on function public.apply_region_confidence(jsonb) from public;
+grant execute on function public.apply_region_confidence(jsonb) to service_role;
 
 -- ============================================================
 -- public.claim_deletions / public.finish_deletion — the R2 garbage

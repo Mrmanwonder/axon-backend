@@ -1,28 +1,26 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assess, numberingSoundness } from "../confidence.js";
+import { assess, numberingSoundness, downgradeRecognition } from "../confidence.js";
 
 test("assess: all signals pass -> confident", () => {
   const { tier } = assess({
     recognition: "high",
     numberingSound: true,
-    paperReconciled: true,
+    arithmeticOk: true,
     awarded: 3,
     available: 4,
-    layerFallback: false,
     unreadable: false,
   });
   assert.equal(tier, "confident");
 });
 
-test("assess: layerFallback vetoes confidence even when every other signal passes", () => {
+test("assess: arithmeticOk false keeps a region at unsure even when every other signal passes (§6.3 — but only for the region it applies to; a caller no longer has to fail every region on the paper for this)", () => {
   const { tier } = assess({
     recognition: "high",
     numberingSound: true,
-    paperReconciled: true,
+    arithmeticOk: false,
     awarded: 3,
     available: 4,
-    layerFallback: true,
     unreadable: false,
   });
   assert.equal(tier, "unsure");
@@ -32,10 +30,9 @@ test("assess: unreadable always wins regardless of other signals", () => {
   const { tier } = assess({
     recognition: "high",
     numberingSound: true,
-    paperReconciled: true,
+    arithmeticOk: true,
     awarded: 3,
     available: 4,
-    layerFallback: false,
     unreadable: true,
   });
   assert.equal(tier, "unreadable");
@@ -45,13 +42,31 @@ test("assess: low recognition never reaches confident", () => {
   const { tier } = assess({
     recognition: "low",
     numberingSound: true,
-    paperReconciled: true,
+    arithmeticOk: true,
     awarded: 3,
     available: 4,
-    layerFallback: false,
     unreadable: false,
   });
   assert.equal(tier, "unsure");
+});
+
+test("downgradeRecognition: steps high -> medium -> low, and low stays low", () => {
+  assert.equal(downgradeRecognition("high"), "medium");
+  assert.equal(downgradeRecognition("medium"), "low");
+  assert.equal(downgradeRecognition("low"), "low");
+  assert.equal(downgradeRecognition(null), null);
+});
+
+test("assess: a layer-fallback page downgrades recognition one step rather than vetoing the tier outright (§6.3) — high -> medium still reaches confident", () => {
+  const { tier } = assess({
+    recognition: downgradeRecognition("high"),
+    numberingSound: true,
+    arithmeticOk: true,
+    awarded: 3,
+    available: 4,
+    unreadable: false,
+  });
+  assert.equal(tier, "confident");
 });
 
 test("numberingSoundness: a sequential run is all sound", () => {
