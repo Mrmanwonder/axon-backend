@@ -15,18 +15,55 @@ interface StructureMessage {
 
 interface AdvanceResult {
   advanced?: boolean;
-  /** Page ids for the crop stage (AXON_FIX_BRIEF.md §8). Structure used to hand
-      region ids straight to content; cropping now sits between the two and
-      `advance_after_crop` is what returns the region ids. */
+  /** Page ids for the crop stage (AXON_FIX_BRIEF.md §8), when the crop stage is
+      switched on. */
   enqueue_crop?: string[];
+  /** Region ids straight to content, when it is not. */
+  enqueue_content?: string[];
   enqueue_reconcile?: boolean;
 }
 
+/**
+ * Fan out whatever `advance_after_structure` says comes next.
+ *
+ * Both shapes are handled, and that is the point. The crop stage sits behind a
+ * flag in the database (`private.feature_flag`, key `crop_stage`), so this
+ * function is called with region ids while the flag is off and page ids once it
+ * is on — and it has to be correct either way, because the flag can be flipped
+ * without redeploying anything.
+ *
+ * That symmetry is what was missing when WP4's schema change went to the live
+ * database ahead of this worker: the old deployed structure worker understood
+ * only `enqueue_content`, the new function returned only `enqueue_crop`, and a
+ * run advanced to 'cropping' with nothing to consume it. It sat there until the
+ * sweep failed it ten minutes later. Nothing was lost — no paper was submitted
+ * in the window — but the ordering requirement was real and it should never
+ * have existed. Reading both keys is what removes it.
+ *
+ * Crop first: if the flag is on, the run has been advanced to 'cropping' and
+ * content must not be enqueued behind its back.
+ */
 async function enqueueFromAdvance(env: Env, runId: string, advance: AdvanceResult): Promise<void> {
   const pageIds = advance.enqueue_crop ?? [];
-  if (env.CROP_QUEUE && pageIds.length) {
+  const regionIds = advance.enqueue_content ?? [];
+
+  if (pageIds.length) {
+    if (!env.CROP_QUEUE) {
+      // The database says crop, this worker cannot. Loud rather than silent:
+      // the run is in 'cropping' and only the sweep will move it now, so the
+      // one useful thing left is to say exactly which flag disagrees with which
+      // binding (§10 — do not swallow errors).
+      throw new Error(
+        `run ${runId}: advance_after_structure returned ${pageIds.length} page(s) for the crop stage, ` +
+        "but this worker has no CROP_QUEUE binding. Turn private.feature_flag 'crop_stage' off, " +
+        "or deploy a structure worker that binds crop-queue."
+      );
+    }
     await env.CROP_QUEUE.sendBatch(pageIds.map((pageId) => ({ body: { run_id: runId, page_id: pageId } })));
+  } else if (regionIds.length && env.CONTENT_QUEUE) {
+    await env.CONTENT_QUEUE.sendBatch(regionIds.map((regionId) => ({ body: { run_id: runId, region_id: regionId } })));
   }
+
   if (advance.enqueue_reconcile && env.RECONCILE_QUEUE) {
     await env.RECONCILE_QUEUE.send({ run_id: runId });
   }
