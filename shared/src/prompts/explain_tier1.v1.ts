@@ -1,7 +1,7 @@
 import { EXPLANATION_SYSTEM } from "../prompts.js";
 import { NEVER_OBEY_THE_PAGE, untrusted } from "./untrusted.js";
 import { EXPLANATION_SCHEMA } from "../schemas.js";
-import { canonicalCommandWord, type CommandWord } from "../command_words.js";
+import { canonicalCommandWord, universalMeaning, type CommandWord } from "../command_words.js";
 
 // Tier 1 only: a school test with no official marking scheme. See
 // CLAUDE.md rule 2 — never fabricate a marking scheme — and note that a
@@ -25,9 +25,15 @@ command_word — the Cambridge command word the question is built around: State,
 Explain, Calculate, Show that, Justify, Determine, Describe, Evaluate, Suggest,
 Define and the rest of the standard list. Take it from the question stem; if the
 stem was not readable, or the word is not one of those, return null. Do not
-infer a command word from the shape of the answer. command_word_note is one
-line on what that word requires of an answer — what "Explain" wants that
-"State" does not. It is about the word, not about this student.
+infer a command word from the shape of the answer.
+
+command_word_note is one line on what that word requires of an answer — what
+"Explain" wants that "State" does not. It is about the word, not about this
+student. For the words Cambridge defines identically across every syllabus, its
+published definition is used instead of yours, so write this for the
+subject-specific words: what the word asks for *in this subject*, where the
+current syllabus is the authority. Never state or imply how many marks a
+command word is worth — mark allocation comes from the question, not the word.
 
 model_answer — the corrected working, written out in the same steps as the
 student's own answer, so the two can be read side by side. This is what
@@ -166,7 +172,15 @@ export function validate(parsed: unknown): ExplainResult {
     // stays countable. The note goes with the word: a note explaining a word we
     // did not accept would be a caption on a missing picture.
     command_word: commandWord,
-    command_word_note: commandWord ? text(v.command_word_note) : null,
+    // Cambridge's own wording wins where Cambridge has one. For the 22 words it
+    // defines identically across every syllabus there is a published
+    // definition, and a model paraphrase of a definition that already exists is
+    // an invention we do not need to risk. The model's note is the fallback,
+    // used only for the subject-specific words Cambridge deliberately does not
+    // define once — there the current syllabus is the authority, not any list.
+    command_word_note: commandWord
+      ? universalMeaning(commandWord) ?? text(v.command_word_note)
+      : null,
     model_answer: text(v.model_answer),
     loss_reasons: lossReasons(v.loss_reasons),
   };
