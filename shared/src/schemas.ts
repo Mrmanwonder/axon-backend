@@ -90,7 +90,10 @@ export const CONTENT_SCHEMA = {
 export const EXPLANATION_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["can_explain", "cause", "marks_lost", "explanation", "do_this_next", "concepts"],
+  required: [
+    "can_explain", "cause", "marks_lost", "explanation", "do_this_next", "concepts",
+    "command_word", "command_word_note", "model_answer", "loss_reasons",
+  ],
   properties: {
     // If no reason for the deduction can be constructed, saying so plainly and
     // pointing at the teacher is an honest and genuinely useful outcome. It is
@@ -115,5 +118,49 @@ export const EXPLANATION_SCHEMA = {
     // honest; generic advice trains students to stop reading.
     do_this_next: { type: ["string", "null"] },
     concepts: { type: "array", items: { type: "string" } },
+
+    // The command word the question was built around, and one line on what it
+    // requires. Reading "Explain" as "State" is one of the most common and most
+    // fixable ways a Cambridge mark goes, and it is invisible to a student who
+    // was never told the word was doing work. Null when the stem could not be
+    // read or the word is not one we recognise — see command_words.ts.
+    command_word: { type: ["string", "null"] },
+    command_word_note: { type: ["string", "null"] },
+
+    // The corrected working, in the same steps as the student's own answer.
+    // do_this_next names the fix; this one shows it carried through. Null
+    // rather than a paraphrase of the instruction.
+    model_answer: { type: ["string", "null"] },
+
+    // A two-part mistake is two diagnoses. Averaging "skipped the inversion"
+    // and "sign error in the exponent" into one "conceptual gap" loses the part
+    // the student could have fixed on the day.
+    loss_reasons: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["marks", "cause", "note"],
+        properties: {
+          marks: { type: "number" },
+          cause: {
+            type: ["string", "null"],
+            enum: [
+              "conceptual_gap",
+              "procedural_slip",
+              "misread_question",
+              "incomplete",
+              "presentation",
+              "keyword_miss",
+              "timed_out",
+              null,
+            ],
+          },
+          // Anchored in the student's own working where it can be — "between
+          // your line 2 and line 3" — rather than in a scheme we do not have.
+          note: { type: ["string", "null"] },
+        },
+      },
+    },
   },
 } as const;

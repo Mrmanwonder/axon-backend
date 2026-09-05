@@ -88,6 +88,16 @@ const handler = consumeQueue<ExplainMessage>(
     const marksLost = Math.round((available - awarded) * 100) / 100;
     const doThisNext = clearsTheFloor(parsed.do_this_next) ? parsed.do_this_next : null;
 
+    // A decomposition that accounts for more marks than the teacher took is not
+    // a decomposition, it is a second opinion on the mark — hard rule 1. The
+    // marks_awarded number is the fact here; anything that would contradict it
+    // is dropped and the flat cause carries the question on its own.
+    const decomposed = parsed.loss_reasons.reduce((sum, r) => sum + r.marks, 0);
+    const lossReasons = decomposed > marksLost ? [] : parsed.loss_reasons;
+    if (decomposed > marksLost) {
+      console.info("loss_reasons exceeded the marks actually lost; keeping the flat cause", regionId, decomposed, marksLost);
+    }
+
     await sb.from("region_explanation").insert({
       region_id: regionId,
       run_id: runId,
@@ -98,6 +108,10 @@ const handler = consumeQueue<ExplainMessage>(
       body: parsed.body,
       do_this_next: doThisNext,
       concepts: parsed.concepts,
+      command_word: parsed.command_word,
+      command_word_note: parsed.command_word_note,
+      model_answer: parsed.model_answer,
+      loss_reasons: lossReasons,
       model_version: model,
       prompt_version: promptVersion,
     });
