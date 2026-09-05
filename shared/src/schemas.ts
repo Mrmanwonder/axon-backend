@@ -140,8 +140,16 @@ export const EXPLANATION_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["marks", "cause", "note"],
+        required: ["marks", "cause", "note", "error_type"],
         properties: {
+          // Axon's own category for what the mistake looked like, as opposed to
+          // `cause`, which is why it happened. No marking scheme needed, so it
+          // is available on every paper. Deliberately not Cambridge's
+          // vocabulary and deliberately not letter codes — see LossReason.
+          error_type: {
+            type: "string",
+            enum: ["method", "final_answer", "omitted_step", "presentation", "other"],
+          },
           marks: { type: "number" },
           cause: {
             type: ["string", "null"],

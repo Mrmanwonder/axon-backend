@@ -185,3 +185,59 @@ test("validate: model_answer is prose or null, never an empty bubble", () => {
     "0.1001 × 2^3\n1.01110000",
   );
 });
+
+// ── error_type: Axon's own category, no scheme required ────────────────────
+
+test("validate: error_type is carried through for each of the five values", () => {
+  for (const t of ["method", "final_answer", "omitted_step", "presentation", "other"]) {
+    const v = validate({
+      cause: "incomplete", marks_lost: 1, concepts: [],
+      loss_reasons: [{ marks: 1, cause: "incomplete", note: "x", error_type: t }],
+    });
+    assert.equal(v.loss_reasons[0].error_type, t);
+  }
+});
+
+test("validate: an unknown or missing error_type becomes 'other', and the reason survives", () => {
+  // The diagnosis is still real and still has marks against it — dropping the
+  // whole reason over an unrecognised label would lose more than it protects.
+  for (const t of [undefined, null, "M1", "accuracy", 7, {}]) {
+    const v = validate({
+      cause: "incomplete", marks_lost: 1, concepts: [],
+      loss_reasons: [{ marks: 1, cause: "incomplete", note: "kept", error_type: t }],
+    });
+    assert.equal(v.loss_reasons.length, 1);
+    assert.equal(v.loss_reasons[0].error_type, "other");
+    assert.equal(v.loss_reasons[0].note, "kept");
+  }
+});
+
+// Acceptance, addendum §"Do not do": the gate is the point. Tier 1 has no
+// scheme to ground a code in, and Cambridge's notation is not ours to reproduce
+// — Cambridge and Pearson refused third-party reproduction rights.
+test("validate: mark_type is null however the model dresses it up", () => {
+  for (const m of ["M", "A", "B", "C", "M1", "other", 1, true, "  M  "]) {
+    const v = validate({
+      cause: "incomplete", marks_lost: 2, concepts: [],
+      loss_reasons: [{ marks: 1, cause: "incomplete", note: "x", error_type: "method", mark_type: m }],
+    });
+    assert.equal(v.loss_reasons[0].mark_type, null, `mark_type ${JSON.stringify(m)} must not survive tier 1`);
+  }
+});
+
+test("the tier 1 prompt never asks for mark_type, and never mentions a code as available", () => {
+  // Enforced by construction rather than convention: if the schema does not ask
+  // for it, there is no field for a model to fill.
+  const reason = (SCHEMA.schema as any).properties.loss_reasons.items;
+  assert.ok(!("mark_type" in reason.properties), "loss_reasons items must not offer mark_type");
+  assert.equal(reason.additionalProperties, false, "a model must not be able to add it either");
+  assert.ok(reason.required.includes("error_type"), "error_type is what the model is asked for instead");
+});
+
+test("error_type values carry no single-letter or mark-scheme-shaped labels", () => {
+  const values = (SCHEMA.schema as any).properties.loss_reasons.items.properties.error_type.enum;
+  for (const v of values) {
+    assert.ok(v.length > 1, `${v} must not be a single letter`);
+    assert.ok(!/^[MABC]\d*$/i.test(v), `${v} must not look like mark-scheme notation`);
+  }
+});

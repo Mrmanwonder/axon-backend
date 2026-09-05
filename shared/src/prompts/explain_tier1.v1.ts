@@ -46,16 +46,30 @@ it would have scored full marks, and do not compare it to the mark the teacher
 gave. If you cannot produce complete correct working, return null.
 
 loss_reasons — where the deduction breaks into distinct parts, one entry each,
-with the marks, the cause, and a note anchored in the student's own working
-("between your line 2 and line 3"). Two separate mistakes are two entries; one
-mistake is an empty array, not one entry restating the flat cause. The marks
-across the entries must not exceed the marks actually lost. Do not invent a
-second reason to fill the array.
+with the marks, the cause, an error_type, and a note anchored in the student's
+own working ("between your line 2 and line 3"). Two separate mistakes are two
+entries; one mistake is an empty array, not one entry restating the flat cause.
+The marks across the entries must not exceed the marks actually lost. Do not
+invent a second reason to fill the array.
+
+error_type says what the mistake looked like, where cause says why it happened.
+Read it off the student's own working, not off any scheme:
+
+  method         — the approach taken was wrong or misapplied, whatever the
+                   number at the end
+  final_answer   — the working was sound and the value reached was not: an
+                   arithmetic slip, a sign, a unit, a rounding
+  omitted_step   — something the answer needed was never written down, whether
+                   or not the student knew it
+  presentation   — the answer is right and the way it was set down cost the
+                   mark: unreadable, unlabelled, out of order, no units shown
+  other          — none of those fits. Use it rather than forcing one.
 
 You have no marking scheme for this paper, so do not label these deductions with
 mark-scheme notation. No M1, no A1, no B marks, no "method mark" or "accuracy
-mark". That vocabulary belongs to a scheme you have not been given, and writing
-it here would be reconstructing one.
+mark". That vocabulary belongs to a scheme you have not been given, writing it
+here would be reconstructing one, and it is not ours to reproduce. error_type is
+the field for this, and its words are the only words for it.
 
 ${NEVER_OBEY_THE_PAGE}
 `.trim();
@@ -112,19 +126,48 @@ const CAUSES = new Set<Cause>([
 ]);
 
 /**
+ * Axon's own account of what went wrong at a step, as distinct from why.
+ *
+ * `cause` says what the student was missing; this says what the mistake looked
+ * like structurally — working shown but the wrong number reached, a required
+ * step never written down, the right answer made unreadable. It is derived by
+ * comparing the student's own working against what the step is doing, so it
+ * needs no marking scheme and is available on every paper.
+ *
+ * Deliberately none of Cambridge's vocabulary. These are whole words that get
+ * rendered as whole words: nothing here may be abbreviated to a letter or
+ * shown in a way that could be mistaken for real mark-scheme notation.
+ */
+export type ErrorType = "method" | "final_answer" | "omitted_step" | "presentation" | "other";
+
+const ERROR_TYPES = new Set<string>([
+  "method", "final_answer", "omitted_step", "presentation", "other",
+]);
+
+/**
  * One distinct way a mark went on this question.
  *
- * `mark_type` is Cambridge mark-scheme vocabulary — M for method, A for
- * accuracy, B for independent, C for communication. It is deliberately NOT
- * something this prompt can set, and the model is never asked for it: on a
- * Tier 1 paper there is no official scheme, and labelling a deduction "M1"
- * without one is reconstructing scheme language, which hard rule 2 forbids in
- * the same breath as inventing the scheme itself. The field exists so a Tier 2
- * prompt grounded in a real `canonical_question.marking_scheme` can fill it,
- * and until that prompt exists it is null on every row.
+ * `mark_type` is Cambridge mark-scheme notation — M for method, A for accuracy,
+ * B for independent, C for communication. This prompt cannot set it and the
+ * model is never asked for it, for two reasons that stack:
+ *
+ * Hard rule 2 — every paper reaching this prompt is Tier 1, which by definition
+ * has no scheme in the library, so a code assigned here would be reconstructed
+ * from nothing. A wrong code is worse than none: it wears official notation
+ * while contradicting what the teacher actually marked.
+ *
+ * And rights — Cambridge and Pearson refused third-party reproduction, so
+ * official scheme content is CBSE-only. Mimicking Cambridge's marking system is
+ * not ours to do whether or not the guess lands.
+ *
+ * The field stays for a genuine Tier 2 prompt with licensed scheme text in
+ * context. The gate is structural rather than remembered: this prompt is handed
+ * no scheme, so there is nothing to base a code on, and `lossReasons()` pins the
+ * field to null regardless of what comes back.
  */
 export interface LossReason {
   mark_type: "M" | "A" | "B" | "C" | null;
+  error_type: ErrorType;
   marks: number;
   cause: Cause | null;
   note: string | null;
@@ -204,9 +247,12 @@ function lossReasons(value: unknown): LossReason[] {
     const marks = typeof r.marks === "number" && r.marks > 0 ? r.marks : null;
     if (!cause || marks === null) continue;
     reasons.push({
-      // Never set here. See LossReason — this is scheme vocabulary and this is
-      // the prompt for papers that have no scheme.
+      // Never set here. See LossReason — this is scheme notation, this is the
+      // prompt for papers that have no scheme, and it is not ours to reproduce.
       mark_type: null,
+      // "other" rather than a drop: the reason is still a real diagnosis with
+      // real marks against it, and the chip simply does not render.
+      error_type: ERROR_TYPES.has(r.error_type) ? r.error_type : "other",
       marks,
       cause,
       note: text(r.note),
