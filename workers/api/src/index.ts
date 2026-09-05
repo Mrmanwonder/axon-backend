@@ -60,6 +60,15 @@ async function serveAsset(req: Request, env: Env, url: URL): Promise<Response> {
   if (!obj) return failure("not found", 404);
   return new Response(obj.body, {
     headers: {
+      // CORS belongs on the success path too. `failure()` spreads it, so every
+      // way this route could say no was readable from the browser and the one
+      // way it says yes was not: the image came back 200 with no
+      // Access-Control-Allow-Origin, so `fetch` rejected it before a single
+      // byte reached the page. Every crop in QuestionDetail and in the review
+      // screen — the provenance payoff the whole extraction contract exists to
+      // pay off — failed on that missing header, and failed as "we could not
+      // show this part of the page", which reads like a scan problem.
+      ...CORS,
       "Content-Type": obj.httpMetadata?.contentType ?? "application/octet-stream",
       "Cache-Control": "private, max-age=60",
     },

@@ -79,6 +79,11 @@ export interface ExplainResult {
   concepts: string[];
 }
 
+/** Trimmed, or null for anything that is not a non-empty string. */
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 export function validate(parsed: unknown): ExplainResult {
   const v = parsed as any;
   if (!v || typeof v !== "object") throw new Error("nothing returned");
@@ -86,8 +91,18 @@ export function validate(parsed: unknown): ExplainResult {
   return {
     cause,
     marks_lost: cause && typeof v.marks_lost === "number" && v.marks_lost > 0 ? v.marks_lost : null,
-    body: typeof v.body === "string" && v.body.trim() ? v.body.trim() : null,
-    do_this_next: typeof v.do_this_next === "string" && v.do_this_next.trim() ? v.do_this_next.trim() : null,
+    // EXPLANATION_SCHEMA calls this field `explanation`; the column it lands in
+    // is `region_explanation.body`. This function read `v.body` — a key the
+    // model is never asked for and never sends — so the prose every student was
+    // meant to read was dropped here, silently, on every question ever
+    // explained. All nine rows in production have body = null. The model was
+    // writing it the whole time.
+    //
+    // `body` stays accepted as a fallback: it costs nothing, and it is the name
+    // the rest of the pipeline uses, so a future prompt that emits it is not a
+    // second silent outage.
+    body: text(v.explanation) ?? text(v.body),
+    do_this_next: text(v.do_this_next),
     concepts: Array.isArray(v.concepts) ? v.concepts.filter((c: unknown): c is string => typeof c === "string").slice(0, 6) : [],
   };
 }
