@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { normalisePartKey, partReferences, resolveDependencies } from "../question_parts.js";
 import { gateModelAnswer, subjectTerms } from "../grounding.js";
+import { validate as validateContent } from "../prompts/content.v1.js";
 
 /**
  * The paper this file exists for.
@@ -307,4 +308,45 @@ test("gate: a non-dependent question is never withheld for dependency", () => {
   });
   assert.equal(v.status, "complete");
   assert.ok(v.modelAnswer);
+});
+
+// ── Whole marks, at the model boundary ─────────────────────────────────────
+//
+// The database CHECK added in 20260906091000_whole_marks_only refuses a
+// fractional mark outright. That is the guarantee; this is what keeps one
+// misread digit from failing an entire run instead of the one question it
+// concerns.
+
+test("content: a fractional mark is dropped to null and sent to review", () => {
+  const v = validateContent({
+    unreadable: false,
+    marks_awarded: { value: 0.5, box: { x: 1, y: 1, w: 1, h: 1, page_index: 0 } },
+    marks_available: { value: 3, box: { x: 1, y: 1, w: 1, h: 1, page_index: 0 } },
+    recognition_confidence: "high",
+  });
+  assert.equal(v.marks_awarded?.value, null, "0.5 is not a mark a CAIE teacher wrote");
+  assert.equal(v.marks_available?.value, 3, "a sound allocation is left alone");
+  assert.equal(v.recognition_confidence, "low", "the question must reach a person");
+});
+
+test("content: whole marks pass through untouched, at full confidence", () => {
+  const v = validateContent({
+    unreadable: false,
+    marks_awarded: { value: 1, box: { x: 1, y: 1, w: 1, h: 1, page_index: 0 } },
+    marks_available: { value: 3, box: { x: 1, y: 1, w: 1, h: 1, page_index: 0 } },
+    recognition_confidence: "high",
+  });
+  assert.equal(v.marks_awarded?.value, 1);
+  assert.equal(v.recognition_confidence, "high");
+});
+
+test("content: a fractional allocation is dropped too", () => {
+  const v = validateContent({
+    unreadable: false,
+    marks_awarded: { value: 1, box: { x: 1, y: 1, w: 1, h: 1, page_index: 0 } },
+    marks_available: { value: 2.5, box: { x: 1, y: 1, w: 1, h: 1, page_index: 0 } },
+    recognition_confidence: "high",
+  });
+  assert.equal(v.marks_available?.value, null);
+  assert.equal(v.recognition_confidence, "low");
 });
