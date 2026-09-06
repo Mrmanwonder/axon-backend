@@ -73,10 +73,77 @@ export const CONTENT_SCHEMA = {
     "recognition_confidence",
     "unreadable",
     "unreadable_reason",
+    "answer_block",
   ],
   properties: {
     question_text: valueWithBox("string"),
     student_answer: valueWithBox("string"),
+    /**
+     * The answer with its structure kept, alongside the flat string.
+     *
+     * `student_answer` being `text` is why a student described the screen as
+     * "numbers, alphabets and signs paired together": there was nowhere to put
+     * structure, so structure was destroyed at write time. Handwritten `8/2`
+     * arrived as `8+1` — turning a correct step into a false one — and a
+     * struck-through `32` arrived as nothing at all, which under CAIE marking
+     * is mark-bearing evidence being discarded.
+     *
+     * Nullable: a diagram or an unreadable crop has no block to give, and an
+     * invented one would be worse than none.
+     */
+    answer_block: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      required: ["lines", "notation_profile", "raw_text"],
+      properties: {
+        lines: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["segments", "role"],
+            properties: {
+              role: { type: "string", enum: ["working", "final_answer", "restatement", "crossed_out"] },
+              segments: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["type", "latex", "text", "annotations", "bbox", "confidence"],
+                  properties: {
+                    type: { type: "string", enum: ["math", "prose", "numeral", "binary", "label"] },
+                    latex: { type: ["string", "null"] },
+                    text: { type: ["string", "null"] },
+                    annotations: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                        enum: ["struck_through", "boxed", "circled", "underlined", "inserted", "overwritten"],
+                      },
+                    },
+                    // Into the page image, so a student can tap a segment and
+                    // see the handwriting it was read from.
+                    bbox: {
+                      type: ["object", "null"],
+                      additionalProperties: false,
+                      required: ["x", "y", "w", "h", "page_index"],
+                      properties: {
+                        x: { type: "number" }, y: { type: "number" },
+                        w: { type: "number" }, h: { type: "number" },
+                        page_index: { type: "number" },
+                      },
+                    },
+                    confidence: { type: ["number", "null"] },
+                  },
+                },
+              },
+            },
+          },
+        },
+        notation_profile: { type: "string" },
+        raw_text: { type: "string" },
+      },
+    },
     marks_awarded: valueWithBox("number"),
     marks_available: valueWithBox("number"),
     teacher_remark: valueWithBox("string"),

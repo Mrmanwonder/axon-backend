@@ -20,18 +20,40 @@ export type Recognition = "high" | "medium" | "low" | null;
 export interface AssessInput {
   recognition: Recognition;
   numberingSound: boolean;
-  /** Region-scoped (§6.3): whether this specific region is implicated in the paper's reconciliation discrepancy, if it has one. True (passes) for a region the discrepancy isn't attributable to, even on an otherwise-unreconciled paper. */
-  arithmeticOk: boolean;
+  /**
+   * Whether this region's own working actually checks out, computed by
+   * evaluating it — see shared/src/arithmetic.ts.
+   *
+   * Three-valued on purpose. `"unknown"` is the normal verdict for a prose
+   * answer that contains no arithmetic, and it is not a defect: forcing a
+   * boolean here is what produced live rows where "Not Normalized" carried an
+   * `arithmetic` signal of false on one run and true on four others. There is
+   * no arithmetic in those two words to be true or false about.
+   *
+   * Note this is no longer the reconciliation-discrepancy signal it was. That
+   * was paper-scoped arithmetic about totals; this is the region's own chain.
+   * Totals are checked separately and deterministically by reconcile().
+   */
+  arithmeticOk: boolean | "unknown";
   awarded: number | null;
   available: number | null;
   unreadable: boolean;
 }
 
+/**
+ * Every signal may say it does not know.
+ *
+ * A boolean has no way to express "this check does not apply here", so it
+ * guesses, and a forced guess is a hallucination with a schema. See
+ * shared/src/signals.ts for how the four are read back and kept apart.
+ */
+export type SignalValue = boolean | "unknown";
+
 export interface AssessSignals {
-  recognition: boolean;
-  structural: boolean;
-  arithmetic: boolean;
-  plausibility: boolean;
+  recognition: SignalValue;
+  structural: SignalValue;
+  arithmetic: SignalValue;
+  plausibility: SignalValue;
 }
 
 export interface AssessResult {
@@ -53,9 +75,19 @@ export function assess(input: AssessInput): AssessResult {
     return { tier: "unreadable", signals };
   }
   if (input.recognition === "low") return { tier: "unsure", signals };
-  const allPass = Object.values(signals).every(Boolean);
-  if (allPass) return { tier: "confident", signals };
-  return { tier: "unsure", signals };
+
+  // A signal that is explicitly false blocks confidence. `unknown` does not:
+  // it is the absence of a check, not the failure of one, and an answer with no
+  // arithmetic in it must not be made unsure for failing to contain any.
+  //
+  // The one signal that is never allowed to be unknown-and-confident is
+  // recognition, and that is handled above: if we could not read the
+  // handwriting, nothing downstream is authoritative however tidy it looked.
+  // Live rows carried `recognition: false` with `arithmetic: true` and
+  // committed marks anyway; that is the collapse this ordering removes.
+  const anyFalse = (Object.values(signals) as SignalValue[]).some((v) => v === false);
+  if (anyFalse) return { tier: "unsure", signals };
+  return { tier: "confident", signals };
 }
 
 /** One step down the recognition ladder — used to fold a page-scoped

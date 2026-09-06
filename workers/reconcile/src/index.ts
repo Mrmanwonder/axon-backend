@@ -1,6 +1,9 @@
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
 import { reconcile, type QuestionMarks } from "@mastery/shared/reconcile.js";
 import { assess, numberingSoundness, downgradeRecognition, type Recognition } from "@mastery/shared/confidence.js";
+import { checkAnswer } from "@mastery/shared/arithmetic.js";
+import { checkLabels } from "@mastery/shared/labels.js";
+import { readAnswerBlock, checkableText } from "@mastery/shared/answer_block.js";
 import type { Env } from "@mastery/shared/env.js";
 
 interface ReconcileMessage {
@@ -22,7 +25,7 @@ const handler = consumeQueue<ReconcileMessage>(
     const { data: paper } = await sb.from("paper").select("reported_total, stated_maximum").eq("id", run.paper_id).single();
     const { data: regions } = await sb
       .from("question_region")
-      .select("id, order_index, question_label, marks_awarded, marks_available, confidence_tier, confidence_signals, extract_status, page_spans")
+      .select("id, order_index, question_label, marks_awarded, marks_available, confidence_tier, confidence_signals, extract_status, page_spans, student_answer, answer_block")
       .eq("run_id", runId)
       .order("order_index");
     if (!regions?.length) {
@@ -45,6 +48,31 @@ const handler = consumeQueue<ReconcileMessage>(
     );
 
     const sound = numberingSoundness(marks.map((m) => m.label));
+
+    // The label set, checked structurally rather than trusted. Two regions
+    // claiming the same part means the marks on at least one of them are
+    // attached to the wrong question — decidable without a model, and a
+    // condition the paper must not be committed under. `2a` and `2. a)` are the
+    // same part, which is why this compares canonical forms: production holds
+    // both spellings for one question, so a string comparison sees no clash.
+    const labelCheck = checkLabels(regions.map((r: any) => r.question_label));
+    if (!labelCheck.ok) {
+      console.info("duplicate question labels on this run", runId,
+        labelCheck.problems.filter((p) => p.kind === "duplicate").map((p) => p.label).join(","));
+    }
+
+    // Arithmetic, evaluated. This used to be `arithmeticOk: true`, hardcoded —
+    // the signal never looked at a single character of the student's working,
+    // while other runs wrote `false` onto byte-identical text. Now each chain is
+    // parsed and evaluated over exact rationals, and the verdict is the same
+    // every time because it is a computation rather than an opinion.
+    const arithmetic = regions.map((r: any) => {
+      const block = readAnswerBlock(r.answer_block, r.student_answer);
+      const verdict = checkAnswer(checkableText(block, r.student_answer));
+      if (verdict.kind === "consistent") return true as const;
+      if (verdict.kind === "inconsistent") return false as const;
+      return "unknown" as const;
+    });
 
     // Which specific pages used the non-red-ink / student-wrote-red fallback —
     // not just whether the paper has any (AXON_FIX_BRIEF.md §6.3). A region
@@ -71,20 +99,24 @@ const handler = consumeQueue<ReconcileMessage>(
         : marks[i].recognition;
 
       // The paper's totals not adding up is not this region's problem unless
-      // this region is *why*. reconcile() already ranks which region(s) the
-      // discrepancy is most likely attributable to; mastery-adjudicate is what
-      // actually confirms and applies that (setting confidence_tier to
-      // 'unsure' on the specific regions its corrections name — see
-      // workers/adjudicate/src/index.ts) once it runs, which the run's status
-      // machine guarantees happens *before* the student ever reaches the
-      // review screen on an unreconciled paper (the run sits in
-      // 'adjudicating' until then). So this pass never fails the arithmetic
-      // signal itself — a clean question is not punished for a bad total
-      // reconcile can't yet attribute to it. See AXON_FIX_BRIEF.md §6.3.
+      // this region is *why*. reconcile() ranks which region(s) the discrepancy
+      // is attributable to, and mastery-adjudicate confirms and applies that
+      // before the student reaches the review screen. So a clean question is
+      // still not punished for a bad total elsewhere on the paper.
+      //
+      // What HAS changed is that `arithmetic` now means this region's own
+      // working, evaluated — not a hardcoded true. An inconsistent chain makes
+      // the region unsure and routes it back to its crop; it never touches a
+      // mark, because which of the student and the transcription is wrong is
+      // not knowable from the text. Production holds handwritten `8/2` stored
+      // as `8+1`, which turns a correct step into a false one.
       const { tier, signals } = assess({
         recognition,
-        numberingSound: sound[i] ?? false,
-        arithmeticOk: true,
+        // A duplicated label is a structural failure of the whole set, so every
+        // region on the run carries it: the marks may be on the wrong question
+        // and there is no way to tell which one from here.
+        numberingSound: (sound[i] ?? false) && labelCheck.ok,
+        arithmeticOk: arithmetic[i],
         awarded: marks[i].awarded,
         available: marks[i].available,
         unreadable: region.confidence_tier === "unreadable" || region.extract_status === "failed",

@@ -165,7 +165,12 @@ const handler = consumeQueue<ContentMessage>(
           marks_available_box: available.box,
           teacher_remark: remark.value,
           teacher_remark_box: remark.box,
-          region_type: parsed.region_type,
+          answer_block: (parsed as any).answer_block ?? null,
+          // region_type is null on 28 of 76 live regions, so over a third of
+          // them do not know whether they are maths or prose and nothing
+          // downstream can decide how to typeset them. `unknown` is a value;
+          // null is an absence that reads as "nobody asked".
+          region_type: parsed.region_type ?? null,
           extract_status: "done",
           updated_at: new Date().toISOString(),
         })

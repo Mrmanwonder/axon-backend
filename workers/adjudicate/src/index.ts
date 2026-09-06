@@ -1,5 +1,6 @@
 import { callModel } from "@mastery/shared/openrouter.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
+import { adjudicationBlocksCommit } from "@mastery/shared/labels.js";
 import { imageRef } from "@mastery/shared/r2.js";
 import { SYSTEM, instruction, SCHEMA, validate } from "@mastery/shared/prompts/adjudicate.v1.js";
 import type { Env } from "@mastery/shared/env.js";
@@ -94,7 +95,33 @@ const handler = consumeQueue<AdjudicateMessage>(
       flagged += 1;
     }
 
-    await sb.from("extraction_run").update({ adjudication: { cause: parsed.cause, checked: parsed.checked, corrections: parsed.corrections } }).eq("id", runId);
+    const adjudication = { cause: parsed.cause, checked: parsed.checked, corrections: parsed.corrections };
+    await sb.from("extraction_run").update({ adjudication }).eq("id", runId);
+
+    // A structural finding must stop the paper, not decorate it.
+    //
+    // A committed live row carries this, verbatim: "The pipeline read 3/3 for
+    // question c, but looking at the first page, the mark for 1a is 3 and 1b is
+    // 1. The pipeline seems to have misidentified the question labels or
+    // order." It carries marks_awarded = 3.00. The system worked out that its
+    // own labelling was wrong, wrote the finding into the record, and committed
+    // the marks anyway — a student was shown a mark attached to what may be the
+    // wrong question, with the app's own notes saying so.
+    //
+    // needs_review exists for exactly this. The database now refuses the commit
+    // too (20260906110000), so this is the loud half of a rule enforced in both
+    // places rather than a convention either could drop.
+    const structural = adjudicationBlocksCommit({
+      ...adjudication,
+      evidence: (parsed.corrections ?? []).map((c: any) => c.evidence ?? "").join(" "),
+    });
+    if (structural.blocked) {
+      await sb.from("extraction_run")
+        .update({ adjudication: { ...adjudication, blocks_commit: true, blocked_reason: structural.reason } })
+        .eq("id", runId);
+      await sb.from("question_region").update({ needs_review: true }).eq("run_id", runId);
+      console.info("adjudication blocks commit", runId, structural.reason);
+    }
 
     const reason = parsed.corrections.length
       ? "The marks do not quite add up. We have put the questions to check first."

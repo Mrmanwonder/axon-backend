@@ -68,6 +68,27 @@ Absolute rules:
   page — often in brackets after the question.
 - teacher_remark is the teacher's own words, transcribed exactly. Never
   paraphrase, tidy, translate or summarise a remark.
+- answer_block carries the structure the flat string cannot. Split each line
+  into segments and give every one a type, a bbox, and its annotations. This is
+  not decoration: a handwritten 8/2 read as "8+1" turns a correct step into a
+  false one, and a struck-through number dropped entirely is mark-bearing
+  evidence discarded — under CAIE, crossed-out work still earns marks when
+  nothing replaces it.
+  · latex for anything mathematical, in real LaTeX: \tfrac{8}{2}, not "8/2".
+    Fractions as fractions, superscripts as ^{}, subscripts as _{}.
+  · annotations for what the pen did: struck_through, boxed, circled,
+    underlined, inserted, overwritten. A boxed final answer is the student
+    saying "this is my answer" and must not be flattened into working.
+  · role marks each line: working, final_answer, restatement, crossed_out.
+  · bbox on every segment, so a student can tap it and see their own
+    handwriting. A segment you cannot place gets bbox null rather than a guess.
+  · confidence per segment, so one doubtful numeral is flagged without
+    discrediting the whole answer.
+  · notation_profile declares the conventions you used, e.g. "caie_cs".
+  · raw_text is the same flat string as student_answer.
+  Return answer_block null for a diagram, or where you could not read enough to
+  segment it. An invented block is worse than none.
+
 - Diagrams are not transcribed. If the answer is a labelled diagram, a free-body
   diagram, or a geometric construction, set region_type "diagram" and leave
   student_answer null. A description of a diagram is fluent and wrong, and the
