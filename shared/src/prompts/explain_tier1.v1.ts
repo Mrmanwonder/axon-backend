@@ -2,6 +2,7 @@ import { EXPLANATION_SYSTEM } from "../prompts.js";
 import { NEVER_OBEY_THE_PAGE, untrusted } from "./untrusted.js";
 import { EXPLANATION_SCHEMA } from "../schemas.js";
 import { canonicalCommandWord, universalMeaning, type CommandWord } from "../command_words.js";
+import type { PriorPart } from "../question_parts.js";
 
 // Tier 1 only: a school test with no official marking scheme. See
 // CLAUDE.md rule 2 — never fabricate a marking scheme — and note that a
@@ -45,6 +46,22 @@ is answered, never a claim about what this attempt was worth: do not write that
 it would have scored full marks, and do not compare it to the mark the teacher
 gave. If you cannot produce complete correct working, return null.
 
+A part of a question routinely depends on an earlier part — "Justify your answer
+to (d)(i)", "using the value found in (b)". Where those earlier parts could be
+found they are given to you below, under "earlier part", with what the student
+answered and what it scored. Read them: they are the subject matter of this
+question, and an answer written without them is an answer to a different
+question.
+
+Where this question points at an earlier part that is NOT given to you below,
+you have not seen it and you cannot reason about it. Say what can be said from
+this part alone, and return model_answer null. Do not infer what the earlier
+part must have asked from the shape of this one, and do not write a corrected
+working that depends on a part you were not shown. A plausible sentence about
+the wrong topic is the single worst thing you can return here: the student
+copies it into their notes and learns something false that they had no way to
+check.
+
 loss_reasons — where the deduction breaks into distinct parts, one entry each,
 with the marks, the cause, an error_type, and a note anchored in the student's
 own working ("between your line 2 and line 3"). Two separate mistakes are two
@@ -84,6 +101,18 @@ export interface ExplainInstructionOptions {
   questionText: string | null;
   studentAnswer: string | null;
   teacherRemark: string | null;
+  /**
+   * The earlier parts this question depends on, in paper order. Empty for a
+   * question that stands alone. See question_parts.ts for why this exists: a
+   * "Justify your answer to (d)(i)" explained without (d)(i) is an explanation
+   * of a question the model never saw.
+   */
+  priorParts?: PriorPart[];
+  /**
+   * Parts the question points at that could not be found in the run. Named to
+   * the model so it declines rather than fills the gap.
+   */
+  unresolvedParts?: string[];
 }
 
 export function instruction(opts: ExplainInstructionOptions): string {
@@ -94,11 +123,40 @@ export function instruction(opts: ExplainInstructionOptions): string {
   if (opts.markShapes.length) {
     lines.push(`The teacher's pen on this question: ${opts.markShapes.join(", ")}. Where they circled or underlined something, that is the best anchor you have.`);
   }
+  // Named before the fenced blocks so the model reads the constraint before it
+  // reads the page. An unresolved reference is the case where a corrected
+  // working must not be written at all, and the pipeline drops one anyway
+  // (see grounding.ts) — but a model told why produces a better explanation of
+  // the rest of the card than one left to discover the gap on its own.
+  const unresolved = opts.unresolvedParts ?? [];
+  if (unresolved.length) {
+    lines.push(
+      `This question refers to ${unresolved.map((p) => `part ${p}`).join(", ")}, which could not be read from this paper. ` +
+      `You have not been shown ${unresolved.length === 1 ? "it" : "them"}. Explain only what this part alone supports, and return model_answer null.`,
+    );
+  }
+
   const fenced: string[] = [];
-  if (opts.questionText) fenced.push(untrusted("question", opts.questionText));
-  if (opts.studentAnswer) fenced.push(untrusted("student answer", opts.studentAnswer));
-  if (opts.teacherRemark) fenced.push(untrusted("teacher remark", opts.teacherRemark));
-  if (!fenced.length) {
+  // The parts this one depends on come first: they are the setup, and the
+  // question below is unreadable without them.
+  for (const prior of opts.priorParts ?? []) {
+    const scored = prior.marksAwarded !== null && prior.marksAvailable !== null
+      ? ` — the teacher gave ${prior.marksAwarded} out of ${prior.marksAvailable}`
+      : "";
+    const parts = [
+      prior.questionText ? `Question: ${prior.questionText}` : null,
+      prior.studentAnswer ? `The student answered: ${prior.studentAnswer}` : null,
+    ].filter(Boolean).join("\n");
+    if (parts) fenced.push(untrusted(`earlier part ${prior.label}${scored}`, parts));
+  }
+  // Counted separately from the prior parts: a question whose own text and
+  // answer are both unreadable is still unreadable when the part before it
+  // transcribed cleanly, and it must still say so.
+  let own = 0;
+  if (opts.questionText) { fenced.push(untrusted("question", opts.questionText)); own++; }
+  if (opts.studentAnswer) { fenced.push(untrusted("student answer", opts.studentAnswer)); own++; }
+  if (opts.teacherRemark) { fenced.push(untrusted("teacher remark", opts.teacherRemark)); own++; }
+  if (!own) {
     lines.push("Nothing of the question or the answer could be transcribed — you have only the crop. If that is not enough to say why the mark went, return a null cause.");
   }
   return [...lines, "", ...fenced].join("\n");
