@@ -147,8 +147,8 @@ const handler = consumeQueue<ExplainMessage>(
       contextText: deps.resolved.flatMap((p) => [p.questionText, p.studentAnswer].filter(Boolean) as string[]),
       unresolvedDependencies: deps.unresolved,
     });
-    if (grounding.withheldReason) {
-      console.info("model_answer withheld", regionId, grounding.withheldReason);
+    if (grounding.status !== "complete") {
+      console.info("model_answer withheld", regionId, grounding.status);
     }
 
     await sb.from("region_explanation").insert({
@@ -164,7 +164,8 @@ const handler = consumeQueue<ExplainMessage>(
       command_word: parsed.command_word,
       command_word_note: parsed.command_word_note,
       model_answer: grounding.modelAnswer,
-      model_answer_withheld_reason: grounding.withheldReason,
+      grounding_status: grounding.status,
+      model_answer_source: grounding.source,
       // What the explanation was actually built from, so a card can be traced
       // back to its grounding rather than taken on trust.
       depends_on_parts: deps.resolved.map((p) => p.label),
@@ -177,7 +178,7 @@ const handler = consumeQueue<ExplainMessage>(
     await sb.from("question_region").update({ explain_status: "done" }).eq("id", regionId);
     await sb.rpc("advance_after_explain", { p_run_id: runId });
 
-    return { detail: { cause: parsed.cause, floor_cleared: !!doThisNext, prior_parts: deps.resolved.length, withheld: grounding.withheldReason } };
+    return { detail: { cause: parsed.cause, floor_cleared: !!doThisNext, prior_parts: deps.resolved.length, grounding: grounding.status } };
   },
   async ({ sb, msg }) => {
     await sb.from("question_region").update({ explain_status: "failed" }).eq("id", msg.region_id);

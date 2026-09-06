@@ -65,10 +65,39 @@ export function subjectTerms(text: string | null | undefined): Set<string> {
   return terms;
 }
 
-export type WithholdReason =
-  | "unresolved_dependency"
-  | "off_topic"
-  | null;
+/**
+ * The grounding verdict for a row's corrected working.
+ *
+ * A closed list, mirrored by a CHECK in
+ * 20260906090000_explanation_grounding_provenance.sql, because the question it
+ * exists to answer is countable: how often do we withhold, and for which
+ * reason. A rising `heuristic_off_topic` means the model is drifting; a rising
+ * `missing_dependency` means the scanner is losing pages. Free text answers
+ * neither.
+ *
+ * `heuristic_off_topic` is deliberately named for what it is. It is a coarse
+ * net for prose generated *without* the question, not a correctness check and
+ * not a grounding verifier — an unrelated answer can share terms, and a
+ * plausible-but-wrong one can use the question's vocabulary exactly. It must
+ * never be surfaced or counted as verification.
+ */
+export type GroundingStatus =
+  | "complete"
+  | "missing_dependency"
+  | "missing_question_text"
+  | "no_verified_answer_source"
+  | "heuristic_off_topic"
+  | "generation_failed";
+
+/**
+ * Where a shown corrected working came from.
+ *
+ * `verified_scheme` is reserved and currently unreachable: Cambridge and
+ * Pearson refused third-party reproduction, so official CAIE scheme content is
+ * not ours to render. Everything we show is our own method, and it is labelled
+ * as ours rather than borrowing an authority we do not have.
+ */
+export type AnswerSource = "axon_method" | "verified_scheme";
 
 export interface GroundingInput {
   modelAnswer: string | null;
@@ -83,8 +112,10 @@ export interface GroundingInput {
 export interface GroundingVerdict {
   /** The corrected working to store, or null. */
   modelAnswer: string | null;
-  /** Why it was withheld, for the row. Null when nothing was withheld. */
-  withheldReason: WithholdReason;
+  /** Whether it was grounded, and if not, why. */
+  status: GroundingStatus;
+  /** Where it came from. Null exactly when there is no answer to attribute. */
+  source: AnswerSource | null;
 }
 
 /**
@@ -107,33 +138,41 @@ export function gateModelAnswer(input: GroundingInput): GroundingVerdict {
     ? input.modelAnswer.trim()
     : null;
 
-  // Nothing to withhold. The model declining to write one is the honest outcome
-  // the prompt asks for, not a failure, and it carries no reason.
-  if (!answer) return { modelAnswer: null, withheldReason: null };
-
-  // Gate 1. The question points at a part that was never put in front of the
-  // model. Whatever it wrote about that part, it wrote blind.
+  // Order matters: a missing dependency is reported as a missing dependency even
+  // when the model also declined to answer, because the two say different things
+  // about the scan. One means a page is missing; the other means the model was
+  // honest. Collapsing them would hide the first behind the second.
   if (input.unresolvedDependencies.length) {
-    return { modelAnswer: null, withheldReason: "unresolved_dependency" };
+    return { modelAnswer: null, status: "missing_dependency", source: null };
+  }
+  if (!input.questionText || !input.questionText.trim()) {
+    return { modelAnswer: null, status: "missing_question_text", source: null };
   }
 
-  // Gate 2. Shared subject vocabulary with the question and everything it
-  // depends on.
+  // The model declining to write one is the outcome the prompt asks for on a
+  // question it cannot work through, and the grounding was still complete.
+  // `generation_failed` is for a call that came back with nothing usable, which
+  // the worker distinguishes; an honest null is not a failure.
+  if (!answer) return { modelAnswer: null, status: "complete", source: null };
+
+  // The net. Shared subject vocabulary with the question and everything it
+  // depends on. Not a verifier — see GroundingStatus.
   const context = subjectTerms(
     [input.questionText, input.studentAnswer, ...input.contextText].filter(Boolean).join(" "),
   );
+
+  // Too little transcribed to judge topicality either way. The gates above have
+  // passed, so the answer is not withheld on a test it cannot sit.
   if (context.size < MIN_CONTEXT_TERMS) {
-    // Too little transcribed to judge topicality either way. The first gate has
-    // already passed, so this is not withheld on a test it cannot sit.
-    return { modelAnswer: answer, withheldReason: null };
+    return { modelAnswer: answer, status: "complete", source: "axon_method" };
   }
 
   let shared = 0;
   for (const term of subjectTerms(answer)) if (context.has(term)) shared++;
 
   if (shared < MIN_SHARED_TERMS) {
-    return { modelAnswer: null, withheldReason: "off_topic" };
+    return { modelAnswer: null, status: "heuristic_off_topic", source: null };
   }
 
-  return { modelAnswer: answer, withheldReason: null };
+  return { modelAnswer: answer, status: "complete", source: "axon_method" };
 }
