@@ -27,6 +27,12 @@ function hasProvenance(box: unknown, page: number): box is Required<RawBox> {
     [b.x, b.y, b.w, b.h].every((n) => typeof n === "number" && Number.isFinite(n)) &&
     (b.w as number) > 0 &&
     (b.h as number) > 0 &&
+    // Lower bounds, which were missing. Only the far edges were checked, so a
+    // negative x or y passed straight through and was multiplied into a
+    // negative pixel coordinate — a highlight off the top-left of the page,
+    // stored as if it were provenance. The model does occasionally return one.
+    (b.x as number) >= 0 &&
+    (b.y as number) >= 0 &&
     ((b.page as number) ?? page) > 0
   );
 }

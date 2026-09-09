@@ -22,3 +22,13 @@ test("takeBox: rejects a box that runs off the 0-1000 grid", () => {
 test("takeBox: rejects null input outright", () => {
   assert.equal(takeBox(null, 1, 2000, 3000), null);
 });
+
+// Re-audit §12/INV-07: a coordinate must be inside the grid at BOTH ends.
+// takeBox checked only the far edges, so a negative box became a negative
+// pixel offset and the review UI would highlight off the page.
+test("takeBox: a negative coordinate is not a box", () => {
+  assert.equal(takeBox({ x: -1, y: 10, w: 100, h: 100 }, 1, 2400, 3200), null);
+  assert.equal(takeBox({ x: 10, y: -50, w: 100, h: 100 }, 1, 2400, 3200), null);
+  // Still accepts the legitimate origin.
+  assert.ok(takeBox({ x: 0, y: 0, w: 100, h: 100 }, 1, 2400, 3200));
+});
