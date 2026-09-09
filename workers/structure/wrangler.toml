@@ -42,7 +42,19 @@ queue = "structure-queue"
 max_batch_size = 1
 max_batch_timeout = 1
 max_retries = 3
-max_concurrency = 10
+# Containment, not the intended architecture. The handler allocates global
+# order_index client-side: it reads the current maximum, then inserts a run of
+# consecutive indexes. Two page workers running at once read the same maximum
+# and allocate the same indexes, and there is a unique constraint on
+# (run_id, order_index) waiting for them. Cross-page continuation has the same
+# shape — it stitches onto "the last existing region", which is only the right
+# one if the previous page happens to have finished first.
+#
+# Concurrency 1 makes page order the arrival order rather than a race. It costs
+# throughput on long booklets and it is deliberately temporary: the real fix is
+# page-local detection plus one deterministic run-level assembly pass, which
+# removes the shared counter entirely. Raise this only with that in place.
+max_concurrency = 1
 dead_letter_queue = "structure-dlq"
 
 # Secrets: ASSET_SIGNING_SECRET, GOOGLE_API_KEY, GROQ_API_KEY (legacy, unused),

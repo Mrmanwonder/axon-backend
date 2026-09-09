@@ -4,6 +4,7 @@ import { imageRef } from "@mastery/shared/r2.js";
 import { takeBox } from "@mastery/shared/contract.js";
 import { pageDimensions, UNPLACEABLE_PAGE_REASON } from "@mastery/shared/page.js";
 import { attribute, type RawMark } from "@mastery/shared/attribution.js";
+import { mustData, mustOk, mustRpc } from "@mastery/shared/db.js";
 import { SYSTEM, instruction, SCHEMA, validate } from "@mastery/shared/prompts/structure.v1.js";
 import type { Env } from "@mastery/shared/env.js";
 
@@ -155,15 +156,20 @@ const handler = consumeQueue<StructureMessage>(
     }
     const { width, height } = dims;
 
-    const { data: existing } = await sb
-      .from("question_region")
-      .select("id, order_index, page_spans")
-      .eq("run_id", runId)
-      .order("order_index", { ascending: false })
-      .limit(1);
+    const existing = await mustData(
+      sb.from("question_region")
+        .select("id, order_index, page_spans")
+        .eq("run_id", runId)
+        .order("order_index", { ascending: false })
+        .limit(1),
+      "highest order_index read",
+    ) as Array<{ id: string; order_index: number; page_spans: unknown[] }>;
     let nextIndex = existing?.length ? existing[0].order_index + 1 : 0;
 
     const created: Array<{ id: string; order_index: number; spans: unknown[] }> = [];
+    /** Everything on THIS page a teacher mark could belong to: the questions
+        created below, plus any prior question stitched onto this page. */
+    const candidates: Array<{ id: string; order_index: number; spans: unknown[] }> = [];
     const toInsert: Array<{ order_index: number; span: unknown; row: Record<string, unknown> }> = [];
 
     for (const [i, region] of parsed.regions.entries()) {
@@ -174,7 +180,25 @@ const handler = consumeQueue<StructureMessage>(
       if (i === 0 && region.continues_from_previous && existing?.length) {
         const prior = existing[0];
         const spans = [...prior.page_spans, span];
-        await sb.from("question_region").update({ page_spans: spans }).eq("id", prior.id);
+        await mustOk(
+          sb.from("question_region").update({ page_spans: spans }).eq("id", prior.id),
+          "stitch continuation span",
+        );
+        // The stitched question is a candidate for THIS page's teacher marks,
+        // and it used to `continue` straight past this — never entering
+        // `created`, which is the only list mark attribution looks at.
+        //
+        // Concretely: page 2 carries the tail of Q3 and then Q4. The teacher
+        // writes 4 in the margin beside the Q3 tail and 2 beside Q4. With Q3
+        // absent from the candidates, the 4 either attaches to nothing or, far
+        // worse, to Q4 — a plausible, confidently wrong mark on the wrong
+        // question, which is exactly the failure hard rule 1 exists to prevent.
+        //
+        // Its span here is this page's band only. Attribution is per-page
+        // geometry, so handing it the question's earlier bands on other pages
+        // would compare a margin mark against a box that is not on this page.
+        // It goes first because a continuation is always the top band.
+        candidates.push({ id: prior.id, order_index: prior.order_index, spans: [span] });
         continue;
       }
 
@@ -198,17 +222,27 @@ const handler = consumeQueue<StructureMessage>(
     }
 
     if (toInsert.length) {
-      const { data: insertedRows } = await sb.from("question_region").insert(toInsert.map((t) => t.row)).select("id, order_index");
-      const byOrder = new Map((insertedRows ?? []).map((r: any) => [r.order_index, r]));
+      // Checked. An insert that collided on the unique (run_id, order_index) —
+      // the race this worker still has, contained for now by max_concurrency=1
+      // — used to be dropped on the floor here, and the page was marked done
+      // with its questions missing.
+      const insertedRows = await mustData(
+        sb.from("question_region").insert(toInsert.map((t) => t.row)).select("id, order_index"),
+        "question_region insert",
+      ) as Array<{ id: string; order_index: number }>;
+      const byOrder = new Map((insertedRows ?? []).map((r) => [r.order_index, r]));
       for (const t of toInsert) {
         const row = byOrder.get(t.order_index);
-        if (row) created.push({ id: row.id, order_index: row.order_index, spans: [t.span] });
+        if (row) {
+          created.push({ id: row.id, order_index: row.order_index, spans: [t.span] });
+          candidates.push({ id: row.id, order_index: row.order_index, spans: [t.span] });
+        }
       }
     }
 
     const marks: RawMark[] = page.teacher_marks ?? [];
-    if (marks.length && created.length) {
-      const regions = created.map((c, i) => ({ order_index: i, label: null, spans: c.spans as any }));
+    if (marks.length && candidates.length) {
+      const regions = candidates.map((c, i) => ({ order_index: i, label: null, spans: c.spans as any }));
       const attributed = attribute({
         regions,
         marks,
@@ -219,7 +253,7 @@ const handler = consumeQueue<StructureMessage>(
         run_id: runId,
         paper_id: page.paper_id,
         student_id: page.student_id,
-        region_id: m.region_index === null ? null : created[m.region_index]?.id ?? null,
+        region_id: m.region_index === null ? null : candidates[m.region_index]?.id ?? null,
         page_number: m.page_number,
         box: m.box,
         shape: m.shape,
@@ -227,11 +261,13 @@ const handler = consumeQueue<StructureMessage>(
         metrics: m.metrics,
         confidence_tier: "unsure",
       }));
-      if (rows.length) await sb.from("teacher_mark").insert(rows);
+      if (rows.length) await mustOk(sb.from("teacher_mark").insert(rows), "teacher_mark insert");
     }
 
-    await sb.from("paper_page").update({ structure_status: "done" }).eq("id", pageId);
-    const { data: advance } = await sb.rpc("advance_after_structure", { p_run_id: runId });
+    // After the writes above have all landed, never before: `done` is a claim
+    // that this page's questions and marks are in the database.
+    await mustOk(sb.from("paper_page").update({ structure_status: "done" }).eq("id", pageId), "structure_status=done");
+    const advance = await mustRpc(sb.rpc("advance_after_structure", { p_run_id: runId }), "advance_after_structure") as any;
     if (advance?.advanced) await enqueueFromAdvance(env, runId, advance);
 
     return { detail: { regions: created.length, marks: marks.length } };
