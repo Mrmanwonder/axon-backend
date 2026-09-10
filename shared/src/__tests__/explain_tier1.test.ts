@@ -23,29 +23,29 @@ test("validate: reads the prose out of the field the schema actually asks for", 
 test("validate: the schema's property name and the validator agree", () => {
   const props = Object.keys((SCHEMA.schema as any).properties);
   assert.ok(props.includes("explanation"), "schema should ask for `explanation`");
-  const v = validate({ cause: "incomplete", marks_lost: 1, explanation: "Half the method was missing.", concepts: [] });
+  const v = validate({ can_explain: true, cause: "incomplete", marks_lost: 1, explanation: "Half the method was missing.", concepts: [] });
   assert.equal(v.body, "Half the method was missing.", "validate must read the field the schema names");
 });
 
 test("validate: still accepts `body` as a fallback name", () => {
-  assert.equal(validate({ cause: "incomplete", marks_lost: 1, body: "Only one reason given.", concepts: [] }).body, "Only one reason given.");
+  assert.equal(validate({ can_explain: true, cause: "incomplete", marks_lost: 1, body: "Only one reason given.", concepts: [] }).body, "Only one reason given.");
 });
 
 test("validate: blank and non-string prose is null, never an empty bubble", () => {
-  assert.equal(validate({ cause: "incomplete", marks_lost: 1, explanation: "   ", concepts: [] }).body, null);
-  assert.equal(validate({ cause: "incomplete", marks_lost: 1, explanation: 42, concepts: [] }).body, null);
-  assert.equal(validate({ cause: "incomplete", marks_lost: 1, concepts: [] }).body, null);
+  assert.equal(validate({ can_explain: true, cause: "incomplete", marks_lost: 1, explanation: "   ", concepts: [] }).body, null);
+  assert.equal(validate({ can_explain: true, cause: "incomplete", marks_lost: 1, explanation: 42, concepts: [] }).body, null);
+  assert.equal(validate({ can_explain: true, cause: "incomplete", marks_lost: 1, concepts: [] }).body, null);
 });
 
 // Hard rule: the cause enum is fixed. An eighth cause is dropped, not stored.
 test("validate: an invented cause is refused, and takes marks_lost with it", () => {
-  const v = validate({ cause: "vibes", marks_lost: 3, explanation: "x", concepts: [] });
+  const v = validate({ can_explain: true, cause: "vibes", marks_lost: 3, explanation: "x", concepts: [] });
   assert.equal(v.cause, null);
   assert.equal(v.marks_lost, null);
 });
 
 test("validate: concepts are capped at six and filtered to strings", () => {
-  const v = validate({
+  const v = validate({ can_explain: true,
     cause: "keyword_miss", marks_lost: 1, explanation: "x",
     concepts: ["a", "b", "c", "d", "e", "f", "g", 7, null],
   });
@@ -60,13 +60,13 @@ test("validate: nothing returned is an error, not a silent empty result", () => 
 // ── Phase 2: command word, model answer, decomposed loss reasons ────────────
 
 test("validate: a command word is canonicalised, not passed through as typed", () => {
-  assert.equal(validate({ cause: "incomplete", marks_lost: 1, command_word: "explain", concepts: [] }).command_word, "Explain");
-  assert.equal(validate({ cause: "incomplete", marks_lost: 1, command_word: "SHOW THAT", concepts: [] }).command_word, "Show that");
-  assert.equal(validate({ cause: "incomplete", marks_lost: 1, command_word: " Justify, ", concepts: [] }).command_word, "Justify");
+  assert.equal(validate({ can_explain: true, cause: "incomplete", marks_lost: 1, command_word: "explain", concepts: [] }).command_word, "Explain");
+  assert.equal(validate({ can_explain: true, cause: "incomplete", marks_lost: 1, command_word: "SHOW THAT", concepts: [] }).command_word, "Show that");
+  assert.equal(validate({ can_explain: true, cause: "incomplete", marks_lost: 1, command_word: " Justify, ", concepts: [] }).command_word, "Justify");
 });
 
 test("validate: a word outside the closed list renders nothing, and takes its note with it", () => {
-  const v = validate({
+  const v = validate({ can_explain: true,
     cause: "incomplete", marks_lost: 1, concepts: [],
     command_word: "Ponder", command_word_note: "Ponder wants you to muse.",
   });
@@ -110,7 +110,7 @@ test("command words: the list is unique and free of stray whitespace", () => {
 });
 
 test("validate: Cambridge's own definition beats the model's paraphrase", () => {
-  const v = validate({
+  const v = validate({ can_explain: true,
     cause: "incomplete", marks_lost: 1, concepts: [],
     command_word: "explain", command_word_note: "Explain means to write a lot.",
   });
@@ -119,7 +119,7 @@ test("validate: Cambridge's own definition beats the model's paraphrase", () => 
 });
 
 test("validate: the model's note is kept for a subject-specific word", () => {
-  const v = validate({
+  const v = validate({ can_explain: true,
     cause: "incomplete", marks_lost: 1, concepts: [],
     command_word: "Show that", command_word_note: "Every step to the given value must appear.",
   });
@@ -128,17 +128,17 @@ test("validate: the model's note is kept for a subject-specific word", () => {
 });
 
 test("validate: a subject-specific word with no note renders the word alone", () => {
-  const v = validate({ cause: "incomplete", marks_lost: 1, concepts: [], command_word: "Trace" });
+  const v = validate({ can_explain: true, cause: "incomplete", marks_lost: 1, concepts: [], command_word: "Trace" });
   assert.equal(v.command_word, "Trace");
   assert.equal(v.command_word_note, null);
 });
 
 test("validate: a phrase that merely contains a command word is not one", () => {
-  assert.equal(validate({ cause: "incomplete", marks_lost: 1, command_word: "state the explain", concepts: [] }).command_word, null);
+  assert.equal(validate({ can_explain: true, cause: "incomplete", marks_lost: 1, command_word: "state the explain", concepts: [] }).command_word, null);
 });
 
 test("validate: loss_reasons keep marks, cause and the anchoring note", () => {
-  const v = validate({
+  const v = validate({ can_explain: true,
     cause: "conceptual_gap", marks_lost: 2, concepts: [],
     loss_reasons: [
       { marks: 1, cause: "procedural_slip", note: "between your line 2 and line 3" },
@@ -153,7 +153,7 @@ test("validate: loss_reasons keep marks, cause and the anchoring note", () => {
 // Hard rule 2: M/A/B/C is marking-scheme vocabulary, and Tier 1 has no scheme.
 // The model is not asked for it and must not be able to smuggle it in.
 test("validate: mark_type is null on tier 1 even when the model volunteers one", () => {
-  const v = validate({
+  const v = validate({ can_explain: true,
     cause: "conceptual_gap", marks_lost: 1, concepts: [],
     loss_reasons: [{ marks: 1, cause: "conceptual_gap", note: "x", mark_type: "M" }],
   });
@@ -161,7 +161,7 @@ test("validate: mark_type is null on tier 1 even when the model volunteers one",
 });
 
 test("validate: a loss reason with an invented cause or no marks is dropped, not stored", () => {
-  const v = validate({
+  const v = validate({ can_explain: true,
     cause: "incomplete", marks_lost: 2, concepts: [],
     loss_reasons: [
       { marks: 1, cause: "vibes", note: "x" },
@@ -173,15 +173,15 @@ test("validate: a loss reason with an invented cause or no marks is dropped, not
 });
 
 test("validate: loss_reasons absent or malformed is an empty array, never a throw", () => {
-  assert.deepEqual(validate({ cause: "incomplete", marks_lost: 1, concepts: [] }).loss_reasons, []);
-  assert.deepEqual(validate({ cause: "incomplete", marks_lost: 1, concepts: [], loss_reasons: "no" }).loss_reasons, []);
-  assert.deepEqual(validate({ cause: "incomplete", marks_lost: 1, concepts: [], loss_reasons: [null, 3] }).loss_reasons, []);
+  assert.deepEqual(validate({ can_explain: true, cause: "incomplete", marks_lost: 1, concepts: [] }).loss_reasons, []);
+  assert.deepEqual(validate({ can_explain: true, cause: "incomplete", marks_lost: 1, concepts: [], loss_reasons: "no" }).loss_reasons, []);
+  assert.deepEqual(validate({ can_explain: true, cause: "incomplete", marks_lost: 1, concepts: [], loss_reasons: [null, 3] }).loss_reasons, []);
 });
 
 test("validate: model_answer is prose or null, never an empty bubble", () => {
-  assert.equal(validate({ cause: "incomplete", marks_lost: 1, concepts: [], model_answer: "  " }).model_answer, null);
+  assert.equal(validate({ can_explain: true, cause: "incomplete", marks_lost: 1, concepts: [], model_answer: "  " }).model_answer, null);
   assert.equal(
-    validate({ cause: "incomplete", marks_lost: 1, concepts: [], model_answer: "0.1001 × 2^3\n1.01110000" }).model_answer,
+    validate({ can_explain: true, cause: "incomplete", marks_lost: 1, concepts: [], model_answer: "0.1001 × 2^3\n1.01110000" }).model_answer,
     "0.1001 × 2^3\n1.01110000",
   );
 });
@@ -190,7 +190,7 @@ test("validate: model_answer is prose or null, never an empty bubble", () => {
 
 test("validate: error_type is carried through for each of the five values", () => {
   for (const t of ["method", "final_answer", "omitted_step", "presentation", "other"]) {
-    const v = validate({
+    const v = validate({ can_explain: true,
       cause: "incomplete", marks_lost: 1, concepts: [],
       loss_reasons: [{ marks: 1, cause: "incomplete", note: "x", error_type: t }],
     });
@@ -202,7 +202,7 @@ test("validate: an unknown or missing error_type becomes 'other', and the reason
   // The diagnosis is still real and still has marks against it — dropping the
   // whole reason over an unrecognised label would lose more than it protects.
   for (const t of [undefined, null, "M1", "accuracy", 7, {}]) {
-    const v = validate({
+    const v = validate({ can_explain: true,
       cause: "incomplete", marks_lost: 1, concepts: [],
       loss_reasons: [{ marks: 1, cause: "incomplete", note: "kept", error_type: t }],
     });
@@ -217,7 +217,7 @@ test("validate: an unknown or missing error_type becomes 'other', and the reason
 // — Cambridge and Pearson refused third-party reproduction rights.
 test("validate: mark_type is null however the model dresses it up", () => {
   for (const m of ["M", "A", "B", "C", "M1", "other", 1, true, "  M  "]) {
-    const v = validate({
+    const v = validate({ can_explain: true,
       cause: "incomplete", marks_lost: 2, concepts: [],
       loss_reasons: [{ marks: 1, cause: "incomplete", note: "x", error_type: "method", mark_type: m }],
     });
@@ -240,4 +240,56 @@ test("error_type values carry no single-letter or mark-scheme-shaped labels", ()
     assert.ok(v.length > 1, `${v} must not be a single letter`);
     assert.ok(!/^[MABC]\d*$/i.test(v), `${v} must not look like mark-scheme notation`);
   }
+});
+
+// ── can_explain is binding ──────────────────────────────────────────────────
+//
+// Re-audit P0-I. EXPLANATION_SCHEMA has always required this field and the
+// validator never read it, so a model could say it had nothing to go on and
+// have its accompanying prose stored anyway. A JSON Schema can require a field;
+// it cannot require two fields to agree.
+
+test("validate: can_explain=false discards the prose that came with it", () => {
+  const v = validate({
+    can_explain: false,
+    cause: "procedural_slip",
+    marks_lost: 2,
+    explanation: "A confident paragraph the model itself disowned.",
+    do_this_next: "Write the formula on its own line before you substitute.",
+    concepts: ["kinematics"],
+    command_word: "Explain",
+    model_answer: "v = u + at",
+    loss_reasons: [{ cause: "procedural_slip", marks: 2, note: "x" }],
+  });
+  assert.equal(v.can_explain, false);
+  assert.equal(v.cause, null);
+  assert.equal(v.body, null);
+  assert.equal(v.do_this_next, null);
+  assert.equal(v.model_answer, null);
+  assert.equal(v.marks_lost, null);
+  assert.deepEqual(v.concepts, []);
+  assert.equal(v.command_word, null);
+  assert.deepEqual(v.loss_reasons, []);
+});
+
+test("validate: a missing can_explain is a refusal, not permission", () => {
+  // The field is required by the schema, so its absence means the model did
+  // not assert it could explain. Failing closed matches TRUST-05: a withheld
+  // explanation beats a fluent unsupported one.
+  const v = validate({ cause: "incomplete", marks_lost: 1, explanation: "text", concepts: [] });
+  assert.equal(v.can_explain, false);
+  assert.equal(v.body, null);
+});
+
+test("validate: can_explain=true keeps everything, as before", () => {
+  const v = validate({
+    can_explain: true,
+    cause: "incomplete",
+    marks_lost: 1,
+    explanation: "Half the method was missing.",
+    concepts: [],
+  });
+  assert.equal(v.can_explain, true);
+  assert.equal(v.cause, "incomplete");
+  assert.equal(v.body, "Half the method was missing.");
 });

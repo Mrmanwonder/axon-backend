@@ -1,5 +1,6 @@
 import { callModel } from "@mastery/shared/openrouter.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
+import { mustOk, mustOne, mustMaybe, mustData, mustAffectRows, mustRpc } from "@mastery/shared/db.js";
 import { clearsTheFloor } from "@mastery/shared/quality_floor.js";
 import { SYSTEM, instruction, SCHEMA, validate } from "@mastery/shared/prompts/explain_tier1.v1.js";
 import { normalisePartKey, resolveDependencies } from "@mastery/shared/question_parts.js";
@@ -20,11 +21,16 @@ const handler = consumeQueue<ExplainMessage>(
   async ({ env, sb, msg, attempt, beat }) => {
     const runId = msg.run_id;
     const regionId = msg.region_id;
-    const { data: region } = await sb
-      .from("question_region")
-      .select("id, paper_id, student_id, question_label, question_text, student_answer, teacher_remark, marks_awarded, marks_available, explain_status, student_confirmed_at")
-      .eq("id", regionId)
-      .single();
+    // maybeSingle + checked: a failed read used to be indistinguishable from
+    // "no such question", and skipping a question because the database blinked
+    // retires the message for a region that still needs explaining.
+    const region = await mustMaybe(
+      sb.from("question_region")
+        .select("id, paper_id, student_id, question_label, question_text, student_answer, teacher_remark, marks_awarded, marks_available, explain_status, student_confirmed_at")
+        .eq("id", regionId)
+        .maybeSingle(),
+      "question_region read",
+    ) as any;
     if (!region) return { detail: { skipped: "no such question" } };
     if (region.explain_status === "done") return { detail: { skipped: "already explained" } };
 
@@ -32,34 +38,51 @@ const handler = consumeQueue<ExplainMessage>(
     // AXON_FIX_BRIEF.md §4.A1/A2. This worker will not explain a question the
     // student has not confirmed, however early or often it is queued.
     if (!region.student_confirmed_at) {
-      await sb.from("question_region").update({ explain_status: "pending" }).eq("id", regionId);
+      await mustOk(sb.from("question_region").update({ explain_status: "pending" }).eq("id", regionId), "explain_status=pending");
       return { detail: { skipped: "not confirmed" } };
     }
 
     const awarded = Number(region.marks_awarded);
     const available = Number(region.marks_available);
     if (!Number.isFinite(awarded) || !Number.isFinite(available) || awarded >= available) {
-      await sb.from("question_region").update({ explain_status: "skipped" }).eq("id", regionId);
-      await sb.rpc("advance_after_explain", { p_run_id: runId });
+      await mustOk(sb.from("question_region").update({ explain_status: "skipped" }).eq("id", regionId), "explain_status=skipped");
+      await mustRpc(sb.rpc("advance_after_explain", { p_run_id: runId }), "advance_after_explain");
       return { detail: { skipped: "no marks lost" } };
     }
 
-    await sb.from("question_region").update({ explain_status: "running" }).eq("id", regionId);
+    // An atomic claim, not a status write. Cloudflare Queues are at-least-once,
+    // so two deliveries can both read a region that is not done and both go on
+    // to call the model — two paid calls, two explanations, one of them
+    // overwriting the other. Narrowing the UPDATE by the status we expect means
+    // exactly one delivery matches a row; the loser matches nothing and
+    // mustAffectRows turns that into a permanent skip rather than a second call.
+    try {
+      await mustAffectRows(
+        sb.from("question_region")
+          .update({ explain_status: "running" })
+          .eq("id", regionId)
+          .in("explain_status", ["pending", "queued", "failed"])
+          .select("id"),
+        "claim region for explanation",
+      );
+    } catch {
+      return { detail: { skipped: "already claimed by another delivery" } };
+    }
     await beat();
 
-    const { data: run } = await sb.from("extraction_run").select("route_override").eq("id", runId).maybeSingle();
+    const run = await mustMaybe(sb.from("extraction_run").select("route_override").eq("id", runId).maybeSingle(), "extraction_run read") as any;
     const override = run?.route_override;
-    const { data: paper } = await sb.from("paper").select("subject, tier").eq("id", region.paper_id).single();
-    const { data: student } = await sb.from("student").select("class_level").eq("id", region.student_id).single();
+    const paper = await mustOne(sb.from("paper").select("subject, tier").eq("id", region.paper_id).maybeSingle(), "paper read") as any;
+    const student = await mustOne(sb.from("student").select("class_level").eq("id", region.student_id).maybeSingle(), "student read") as any;
 
     if (paper?.tier === "tier_2") {
-      const { data: matched } = await sb.from("question_region").select("canonical_question_id").eq("id", regionId).single();
+      const matched = await mustMaybe(sb.from("question_region").select("canonical_question_id").eq("id", regionId).maybeSingle(), "canonical match read") as any;
       if (!matched?.canonical_question_id) {
         console.info("tier 2 question with no scheme match; explaining as tier 1", regionId);
       }
     }
 
-    const { data: marks } = await sb.from("teacher_mark").select("mark_class, comment_text").eq("region_id", regionId);
+    const marks = await mustData(sb.from("teacher_mark").select("mark_class, comment_text").eq("region_id", regionId), "teacher_mark read") as any[];
 
     // The parts this question depends on. A Cambridge part routinely refers
     // back — "Justify your answer given in part (d)(i)" — and until this fetch
@@ -67,11 +90,11 @@ const handler = consumeQueue<ExplainMessage>(
     // prompt. It was in the database the whole time: same run, same table, the
     // adjacent order_index. shared/src/question_parts.ts records what that
     // produced on a real paper.
-    const { data: siblingRows } = await sb
+    const siblingRows = await mustData(sb
       .from("question_region")
       .select("id, question_label, question_text, student_answer, marks_awarded, marks_available, order_index")
       .eq("run_id", runId)
-      .order("order_index");
+      .order("order_index"), "sibling parts read") as any[];
 
     const ownOrderIndex =
       (siblingRows ?? []).find((s: any) => s.id === regionId)?.order_index ?? 0;
@@ -151,7 +174,30 @@ const handler = consumeQueue<ExplainMessage>(
       console.info("model_answer withheld", regionId, grounding.status);
     }
 
-    await sb.from("region_explanation").insert({
+    // The model said it could not explain this from what it was given. Honour
+    // that instead of storing whatever prose came with the refusal: the region
+    // is marked skipped, the run advances, and the card renders nothing. An
+    // empty slot is honest; an explanation the model itself disowned is not.
+    if (!parsed.can_explain) {
+      console.info("model declined to explain", regionId);
+      await mustOk(sb.from("question_region").update({ explain_status: "skipped" }).eq("id", regionId), "explain_status=skipped (can_explain false)");
+      await mustRpc(sb.rpc("advance_after_explain", { p_run_id: runId }), "advance_after_explain");
+      return { detail: { skipped: "model could not explain from the evidence given" } };
+    }
+
+    // Checked, and BEFORE the status moves. This insert used to be unchecked
+    // and the status set regardless, so a database failure here produced a
+    // region reading explain_status = 'done' with no explanation row behind it
+    // — a question the student is told has been explained, showing nothing,
+    // with no queue message left to try again.
+    //
+    // Upserted on region_id so a redelivery that gets past the claim — a lease
+    // that expired mid-model-call, say — replaces its own row rather than
+    // failing on the unique constraint. region_id alone is the real constraint
+    // in the database (checked, not assumed: region_explanation has UNIQUE
+    // (region_id), not the (run_id, region_id) pair a rescan might suggest), so
+    // one question has exactly one explanation and a rescan replaces it.
+    await mustOk(sb.from("region_explanation").upsert({
       region_id: regionId,
       run_id: runId,
       student_id: region.student_id,
@@ -173,16 +219,22 @@ const handler = consumeQueue<ExplainMessage>(
       loss_reasons: lossReasons,
       model_version: model,
       prompt_version: promptVersion,
-    });
+    }, { onConflict: "region_id" }), "region_explanation upsert");
 
-    await sb.from("question_region").update({ explain_status: "done" }).eq("id", regionId);
-    await sb.rpc("advance_after_explain", { p_run_id: runId });
+    // Only now. `done` is a claim that the explanation exists, and it is only
+    // true once the line above has returned without an error.
+    await mustOk(sb.from("question_region").update({ explain_status: "done" }).eq("id", regionId), "explain_status=done");
+    await mustRpc(sb.rpc("advance_after_explain", { p_run_id: runId }), "advance_after_explain");
 
     return { detail: { cause: parsed.cause, floor_cleared: !!doThisNext, prior_parts: deps.resolved.length, grounding: grounding.status } };
   },
+  // Checked, and therefore able to throw. The harness treats a throw here as
+  // "the terminal state was not recorded" and retries rather than acknowledging
+  // — which is the whole point: a failure to write `failed` used to be
+  // swallowed, and the message acknowledged anyway, stranding the region.
   async ({ sb, msg }) => {
-    await sb.from("question_region").update({ explain_status: "failed" }).eq("id", msg.region_id);
-    await sb.rpc("advance_after_explain", { p_run_id: msg.run_id });
+    await mustOk(sb.from("question_region").update({ explain_status: "failed" }).eq("id", msg.region_id), "explain_status=failed");
+    await mustRpc(sb.rpc("advance_after_explain", { p_run_id: msg.run_id }), "advance_after_explain");
   }
 );
 

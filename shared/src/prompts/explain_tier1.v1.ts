@@ -232,6 +232,15 @@ export interface LossReason {
 }
 
 export interface ExplainResult {
+  /**
+   * The model's own answer to "can this be explained from what I was given?".
+   *
+   * EXPLANATION_SCHEMA has always required it and this interface never carried
+   * it, so nothing read it. A response saying `can_explain: false` alongside a
+   * confident cause and a paragraph of prose was stored in full — the one
+   * signal the model has for refusing was the one field thrown away.
+   */
+  can_explain: boolean;
   cause: Cause | null;
   marks_lost: number | null;
   body: string | null;
@@ -251,9 +260,35 @@ function text(value: unknown): string | null {
 export function validate(parsed: unknown): ExplainResult {
   const v = parsed as any;
   if (!v || typeof v !== "object") throw new Error("nothing returned");
+
+  // A JSON Schema can say a field exists. It cannot say that two fields must
+  // agree, so the coupling is enforced here: when the model says it cannot
+  // explain, nothing it wrote alongside that is kept.
+  //
+  // Trusting the refusal over the prose is deliberate. A contradictory
+  // response is one where the model has told us its own output is unfounded,
+  // and TRUST-05 is explicit that a withheld explanation beats a fluent
+  // unsupported one. Absent rather than false counts as refusal too: a
+  // response missing the field has not asserted it can explain.
+  if (v.can_explain === false || v.can_explain === undefined || v.can_explain === null) {
+    return {
+      can_explain: false,
+      cause: null,
+      marks_lost: null,
+      body: null,
+      do_this_next: null,
+      concepts: [],
+      command_word: null,
+      command_word_note: null,
+      model_answer: null,
+      loss_reasons: [],
+    };
+  }
+
   const cause: Cause | null = v.cause && CAUSES.has(v.cause) ? v.cause : null;
   const commandWord = canonicalCommandWord(v.command_word);
   return {
+    can_explain: true,
     cause,
     marks_lost: cause && typeof v.marks_lost === "number" && v.marks_lost > 0 ? v.marks_lost : null,
     // EXPLANATION_SCHEMA calls this field `explanation`; the column it lands in

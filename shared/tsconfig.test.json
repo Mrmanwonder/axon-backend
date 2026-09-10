@@ -2,7 +2,14 @@
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "src",
-    "types": ["node"]
+    // Both, and the Cloudflare half is not optional any more. `types` REPLACES
+    // the base list rather than adding to it, so naming only "node" dropped
+    // @cloudflare/workers-types from the test program. That was invisible while
+    // no test imported anything that touches a Worker global — the first one to
+    // reach shared/src/worker.ts (MessageBatch) and env.ts (Queue, R2Bucket)
+    // made the whole test typecheck fail on symbols the source program resolves
+    // perfectly well.
+    "types": ["node", "@cloudflare/workers-types"]
   },
   "include": ["src/__tests__/**/*.ts"]
 }
