@@ -258,9 +258,23 @@ async function reviewComplete(req: Request, env: Env): Promise<Response> {
 
   const regionIds: string[] = begin?.region_ids ?? [];
   if (env.EXPLAIN_QUEUE) {
-    for (const regionId of regionIds) {
-      await env.EXPLAIN_QUEUE.send({ run_id: body.run_id, region_id: regionId });
+    // ⚡ BOLT OPTIMIZATION:
+    // Replaced sequential send() calls in a loop with concurrent sendBatch() calls.
+    // Cloudflare Queues have a strict limit of 100 messages per sendBatch call,
+    // so we chunk the regions array and dispatch chunks concurrently to avoid N+1 latency.
+    const chunks = [];
+    for (let i = 0; i < regionIds.length; i += 100) {
+      chunks.push(regionIds.slice(i, i + 100));
     }
+    const promises = chunks.map((chunk) => {
+      const messages = chunk.map((regionId) => ({
+        body: { run_id: body.run_id, region_id: regionId },
+      }));
+      // sendBatch returns Promise<QueueSendBatchResponse>. We let TS infer the return type
+      // of map() so that we don't accidentally type it as Promise<void>[] and cause a TS error.
+      return env.EXPLAIN_QUEUE!.sendBatch(messages);
+    });
+    await Promise.all(promises);
   }
   return json({ run_id: body.run_id, explaining: begin?.queued ?? 0 });
 }
