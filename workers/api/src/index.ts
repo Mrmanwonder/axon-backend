@@ -131,32 +131,40 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
   if (!paper) return failure("That paper is not yours.", 403);
 
   const admin = serviceClient(env);
-  const minted: any[] = [];
+  // Validate first sequentially to fail fast without side effects
   for (const object of body.objects) {
     const extensions = ALLOWED_CONTENT_TYPES[object.content_type];
     if (!extensions) return failure(`We cannot take a ${object.content_type} file.`);
     if (object.bytes && object.bytes > MAX_BYTES) return failure("One of those files is too large to upload.");
     if (!BUCKET_FOR[object.kind as keyof typeof BUCKET_FOR]) return failure("Unknown file kind.");
-    const bucket = BUCKET_FOR[object.kind as keyof typeof BUCKET_FOR];
-    const key = objectKey({ studentId: body.student_id, paperId: body.paper_id, kind: object.kind, name: object.name, extension: extensions[0] });
-    const entry: any = { kind: object.kind, name: object.name, bucket, key, url: await presignPut(env, bucket, key, object.content_type) };
-    if (object.kind === "upload" || object.kind === "raw") {
-      const { data: row } = await admin
-        .from("upload")
-        .insert({
-          paper_id: body.paper_id,
-          student_id: body.student_id,
-          kind: object.content_type === "application/pdf" ? "pdf" : "image",
-          r2_bucket: bucket,
-          r2_key: key,
-          content_type: object.content_type,
-        })
-        .select("id")
-        .single();
-      entry.upload_id = row?.id;
-    }
-    minted.push(entry);
   }
+
+  // ⚡ Bolt: Use Promise.all to concurrently compute presigned URLs and DB insertions instead of sequentially inside a loop
+  const minted: any[] = await Promise.all(
+    body.objects.map(async (object: any) => {
+      const extensions = ALLOWED_CONTENT_TYPES[object.content_type];
+      const bucket = BUCKET_FOR[object.kind as keyof typeof BUCKET_FOR];
+      const key = objectKey({ studentId: body.student_id, paperId: body.paper_id, kind: object.kind, name: object.name, extension: extensions[0] });
+      const entry: any = { kind: object.kind, name: object.name, bucket, key, url: await presignPut(env, bucket, key, object.content_type) };
+
+      if (object.kind === "upload" || object.kind === "raw") {
+        const { data: row } = await admin
+          .from("upload")
+          .insert({
+            paper_id: body.paper_id,
+            student_id: body.student_id,
+            kind: object.content_type === "application/pdf" ? "pdf" : "image",
+            r2_bucket: bucket,
+            r2_key: key,
+            content_type: object.content_type,
+          })
+          .select("id")
+          .single();
+        entry.upload_id = row?.id;
+      }
+      return entry;
+    })
+  );
   return json({ objects: minted, expires_in: 900 });
 }
 
@@ -172,33 +180,37 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
   const admin = serviceClient(env);
   const confirmed: string[] = [];
   const missing: Array<{ key: string; reason: string }> = [];
-  for (const claim of body.uploads) {
-    if (!claim.key?.startsWith(`${paper.student_id}/${paper.id}/`)) {
-      missing.push({ key: claim.key ?? "", reason: "that file does not belong to this paper" });
-      continue;
-    }
-    let head: Awaited<ReturnType<typeof headObject>>;
-    try {
-      head = await headObject(env, claim.bucket, claim.key);
-    } catch (cause) {
-      missing.push({ key: claim.key, reason: `we could not check that file (${cause})` });
-      continue;
-    }
-    if (!head) {
-      missing.push({ key: claim.key, reason: "that file did not arrive" });
-      continue;
-    }
-    if (claim.bytes && claim.bytes !== head.bytes) {
-      missing.push({ key: claim.key, reason: "that file arrived incomplete" });
-      continue;
-    }
-    await admin
-      .from("upload")
-      .update({ confirmed: true, bytes: head.bytes, etag: head.etag, sha256: claim.sha256 ?? null })
-      .eq("paper_id", body.paper_id)
-      .eq("r2_key", claim.key);
-    confirmed.push(claim.key);
-  }
+
+  // ⚡ Bolt: Use Promise.all to concurrently verify and update all uploads instead of sequentially inside a loop
+  await Promise.all(
+    body.uploads.map(async (claim: any) => {
+      if (!claim.key?.startsWith(`${paper.student_id}/${paper.id}/`)) {
+        missing.push({ key: claim.key ?? "", reason: "that file does not belong to this paper" });
+        return;
+      }
+      let head: Awaited<ReturnType<typeof headObject>>;
+      try {
+        head = await headObject(env, claim.bucket, claim.key);
+      } catch (cause) {
+        missing.push({ key: claim.key, reason: `we could not check that file (${cause})` });
+        return;
+      }
+      if (!head) {
+        missing.push({ key: claim.key, reason: "that file did not arrive" });
+        return;
+      }
+      if (claim.bytes && claim.bytes !== head.bytes) {
+        missing.push({ key: claim.key, reason: "that file arrived incomplete" });
+        return;
+      }
+      await admin
+        .from("upload")
+        .update({ confirmed: true, bytes: head.bytes, etag: head.etag, sha256: claim.sha256 ?? null })
+        .eq("paper_id", body.paper_id)
+        .eq("r2_key", claim.key);
+      confirmed.push(claim.key);
+    })
+  );
   return json({ confirmed, missing }, missing.length ? 409 : 200);
 }
 
@@ -217,13 +229,17 @@ async function pageAssetUrls(req: Request, env: Env): Promise<Response> {
   if (error) return failure("We could not look up those pages.", 500, error.message);
 
   const urls: Record<number, { url: string | null; mask_url: string | null }> = {};
-  for (const page of pages ?? []) {
-    const bucket = (page.r2_bucket as BucketKind) ?? "derived";
-    urls[page.page_number] = {
-      url: page.r2_key ? await signAssetUrl(env, bucket, page.r2_key) : null,
-      mask_url: page.mask_key ? await signAssetUrl(env, bucket, page.mask_key) : null,
-    };
-  }
+  // ⚡ Bolt: Use Promise.all to concurrently sign all required asset URLs instead of sequentially inside a loop
+  await Promise.all(
+    (pages ?? []).map(async (page) => {
+      const bucket = (page.r2_bucket as BucketKind) ?? "derived";
+      const [url, mask_url] = await Promise.all([
+        page.r2_key ? signAssetUrl(env, bucket, page.r2_key) : Promise.resolve(null),
+        page.mask_key ? signAssetUrl(env, bucket, page.mask_key) : Promise.resolve(null),
+      ]);
+      urls[page.page_number] = { url, mask_url };
+    })
+  );
   return json({ urls });
 }
 
@@ -257,10 +273,9 @@ async function reviewComplete(req: Request, env: Env): Promise<Response> {
   if (error) return failure("We could not start the explanations. Your corrections are saved.", 500, error.message);
 
   const regionIds: string[] = begin?.region_ids ?? [];
-  if (env.EXPLAIN_QUEUE) {
-    for (const regionId of regionIds) {
-      await env.EXPLAIN_QUEUE.send({ run_id: body.run_id, region_id: regionId });
-    }
+  if (env.EXPLAIN_QUEUE && regionIds.length) {
+    // ⚡ Bolt: Use sendBatch instead of sequential send() inside a loop to prevent N+1 queue dispatch latency
+    await env.EXPLAIN_QUEUE.sendBatch(regionIds.map((regionId) => ({ body: { run_id: body.run_id, region_id: regionId } })));
   }
   return json({ run_id: body.run_id, explaining: begin?.queued ?? 0 });
 }
