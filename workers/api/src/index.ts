@@ -172,32 +172,46 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
   const admin = serviceClient(env);
   const confirmed: string[] = [];
   const missing: Array<{ key: string; reason: string }> = [];
-  for (const claim of body.uploads) {
-    if (!claim.key?.startsWith(`${paper.student_id}/${paper.id}/`)) {
-      missing.push({ key: claim.key ?? "", reason: "that file does not belong to this paper" });
-      continue;
-    }
-    let head: Awaited<ReturnType<typeof headObject>>;
-    try {
-      head = await headObject(env, claim.bucket, claim.key);
-    } catch (cause) {
-      missing.push({ key: claim.key, reason: `we could not check that file (${cause})` });
-      continue;
-    }
-    if (!head) {
-      missing.push({ key: claim.key, reason: "that file did not arrive" });
-      continue;
-    }
-    if (claim.bytes && claim.bytes !== head.bytes) {
-      missing.push({ key: claim.key, reason: "that file arrived incomplete" });
-      continue;
-    }
-    await admin
-      .from("upload")
-      .update({ confirmed: true, bytes: head.bytes, etag: head.etag, sha256: claim.sha256 ?? null })
-      .eq("paper_id", body.paper_id)
-      .eq("r2_key", claim.key);
-    confirmed.push(claim.key);
+
+  // Define a chunking function
+  const chunkArray = <T>(arr: T[], size: number): T[][] => {
+    return Array.from({ length: Math.ceil(arr.length / size) }, (v, i) =>
+      arr.slice(i * size, i * size + size)
+    );
+  };
+
+  // Process in chunks of 50 to avoid overloading R2 or DB rate limits
+  const chunks = chunkArray(body.uploads as Array<any>, 50);
+  for (const chunk of chunks) {
+    await Promise.all(
+      chunk.map(async (claim) => {
+        if (!claim.key?.startsWith(`${paper.student_id}/${paper.id}/`)) {
+          missing.push({ key: claim.key ?? "", reason: "that file does not belong to this paper" });
+          return;
+        }
+        let head: Awaited<ReturnType<typeof headObject>>;
+        try {
+          head = await headObject(env, claim.bucket, claim.key);
+        } catch (cause) {
+          missing.push({ key: claim.key, reason: `we could not check that file (${cause})` });
+          return;
+        }
+        if (!head) {
+          missing.push({ key: claim.key, reason: "that file did not arrive" });
+          return;
+        }
+        if (claim.bytes && claim.bytes !== head.bytes) {
+          missing.push({ key: claim.key, reason: "that file arrived incomplete" });
+          return;
+        }
+        await admin
+          .from("upload")
+          .update({ confirmed: true, bytes: head.bytes, etag: head.etag, sha256: claim.sha256 ?? null })
+          .eq("paper_id", body.paper_id)
+          .eq("r2_key", claim.key);
+        confirmed.push(claim.key);
+      })
+    );
   }
   return json({ confirmed, missing }, missing.length ? 409 : 200);
 }
@@ -217,13 +231,17 @@ async function pageAssetUrls(req: Request, env: Env): Promise<Response> {
   if (error) return failure("We could not look up those pages.", 500, error.message);
 
   const urls: Record<number, { url: string | null; mask_url: string | null }> = {};
-  for (const page of pages ?? []) {
-    const bucket = (page.r2_bucket as BucketKind) ?? "derived";
-    urls[page.page_number] = {
-      url: page.r2_key ? await signAssetUrl(env, bucket, page.r2_key) : null,
-      mask_url: page.mask_key ? await signAssetUrl(env, bucket, page.mask_key) : null,
-    };
-  }
+
+  // Concurrently sign asset URLs
+  await Promise.all(
+    (pages ?? []).map(async (page: { page_number: number; r2_bucket?: string | null; r2_key?: string | null; mask_key?: string | null }) => {
+      const bucket = (page.r2_bucket as BucketKind) ?? "derived";
+      urls[page.page_number] = {
+        url: page.r2_key ? await signAssetUrl(env, bucket, page.r2_key) : null,
+        mask_url: page.mask_key ? await signAssetUrl(env, bucket, page.mask_key) : null,
+      };
+    })
+  );
   return json({ urls });
 }
 
@@ -257,9 +275,13 @@ async function reviewComplete(req: Request, env: Env): Promise<Response> {
   if (error) return failure("We could not start the explanations. Your corrections are saved.", 500, error.message);
 
   const regionIds: string[] = begin?.region_ids ?? [];
-  if (env.EXPLAIN_QUEUE) {
-    for (const regionId of regionIds) {
-      await env.EXPLAIN_QUEUE.send({ run_id: body.run_id, region_id: regionId });
+  if (env.EXPLAIN_QUEUE && regionIds.length > 0) {
+    // Send batches in chunks of 100 to stay within Cloudflare Queue limits
+    for (let i = 0; i < regionIds.length; i += 100) {
+      const chunk = regionIds.slice(i, i + 100);
+      await env.EXPLAIN_QUEUE.sendBatch(
+        chunk.map((regionId) => ({ body: { run_id: body.run_id, region_id: regionId } }))
+      );
     }
   }
   return json({ run_id: body.run_id, explaining: begin?.queued ?? 0 });
