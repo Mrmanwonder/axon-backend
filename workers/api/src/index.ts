@@ -257,9 +257,13 @@ async function reviewComplete(req: Request, env: Env): Promise<Response> {
   if (error) return failure("We could not start the explanations. Your corrections are saved.", 500, error.message);
 
   const regionIds: string[] = begin?.region_ids ?? [];
-  if (env.EXPLAIN_QUEUE) {
-    for (const regionId of regionIds) {
-      await env.EXPLAIN_QUEUE.send({ run_id: body.run_id, region_id: regionId });
+  if (env.EXPLAIN_QUEUE && regionIds.length > 0) {
+    // ⚡ Bolt: Replace N+1 sequential send() calls with a single sendBatch() to reduce latency
+    // See memory: Use Promise.all() for concurrent operations and Queue.sendBatch() for optimized queue dispatches.
+    const messages = regionIds.map((regionId) => ({ body: { run_id: body.run_id, region_id: regionId } }));
+    // Cloudflare Workers Queue sendBatch has a limit of 100 messages per batch
+    for (let i = 0; i < messages.length; i += 100) {
+      await env.EXPLAIN_QUEUE.sendBatch(messages.slice(i, i + 100));
     }
   }
   return json({ run_id: body.run_id, explaining: begin?.queued ?? 0 });
