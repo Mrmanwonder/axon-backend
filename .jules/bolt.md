@@ -1,0 +1,3 @@
+## 2024-09-11 - Cloudflare Workers Queue Batching Requirements
+**Learning:** `Queue.sendBatch()` in Cloudflare Workers expects an iterable of `MessageSendRequest<Body>`, which means each item in the batch must be wrapped in an object with a `body` property (e.g., `{ body: myMessagePayload }`), rather than just passing the payloads directly. Also, chunk sizes must be 100 or less to avoid limits.
+**Action:** When refactoring sequential `Queue.send(payload)` calls into `Queue.sendBatch(batch)`, ensure the batch is constructed using `.map(payload => ({ body: payload }))` and chunked properly to 100 max per chunk.

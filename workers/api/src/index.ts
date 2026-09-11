@@ -258,9 +258,16 @@ async function reviewComplete(req: Request, env: Env): Promise<Response> {
 
   const regionIds: string[] = begin?.region_ids ?? [];
   if (env.EXPLAIN_QUEUE) {
-    for (const regionId of regionIds) {
-      await env.EXPLAIN_QUEUE.send({ run_id: body.run_id, region_id: regionId });
+    // ⚡ Bolt: Batch queue dispatches to avoid N+1 latency bottlenecks.
+    // Chunk into lengths of 100 or fewer to avoid Cloudflare Workers limits.
+    const promises = [];
+    for (let i = 0; i < regionIds.length; i += 100) {
+      const batch = regionIds.slice(i, i + 100).map((regionId) => ({
+        body: { run_id: body.run_id, region_id: regionId }
+      }));
+      promises.push(env.EXPLAIN_QUEUE.sendBatch(batch));
     }
+    await Promise.all(promises);
   }
   return json({ run_id: body.run_id, explaining: begin?.queued ?? 0 });
 }
