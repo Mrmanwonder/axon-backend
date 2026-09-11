@@ -257,9 +257,10 @@ async function reviewComplete(req: Request, env: Env): Promise<Response> {
   if (error) return failure("We could not start the explanations. Your corrections are saved.", 500, error.message);
 
   const regionIds: string[] = begin?.region_ids ?? [];
-  if (env.EXPLAIN_QUEUE) {
-    for (const regionId of regionIds) {
-      await env.EXPLAIN_QUEUE.send({ run_id: body.run_id, region_id: regionId });
+  if (env.EXPLAIN_QUEUE && regionIds.length) {
+    const messages = regionIds.map((regionId) => ({ body: { run_id: body.run_id, region_id: regionId } }));
+    for (let i = 0; i < messages.length; i += 100) {
+      await env.EXPLAIN_QUEUE.sendBatch(messages.slice(i, i + 100));
     }
   }
   return json({ run_id: body.run_id, explaining: begin?.queued ?? 0 });
