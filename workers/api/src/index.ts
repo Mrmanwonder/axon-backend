@@ -257,10 +257,20 @@ async function reviewComplete(req: Request, env: Env): Promise<Response> {
   if (error) return failure("We could not start the explanations. Your corrections are saved.", 500, error.message);
 
   const regionIds: string[] = begin?.region_ids ?? [];
-  if (env.EXPLAIN_QUEUE) {
-    for (const regionId of regionIds) {
-      await env.EXPLAIN_QUEUE.send({ run_id: body.run_id, region_id: regionId });
+  if (env.EXPLAIN_QUEUE && regionIds.length > 0) {
+    // ⚡ Bolt Optimization: Replaced sequential env.EXPLAIN_QUEUE.send() calls with concurrent
+    // sendBatch() calls. Cloudflare Queues limit sendBatch to 100 messages, so we chunk them.
+    // Impact: Eliminates N+1 latency bottleneck and significantly reduces API subrequests,
+    // ensuring fast and safe execution without hitting Worker limits.
+    const BATCH_SIZE = 100;
+    const promises = [];
+    for (let i = 0; i < regionIds.length; i += BATCH_SIZE) {
+      const batch = regionIds.slice(i, i + BATCH_SIZE).map((regionId) => ({
+        body: { run_id: body.run_id, region_id: regionId },
+      }));
+      promises.push(env.EXPLAIN_QUEUE.sendBatch(batch));
     }
+    await Promise.all(promises);
   }
   return json({ run_id: body.run_id, explaining: begin?.queued ?? 0 });
 }
