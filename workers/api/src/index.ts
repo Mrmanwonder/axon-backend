@@ -6,6 +6,7 @@ import type { Env } from "@mastery/shared/env.js";
 const MAX_PAGES = 25;
 const MAX_BYTES = 25 * 1024 * 1024;
 const MAX_OBJECTS = 60;
+const IO_CONCURRENCY = 8;
 
 const ALLOWED_CONTENT_TYPES: Record<string, string[]> = {
   "image/webp": ["webp"],
@@ -14,6 +15,30 @@ const ALLOWED_CONTENT_TYPES: Record<string, string[]> = {
   "image/heic": ["heic"],
   "application/pdf": ["pdf"],
 };
+
+/**
+ * Run independent remote operations concurrently without turning a booklet into
+ * an unbounded burst of Worker subrequests. Ordering is preserved so callers can
+ * safely zip results back to the input array.
+ */
+async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (!items.length) return [];
+  const out = new Array<R>(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      out[index] = await fn(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -60,17 +85,12 @@ async function serveAsset(req: Request, env: Env, url: URL): Promise<Response> {
   if (!obj) return failure("not found", 404);
   return new Response(obj.body, {
     headers: {
-      // CORS belongs on the success path too. `failure()` spreads it, so every
-      // way this route could say no was readable from the browser and the one
-      // way it says yes was not: the image came back 200 with no
-      // Access-Control-Allow-Origin, so `fetch` rejected it before a single
-      // byte reached the page. Every crop in QuestionDetail and in the review
-      // screen — the provenance payoff the whole extraction contract exists to
-      // pay off — failed on that missing header, and failed as "we could not
-      // show this part of the page", which reads like a scan problem.
       ...CORS,
       "Content-Type": obj.httpMetadata?.contentType ?? "application/octet-stream",
-      "Cache-Control": "private, max-age=60",
+      // Signed asset URLs are private to the browser and immutable by key. Keep
+      // this comfortably below the signature TTL while avoiding a Worker + R2
+      // round trip every time the same crop is reopened.
+      "Cache-Control": "private, max-age=300, immutable",
     },
   });
 }
@@ -130,33 +150,64 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
   const { data: paper } = await user.from("paper").select("id, student_id").eq("id", body.paper_id).eq("student_id", body.student_id).maybeSingle();
   if (!paper) return failure("That paper is not yours.", 403);
 
-  const admin = serviceClient(env);
-  const minted: any[] = [];
+  // Validate the whole request before creating any ledger rows or signing URLs.
+  // A bad object in slot N can no longer leave N-1 partial upload intents behind.
+  const prepared: Array<{
+    object: any;
+    bucket: BucketKind;
+    key: string;
+  }> = [];
   for (const object of body.objects) {
     const extensions = ALLOWED_CONTENT_TYPES[object.content_type];
     if (!extensions) return failure(`We cannot take a ${object.content_type} file.`);
     if (object.bytes && object.bytes > MAX_BYTES) return failure("One of those files is too large to upload.");
-    if (!BUCKET_FOR[object.kind as keyof typeof BUCKET_FOR]) return failure("Unknown file kind.");
     const bucket = BUCKET_FOR[object.kind as keyof typeof BUCKET_FOR];
-    const key = objectKey({ studentId: body.student_id, paperId: body.paper_id, kind: object.kind, name: object.name, extension: extensions[0] });
-    const entry: any = { kind: object.kind, name: object.name, bucket, key, url: await presignPut(env, bucket, key, object.content_type) };
-    if (object.kind === "upload" || object.kind === "raw") {
-      const { data: row } = await admin
-        .from("upload")
-        .insert({
-          paper_id: body.paper_id,
-          student_id: body.student_id,
-          kind: object.content_type === "application/pdf" ? "pdf" : "image",
-          r2_bucket: bucket,
-          r2_key: key,
-          content_type: object.content_type,
-        })
-        .select("id")
-        .single();
-      entry.upload_id = row?.id;
-    }
-    minted.push(entry);
+    if (!bucket) return failure("Unknown file kind.");
+    const key = objectKey({
+      studentId: body.student_id,
+      paperId: body.paper_id,
+      kind: object.kind,
+      name: object.name,
+      extension: extensions[0],
+    });
+    prepared.push({ object, bucket, key });
   }
+
+  const admin = serviceClient(env);
+  const ledgerRows = prepared
+    .filter(({ object }) => object.kind === "upload" || object.kind === "raw")
+    .map(({ object, bucket, key }) => ({
+      paper_id: body.paper_id,
+      student_id: body.student_id,
+      kind: object.content_type === "application/pdf" ? "pdf" : "image",
+      r2_bucket: bucket,
+      r2_key: key,
+      content_type: object.content_type,
+    }));
+
+  const ledgerByKey = new Map<string, string>();
+  if (ledgerRows.length) {
+    const { data: rows, error } = await admin
+      .from("upload")
+      .insert(ledgerRows)
+      .select("id,r2_key");
+    if (error) {
+      return failure("We could not prepare those files for upload. Nothing was uploaded yet.", 500, error.message);
+    }
+    for (const row of rows ?? []) ledgerByKey.set(row.r2_key, row.id);
+  }
+
+  // Presigning is local crypto; all URLs are independent and can be minted in
+  // parallel once ownership and validation have succeeded.
+  const minted = await Promise.all(prepared.map(async ({ object, bucket, key }) => ({
+    kind: object.kind,
+    name: object.name,
+    bucket,
+    key,
+    url: await presignPut(env, bucket, key, object.content_type),
+    ...(ledgerByKey.has(key) ? { upload_id: ledgerByKey.get(key) } : {}),
+  })));
+
   return json({ objects: minted, expires_in: 900 });
 }
 
@@ -165,41 +216,58 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
   if (!user) return failure("Sign in first.", 401);
   const body = await readJson<any>(req);
   if (!body?.paper_id || !Array.isArray(body.uploads) || !body.uploads.length) return failure("Nothing to confirm.");
+  if (body.uploads.length > MAX_OBJECTS) return failure(`That is more than ${MAX_OBJECTS} files in one go.`);
 
   const { data: paper } = await user.from("paper").select("id, student_id").eq("id", body.paper_id).maybeSingle();
   if (!paper) return failure("That paper is not yours.", 403);
 
-  const admin = serviceClient(env);
-  const confirmed: string[] = [];
-  const missing: Array<{ key: string; reason: string }> = [];
-  for (const claim of body.uploads) {
+  type Checked = {
+    key: string;
+    claim: any;
+    head: Awaited<ReturnType<typeof headObject>> | null;
+    reason?: string;
+  };
+
+  // R2 HEADs do not depend on one another. Bound concurrency avoids the former
+  // N*RTT waterfall without letting a malicious 60-object request fan out all
+  // at once.
+  const checked = await mapLimit<any, Checked>(body.uploads, IO_CONCURRENCY, async (claim) => {
     if (!claim.key?.startsWith(`${paper.student_id}/${paper.id}/`)) {
-      missing.push({ key: claim.key ?? "", reason: "that file does not belong to this paper" });
-      continue;
+      return { key: claim.key ?? "", claim, head: null, reason: "that file does not belong to this paper" };
     }
-    let head: Awaited<ReturnType<typeof headObject>>;
     try {
-      head = await headObject(env, claim.bucket, claim.key);
+      const head = await headObject(env, claim.bucket, claim.key);
+      if (!head) return { key: claim.key, claim, head: null, reason: "that file did not arrive" };
+      if (claim.bytes && claim.bytes !== head.bytes) {
+        return { key: claim.key, claim, head, reason: "that file arrived incomplete" };
+      }
+      return { key: claim.key, claim, head };
     } catch (cause) {
-      missing.push({ key: claim.key, reason: `we could not check that file (${cause})` });
-      continue;
+      return { key: claim.key, claim, head: null, reason: `we could not check that file (${cause})` };
     }
-    if (!head) {
-      missing.push({ key: claim.key, reason: "that file did not arrive" });
-      continue;
-    }
-    if (claim.bytes && claim.bytes !== head.bytes) {
-      missing.push({ key: claim.key, reason: "that file arrived incomplete" });
-      continue;
-    }
-    await admin
+  });
+
+  const missing = checked
+    .filter((item) => item.reason)
+    .map((item) => ({ key: item.key, reason: item.reason! }));
+  const valid = checked.filter((item) => !item.reason && item.head);
+
+  const admin = serviceClient(env);
+  await mapLimit(valid, IO_CONCURRENCY, async ({ claim, head }) => {
+    const { error } = await admin
       .from("upload")
-      .update({ confirmed: true, bytes: head.bytes, etag: head.etag, sha256: claim.sha256 ?? null })
+      .update({
+        confirmed: true,
+        bytes: head!.bytes,
+        etag: head!.etag,
+        sha256: claim.sha256 ?? null,
+      })
       .eq("paper_id", body.paper_id)
       .eq("r2_key", claim.key);
-    confirmed.push(claim.key);
-  }
-  return json({ confirmed, missing }, missing.length ? 409 : 200);
+    if (error) throw error;
+  });
+
+  return json({ confirmed: valid.map((item) => item.key), missing }, missing.length ? 409 : 200);
 }
 
 async function pageAssetUrls(req: Request, env: Env): Promise<Response> {
@@ -216,23 +284,21 @@ async function pageAssetUrls(req: Request, env: Env): Promise<Response> {
     .in("page_number", body.page_numbers);
   if (error) return failure("We could not look up those pages.", 500, error.message);
 
-  const urls: Record<number, { url: string | null; mask_url: string | null }> = {};
-  for (const page of pages ?? []) {
+  const signed = await Promise.all((pages ?? []).map(async (page) => {
     const bucket = (page.r2_bucket as BucketKind) ?? "derived";
-    urls[page.page_number] = {
-      url: page.r2_key ? await signAssetUrl(env, bucket, page.r2_key) : null,
-      mask_url: page.mask_key ? await signAssetUrl(env, bucket, page.mask_key) : null,
-    };
-  }
-  return json({ urls });
+    const [url, maskUrl] = await Promise.all([
+      page.r2_key ? signAssetUrl(env, bucket, page.r2_key) : Promise.resolve(null),
+      page.mask_key ? signAssetUrl(env, bucket, page.mask_key) : Promise.resolve(null),
+    ]);
+    return [page.page_number, { url, mask_url: maskUrl }] as const;
+  }));
+
+  return json({ urls: Object.fromEntries(signed) });
 }
 
 // This is the ONLY place that starts explanations: it gates on every
 // review-required region being confirmed, then calls begin_explanations and
-// fans out to EXPLAIN_QUEUE. See AXON_FIX_BRIEF.md §4.A1 — the frontend bug
-// is calling this before review is complete, when it is guaranteed to 409.
-// This endpoint itself is not the bug; it needs to be called at the right
-// time, which is a frontend fix (§6.1), not a change here.
+// fans out to EXPLAIN_QUEUE.
 async function reviewComplete(req: Request, env: Env): Promise<Response> {
   const user = clientFor(req, env);
   if (!user) return failure("Sign in first.", 401);
@@ -258,9 +324,9 @@ async function reviewComplete(req: Request, env: Env): Promise<Response> {
 
   const regionIds: string[] = begin?.region_ids ?? [];
   if (env.EXPLAIN_QUEUE) {
-    for (const regionId of regionIds) {
-      await env.EXPLAIN_QUEUE.send({ run_id: body.run_id, region_id: regionId });
-    }
+    await mapLimit(regionIds, 16, (regionId) =>
+      env.EXPLAIN_QUEUE!.send({ run_id: body.run_id, region_id: regionId }),
+    );
   }
   return json({ run_id: body.run_id, explaining: begin?.queued ?? 0 });
 }
