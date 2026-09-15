@@ -129,8 +129,27 @@ export async function deletePrefix(env: Env, bucket: BucketKind, prefix: string,
   return { deleted, done: false, cursor };
 }
 
-async function hmacKey(secret: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+let cachedHmacSecret: string | null = null;
+let cachedHmacKey: Promise<CryptoKey> | null = null;
+
+/**
+ * Importing an HMAC key is local crypto, but page-asset-urls can sign dozens of
+ * objects in one request. A Worker isolate can safely reuse the immutable key
+ * derived from the current secret; rotation automatically invalidates the cache
+ * because the secret value changes.
+ */
+function hmacKey(secret: string): Promise<CryptoKey> {
+  if (!cachedHmacKey || cachedHmacSecret !== secret) {
+    cachedHmacSecret = secret;
+    cachedHmacKey = crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign", "verify"],
+    );
+  }
+  return cachedHmacKey;
 }
 
 function base64url(bytes: Uint8Array): string {
