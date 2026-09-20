@@ -4,6 +4,21 @@
 /** Bumped whenever the shape submit_paper() writes changes. Passed through to it so old and new clients stay distinguishable in the data. */
 export const PIPELINE_VERSION = "1.0.0";
 
+export const CAPTURE = {
+  MAX_PAGES: 25,
+  UPLOAD_EXTENSIONS: {
+    "image/webp": "webp",
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/heic": "heic",
+    "image/heif": "heif",
+    "application/pdf": "pdf",
+  },
+} as const;
+
+/** Client-controlled object names are path components. Keep them to one segment. */
+export const SAFE_OBJECT_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+
 export interface RawBox {
   x?: unknown;
   y?: unknown;
