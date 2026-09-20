@@ -161,3 +161,98 @@ export function imageFormat(bytes: Uint8Array): "webp" | "jpeg" | "png" | null {
   ) return "webp";
   return null;
 }
+
+function saneDimensions(width: number, height: number): { width: number; height: number } | null {
+  return Number.isSafeInteger(width) && Number.isSafeInteger(height) && width > 0 && height > 0
+    ? { width, height }
+    : null;
+}
+
+function u24le(bytes: Uint8Array, offset: number): number {
+  return bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16);
+}
+
+function u32le(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0;
+}
+
+function webpDimensions(bytes: Uint8Array): { width: number; height: number } | null {
+  let offset = 12;
+  while (offset + 8 <= bytes.length) {
+    const chunk = String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
+    const size = u32le(bytes, offset + 4);
+    const payload = offset + 8;
+    if (payload + size > bytes.length) return null;
+
+    if (chunk === "VP8X" && size >= 10) {
+      return saneDimensions(1 + u24le(bytes, payload + 4), 1 + u24le(bytes, payload + 7));
+    }
+    if (chunk === "VP8L" && size >= 5 && bytes[payload] === 0x2f) {
+      const b0 = bytes[payload + 1];
+      const b1 = bytes[payload + 2];
+      const b2 = bytes[payload + 3];
+      const b3 = bytes[payload + 4];
+      const width = 1 + b0 + ((b1 & 0x3f) << 8);
+      const height = 1 + (b1 >> 6) + (b2 << 2) + ((b3 & 0x0f) << 10);
+      return saneDimensions(width, height);
+    }
+    if (
+      chunk === "VP8 " && size >= 10 &&
+      bytes[payload + 3] === 0x9d && bytes[payload + 4] === 0x01 && bytes[payload + 5] === 0x2a
+    ) {
+      const width = (bytes[payload + 6] | (bytes[payload + 7] << 8)) & 0x3fff;
+      const height = (bytes[payload + 8] | (bytes[payload + 9] << 8)) & 0x3fff;
+      return saneDimensions(width, height);
+    }
+
+    offset = payload + size + (size & 1);
+  }
+  return null;
+}
+
+function jpegDimensions(bytes: Uint8Array): { width: number; height: number } | null {
+  let offset = 2;
+  while (offset + 3 < bytes.length) {
+    while (offset < bytes.length && bytes[offset] !== 0xff) offset++;
+    while (offset < bytes.length && bytes[offset] === 0xff) offset++;
+    if (offset >= bytes.length) return null;
+
+    const marker = bytes[offset++];
+    if (marker === 0xd8 || marker === 0xd9 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (marker === 0xda || offset + 1 >= bytes.length) return null;
+
+    const length = (bytes[offset] << 8) | bytes[offset + 1];
+    if (length < 2 || offset + length > bytes.length) return null;
+
+    const isSof = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+    if (isSof) {
+      if (length < 7) return null;
+      const height = (bytes[offset + 3] << 8) | bytes[offset + 4];
+      const width = (bytes[offset + 5] << 8) | bytes[offset + 6];
+      return saneDimensions(width, height);
+    }
+    offset += length;
+  }
+  return null;
+}
+
+/**
+ * Read dimensions from the encoded container without allocating the decoded
+ * pixel buffer. This is a security boundary for the crop worker: a forged image
+ * with enormous dimensions must be rejected before its codec can expand it.
+ */
+export function imageDimensions(bytes: Uint8Array): { width: number; height: number } | null {
+  const format = imageFormat(bytes);
+  if (format === "png") {
+    if (
+      bytes.length < 24 ||
+      bytes[12] !== 0x49 || bytes[13] !== 0x48 || bytes[14] !== 0x44 || bytes[15] !== 0x52
+    ) return null;
+    const width = ((bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19]) >>> 0;
+    const height = ((bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23]) >>> 0;
+    return saneDimensions(width, height);
+  }
+  if (format === "webp") return webpDimensions(bytes);
+  if (format === "jpeg") return jpegDimensions(bytes);
+  return null;
+}
