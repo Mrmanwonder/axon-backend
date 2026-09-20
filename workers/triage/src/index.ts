@@ -2,6 +2,7 @@ import { callModel } from "@mastery/shared/openrouter.js";
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
 import { imageRef } from "@mastery/shared/r2.js";
 import { SYSTEM, instruction, SCHEMA, validate, REJECTION_REASON, qualityFailureMessage, type QualitySignals } from "@mastery/shared/prompts/triage.v1.js";
+import { CAPTURE } from "@mastery/shared/contract.js";
 import type { Env } from "@mastery/shared/env.js";
 
 const PAGES_TO_LOOK_AT = 6;
@@ -18,6 +19,17 @@ interface Page {
   thumb_key: string | null;
   quality_verdict: string | null;
   quality_signals: QualitySignals | null;
+}
+
+/** Keep the model budget fixed while covering the whole booklet, including the last page. */
+function samplePages(pages: Page[], limit = PAGES_TO_LOOK_AT): Page[] {
+  if (pages.length <= limit) return pages;
+  const sampled: Page[] = [];
+  for (let i = 0; i < limit; i++) {
+    const index = Math.round((i * (pages.length - 1)) / (limit - 1));
+    sampled.push(pages[index]);
+  }
+  return sampled;
 }
 
 const handler = consumeQueue<TriageMessage>(
@@ -42,13 +54,14 @@ const handler = consumeQueue<TriageMessage>(
       .eq("paper_id", run.paper_id)
       .not("r2_key", "is", null)
       .order("page_number")
-      .limit(PAGES_TO_LOOK_AT);
+      .limit(CAPTURE.MAX_PAGES);
     if (!pages?.length) {
       await failRun(sb, runId, "We could not find the pages for this paper. Try scanning it again.");
       return { detail: { failed: "no pages" } };
     }
-    if (pages.every((p: Page) => p.quality_verdict === "fail")) {
-      const message = qualityFailureMessage(pages) ?? "These pages did not come out clearly enough to read. Please retake them and try again.";
+    const sampledPages = samplePages(pages as Page[]);
+    if (sampledPages.every((p: Page) => p.quality_verdict === "fail")) {
+      const message = qualityFailureMessage(sampledPages) ?? "These pages did not come out clearly enough to read. Please retake them and try again.";
       await sb.rpc("run_advance", { p_run_id: runId, p_to: "rejected", p_reason: message });
       return { detail: { rejected: "quality", pages: pages.length } };
     }
@@ -68,18 +81,18 @@ const handler = consumeQueue<TriageMessage>(
     // the existing library. A thumbnail always lives in `derived` regardless of
     // where the page itself went.
     const images = await Promise.all(
-      pages.map((p: Page) => (p.thumb_key
+      sampledPages.map((p: Page) => (p.thumb_key
         ? imageRef(env, "derived", p.thumb_key, "low")
         : imageRef(env, (p.r2_bucket as any) ?? "derived", p.r2_key, "low")))
     );
-    const onThumbs = pages.filter((p: Page) => !!p.thumb_key).length;
+    const onThumbs = sampledPages.filter((p: Page) => !!p.thumb_key).length;
 
     const { parsed } = await callModel({
       env,
       sb,
       stage: "triage",
       system: SYSTEM,
-      instruction: instruction(pages.length),
+      instruction: instruction(sampledPages.length),
       images,
       schema: SCHEMA,
       validate,
@@ -92,7 +105,7 @@ const handler = consumeQueue<TriageMessage>(
 
     if (parsed.classification !== "graded_exam") {
       const isUncertainReject = parsed.classification === "not_schoolwork" && parsed.confidence === "low";
-      const reason = (isUncertainReject && qualityFailureMessage(pages)) || REJECTION_REASON[parsed.classification];
+      const reason = (isUncertainReject && qualityFailureMessage(sampledPages)) || REJECTION_REASON[parsed.classification];
       await sb.rpc("run_advance", { p_run_id: runId, p_to: "rejected", p_reason: reason });
       return { detail: { rejected: parsed.classification } };
     }
@@ -129,7 +142,7 @@ const handler = consumeQueue<TriageMessage>(
       detail: {
         classification: parsed.classification,
         pages: allPages?.length ?? 0,
-        looked_at: pages.length,
+        looked_at: sampledPages.length,
         on_thumbnails: onThumbs,
       },
     };
