@@ -202,9 +202,9 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
         confirmed: true,
         bytes: head.bytes,
         etag: head.etag,
-        // A client-reported digest is not an integrity guarantee. Until the
-        // server computes one itself, keep this server-trust column empty.
-        sha256: null,
+        // This is retained only as client telemetry. The column name makes it
+        // explicit that no integrity decision may rely on it.
+        client_reported_sha256: typeof claim.sha256 === "string" ? claim.sha256 : null,
       })
       .eq("paper_id", body.paper_id)
       .eq("r2_key", claim.key);
