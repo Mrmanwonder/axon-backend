@@ -1,19 +1,10 @@
 import { CORS, json, failure, clientFor, readJson, serviceClient } from "@mastery/shared/http.js";
 import { presignPut, headObject, signAssetUrl, verifyAssetSignature, objectKey, BUCKET_FOR, type BucketKind } from "@mastery/shared/r2.js";
-import { PIPELINE_VERSION } from "@mastery/shared/contract.js";
+import { CAPTURE, PIPELINE_VERSION, SAFE_OBJECT_NAME } from "@mastery/shared/contract.js";
 import type { Env } from "@mastery/shared/env.js";
 
-const MAX_PAGES = 25;
 const MAX_BYTES = 25 * 1024 * 1024;
 const MAX_OBJECTS = 60;
-
-const ALLOWED_CONTENT_TYPES: Record<string, string[]> = {
-  "image/webp": ["webp"],
-  "image/jpeg": ["jpg"],
-  "image/png": ["png"],
-  "image/heic": ["heic"],
-  "application/pdf": ["pdf"],
-};
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -83,7 +74,7 @@ async function paperSubmit(req: Request, env: Env): Promise<Response> {
     return failure("That paper is missing something we need to file it.");
   }
   if (!Array.isArray(body.pages) || !body.pages.length) return failure("A paper needs at least one page.");
-  if (body.pages.length > MAX_PAGES) return failure(`We can take up to ${MAX_PAGES} pages in one paper.`);
+  if (body.pages.length > CAPTURE.MAX_PAGES) return failure(`We can take up to ${CAPTURE.MAX_PAGES} pages in one paper.`);
   if (body.pages.some((p: any) => !p.r2_key || !Number.isInteger(p.page_number) || p.page_number < 1)) {
     return failure("One of those pages has not finished uploading.");
   }
@@ -133,13 +124,21 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
   const admin = serviceClient(env);
   const minted: any[] = [];
   for (const object of body.objects) {
-    const extensions = ALLOWED_CONTENT_TYPES[object.content_type];
-    if (!extensions) return failure(`We cannot take a ${object.content_type} file.`);
+    const extension = CAPTURE.UPLOAD_EXTENSIONS[object.content_type as keyof typeof CAPTURE.UPLOAD_EXTENSIONS];
+    if (!extension) return failure(`We cannot take a ${object.content_type} file.`);
     if (object.bytes && object.bytes > MAX_BYTES) return failure("One of those files is too large to upload.");
     if (!BUCKET_FOR[object.kind as keyof typeof BUCKET_FOR]) return failure("Unknown file kind.");
+
+    // This value becomes one path segment in the signed R2 key. Reject separators,
+    // dot-segments and every other path-like spelling before any URL is minted.
+    const objectName = typeof object.name === "number" ? String(object.name) : object.name;
+    if (typeof objectName !== "string" || !SAFE_OBJECT_NAME.test(objectName)) {
+      return failure("One of those files has an invalid upload name.");
+    }
+
     const bucket = BUCKET_FOR[object.kind as keyof typeof BUCKET_FOR];
-    const key = objectKey({ studentId: body.student_id, paperId: body.paper_id, kind: object.kind, name: object.name, extension: extensions[0] });
-    const entry: any = { kind: object.kind, name: object.name, bucket, key, url: await presignPut(env, bucket, key, object.content_type) };
+    const key = objectKey({ studentId: body.student_id, paperId: body.paper_id, kind: object.kind, name: objectName, extension });
+    const entry: any = { kind: object.kind, name: objectName, bucket, key, url: await presignPut(env, bucket, key, object.content_type) };
     if (object.kind === "upload" || object.kind === "raw") {
       const { data: row } = await admin
         .from("upload")
@@ -173,6 +172,11 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
   const confirmed: string[] = [];
   const missing: Array<{ key: string; reason: string }> = [];
   for (const claim of body.uploads) {
+    // JSON is untyped at runtime. Do not let an arbitrary string choose a binding.
+    if (claim.bucket !== "originals" && claim.bucket !== "derived") {
+      missing.push({ key: claim.key ?? "", reason: "that storage bucket is not valid" });
+      continue;
+    }
     if (!claim.key?.startsWith(`${paper.student_id}/${paper.id}/`)) {
       missing.push({ key: claim.key ?? "", reason: "that file does not belong to this paper" });
       continue;
@@ -194,7 +198,14 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
     }
     await admin
       .from("upload")
-      .update({ confirmed: true, bytes: head.bytes, etag: head.etag, sha256: claim.sha256 ?? null })
+      .update({
+        confirmed: true,
+        bytes: head.bytes,
+        etag: head.etag,
+        // This is retained only as client telemetry. The column name makes it
+        // explicit that no integrity decision may rely on it.
+        client_reported_sha256: typeof claim.sha256 === "string" ? claim.sha256 : null,
+      })
       .eq("paper_id", body.paper_id)
       .eq("r2_key", claim.key);
     confirmed.push(claim.key);

@@ -32,7 +32,7 @@
 import { consumeQueue } from "@mastery/shared/worker.js";
 import { objectKey } from "@mastery/shared/r2.js";
 import { pageDimensions } from "@mastery/shared/page.js";
-import { bandForRegion, cutRegion, type Box, type PageSpan, type RgbaImage } from "@mastery/shared/crop.js";
+import { bandForRegion, cutRegion, imageDimensions, type Box, type PageSpan, type RgbaImage } from "@mastery/shared/crop.js";
 import { decodeImage, encodeWebp } from "./codecs.js";
 import type { Env } from "@mastery/shared/env.js";
 
@@ -188,14 +188,31 @@ const handler = consumeQueue<CropMessage>(
     if (!pageObject) {
       return await finish(env, sb, runId, pageId, "skipped", { skipped: "page image not found in R2" });
     }
-    let decoded: RgbaImage | null = await decodeImage(new Uint8Array(await pageObject.arrayBuffer()));
+    const pageBytes = new Uint8Array(await pageObject.arrayBuffer());
+    const encodedDims = imageDimensions(pageBytes);
+    if (!encodedDims) {
+      return await finish(env, sb, runId, pageId, "skipped", { skipped: "could not read encoded image dimensions" });
+    }
+    const encodedPixels = encodedDims.width * encodedDims.height;
+    if (encodedPixels > MAX_PIXELS) {
+      return await finish(env, sb, runId, pageId, "skipped", {
+        skipped: "page too large to decode",
+        pixels: encodedPixels,
+      });
+    }
+    if (encodedDims.width !== dims.width || encodedDims.height !== dims.height) {
+      const mismatch = `${encodedDims.width}x${encodedDims.height} encoded vs ${dims.width}x${dims.height} recorded`;
+      console.error("crop: page image does not match its recorded dimensions", pageId, mismatch);
+      return await finish(env, sb, runId, pageId, "skipped", { skipped: "dimension mismatch", detail: mismatch });
+    }
 
-    // Structure scaled every box against `dims`. If the stored image is not
-    // that size, the boxes do not refer to these pixels and cutting them would
-    // produce confidently wrong crops.
+    let decoded: RgbaImage | null = await decodeImage(pageBytes);
+
+    // The header check above is the memory guard. Keep this second check as a
+    // codec-consistency assertion before any box is cut from the pixels.
     if (decoded.width !== dims.width || decoded.height !== dims.height) {
       const mismatch = `${decoded.width}x${decoded.height} decoded vs ${dims.width}x${dims.height} recorded`;
-      console.error("crop: page image does not match its recorded dimensions", pageId, mismatch);
+      console.error("crop: decoded page does not match its recorded dimensions", pageId, mismatch);
       return await finish(env, sb, runId, pageId, "skipped", { skipped: "dimension mismatch", detail: mismatch });
     }
 
@@ -227,18 +244,27 @@ const handler = consumeQueue<CropMessage>(
       try {
         const maskObject = await bucketFor(page.r2_bucket)?.get(page.mask_key);
         if (maskObject) {
-          const mask = await decodeImage(new Uint8Array(await maskObject.arrayBuffer()));
-          if (mask.width === dims.width && mask.height === dims.height) {
-            maskKeys = await writeCrops(env, mask, budgeted.filter((p) => cropKeys.has(p.region.id)), (region) => objectKey({
+          const maskBytes = new Uint8Array(await maskObject.arrayBuffer());
+          const maskDims = imageDimensions(maskBytes);
+          const maskPixels = maskDims ? maskDims.width * maskDims.height : Number.POSITIVE_INFINITY;
+          if (!maskDims || maskPixels > MAX_PIXELS) {
+            console.error("crop: refusing mask before decode", pageId, maskDims ? `${maskDims.width}x${maskDims.height}` : "unknown dimensions");
+          } else if (maskDims.width !== dims.width || maskDims.height !== dims.height) {
+            console.error("crop: mask does not match page dimensions", pageId, `${maskDims.width}x${maskDims.height}`);
+          } else {
+            const mask = await decodeImage(maskBytes);
+            if (mask.width !== dims.width || mask.height !== dims.height) {
+              console.error("crop: decoded mask does not match page dimensions", pageId, `${mask.width}x${mask.height}`);
+            } else {
+              maskKeys = await writeCrops(env, mask, budgeted.filter((p) => cropKeys.has(p.region.id)), (region) => objectKey({
               studentId: page.student_id,
               paperId: page.paper_id,
               kind: "cropmask",
               name: `${runId}-${region.id}`,
               extension: "webp",
               unguessable: false,
-            }));
-          } else {
-            console.error("crop: mask does not match page dimensions", pageId, `${mask.width}x${mask.height}`);
+              }));
+            }
           }
         }
       } catch (cause) {

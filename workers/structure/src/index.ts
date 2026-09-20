@@ -76,7 +76,7 @@ const handler = consumeQueue<StructureMessage>(
     const pageId = msg.page_id;
     const { data: page } = await sb
       .from("paper_page")
-      .select("id, paper_id, student_id, page_number, r2_bucket, r2_key, mask_key, structure_status, layer_fallback, teacher_marks, conditioning_meta, quality_signals")
+      .select("id, paper_id, student_id, page_number, r2_bucket, r2_key, mask_key, structure_status, layer_fallback, teacher_marks, margin_band, conditioning_meta, quality_signals")
       .eq("id", pageId)
       .single();
     if (!page) return { detail: { skipped: "no such page" } };
@@ -246,7 +246,7 @@ const handler = consumeQueue<StructureMessage>(
       const attributed = attribute({
         regions,
         marks,
-        marginBands: new Map([[page.page_number, null]]),
+        marginBands: new Map([[page.page_number, page.margin_band ?? null]]),
         pageWidths: new Map([[page.page_number, width]]),
       });
       const rows = attributed.map((m) => ({
