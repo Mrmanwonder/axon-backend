@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bandForRegion, cutRegion, imageFormat, CROP_INSET_X, type PageSpan } from "../crop.js";
+import { bandForRegion, cutRegion, imageDimensions, imageFormat, CROP_INSET_X, type PageSpan } from "../crop.js";
 import { pageDimensions } from "../page.js";
 
 const PAGE_W = 2400;
@@ -101,6 +101,44 @@ test("format is sniffed from the bytes, not assumed", () => {
   assert.equal(imageFormat(new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50])), "webp");
   assert.equal(imageFormat(new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x41, 0x56, 0x45])), null, "a RIFF WAVE is not a WebP");
   assert.equal(imageFormat(new Uint8Array([1, 2, 3])), null);
+});
+
+test("container dimensions are read without decoding pixels", () => {
+  const png = new Uint8Array(24);
+  png.set([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10], 0);
+  png.set([0x49, 0x48, 0x44, 0x52], 12);
+  png.set([0x00, 0x00, 0x09, 0x60, 0x00, 0x00, 0x0c, 0x80], 16);
+  assert.deepEqual(imageDimensions(png), { width: 2400, height: 3200 });
+
+  const webp = new Uint8Array(30);
+  webp.set([0x52, 0x49, 0x46, 0x46, 22, 0, 0, 0, 0x57, 0x45, 0x42, 0x50], 0);
+  webp.set([0x56, 0x50, 0x38, 0x58, 10, 0, 0, 0], 12);
+  webp.set([0x5f, 0x09, 0x00, 0x7f, 0x0c, 0x00], 24);
+  assert.deepEqual(imageDimensions(webp), { width: 2400, height: 3200 });
+
+  const jpeg = new Uint8Array([
+    0xff, 0xd8,
+    0xff, 0xc0, 0x00, 0x07, 0x08, 0x0c, 0x80, 0x09, 0x60,
+    0x00,
+  ]);
+  assert.deepEqual(imageDimensions(jpeg), { width: 2400, height: 3200 });
+});
+
+test("huge declared dimensions are visible before a codec is invoked", () => {
+  const png = new Uint8Array(24);
+  png.set([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10], 0);
+  png.set([0x49, 0x48, 0x44, 0x52], 12);
+  png.set([0x00, 0x00, 0xc3, 0x50, 0x00, 0x00, 0xc3, 0x50], 16); // 50,000 x 50,000
+  const dims = imageDimensions(png);
+  assert.ok(dims);
+  assert.ok(dims.width * dims.height > 16_000_000);
+});
+
+test("malformed dimension headers are rejected", () => {
+  const png = new Uint8Array(24);
+  png.set([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10], 0);
+  png.set([0x42, 0x41, 0x44, 0x21], 12);
+  assert.equal(imageDimensions(png), null);
 });
 
 // ── the dimensions the bands are cut against ───────────────────────────────
