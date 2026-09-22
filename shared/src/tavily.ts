@@ -120,8 +120,10 @@ export function normaliseSearchContext(raw: unknown): string {
   if (typeof raw !== "string") return "";
   return raw
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted]")
+    // Redact UUID-like identifiers before the phone pattern; otherwise the
+    // numeric tail can be removed first and leave the identifier prefix behind.
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "[redacted]")
     .replace(/\b(?:\+?\d[\d\s().-]{7,}\d)\b/g, "[redacted]")
-    .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, "[redacted]")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 400);
