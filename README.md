@@ -17,7 +17,8 @@ shared/                 the actually-shared library — one copy, not six
   src/
     env.ts               Env bindings interface
     http.ts               CORS, JSON responses, Supabase clients
-    openrouter.ts         callModel(): the model call + retry logic
+    openrouter.ts         callModel(): Gemini call + retry/tool loop
+    tavily.ts             Tavily Search/Extract tools for opt-in live web grounding
     worker.ts             consumeQueue(): the queue-consumer harness
     r2.ts                  R2 reads/writes, presigned URLs, asset signing
     contract.ts             box-provenance / PIPELINE_VERSION
@@ -47,6 +48,11 @@ To work on one worker: `cd workers/<name> && npm run dev` (or
 `wrangler dev`). Secrets aren't in the repo — they're bound on the live
 Cloudflare workers already; `wrangler deploy` preserves them, but verify
 per worker after a deploy per `AXON_FIX_BRIEF.md` §5.3.5.
+
+For Gemini live-web grounding, set `TAVILY_API_KEY` as a Cloudflare Worker
+secret on each model worker that may use `callModel({ webTools: true })`.
+Do not put the key in Axon-Site, Supabase Edge Function secrets, Wrangler
+plaintext vars, or any browser-exposed variable.
 
 ## Things this repo's CI and `wrangler.toml`s deliberately hold the line on
 
