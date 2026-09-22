@@ -5,6 +5,7 @@
 // a faithful port of the live bundle, not a drive-by rename.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Env } from "./env.js";
+import { TAVILY_TOOLS, WEB_TOOL_SYSTEM_GUARD, runTavilyTool, type TavilyToolCall } from "./tavily.js";
 
 const OR_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
@@ -84,10 +85,10 @@ function classify(status: number, body: string): ModelError {
       false
     );
   }
-  if (status === 401) return new ModelError("invalid_key", "OpenRouter rejected the API key (401) - it is missing, disabled, or was revoked.", status, false);
-  if (status === 403) return new ModelError("moderation_flagged", "OpenRouter returned 403 (the docs say: chosen model requires moderation and input was flagged). Likely the image, not the key: " + body.slice(0, 300), status, false);
-  if (status === 402) return new ModelError("out_of_credit", "the OpenRouter account is out of credit", status, false);
-  if (status === 429) return new ModelError("rate_limited", "rate limited by OpenRouter", status, true);
+  if (status === 401) return new ModelError("invalid_key", "Gemini rejected GOOGLE_API_KEY (401).", status, false);
+  if (status === 403) return new ModelError("forbidden", "Gemini rejected the request (403): " + body.slice(0, 300), status, false);
+  if (status === 402) return new ModelError("billing", "Gemini rejected the request for billing/quota reasons", status, false);
+  if (status === 429) return new ModelError("rate_limited", "rate limited by Gemini", status, true);
   if (status >= 500) return new ModelError("provider_error", `provider returned ${status}`, status, true);
   return new ModelError("bad_request", body.slice(0, 500) || `request failed with ${status}`, status, false);
 }
@@ -119,6 +120,8 @@ export interface CallModelOptions<T> {
   attempt?: number;
   routeOverride?: RouteOverride | null;
   timeoutMs?: number;
+  /** Give Gemini the Tavily Search/Extract tools for this call. Off by default. */
+  webTools?: boolean;
 }
 
 export interface CallModelResult<T> {
@@ -128,6 +131,8 @@ export interface CallModelResult<T> {
   inputTokens: number | null;
   outputTokens: number | null;
   costUsd: number | null;
+  /** Public URLs consulted by Tavily during this model call. */
+  webSources: string[];
   latencyMs: number;
 }
 
@@ -141,6 +146,7 @@ const INLINE_TRIES = 2;
 export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModelResult<T>> {
   const key = opts.env.GOOGLE_API_KEY;
   if (!key) throw new ModelError("no_key", "GOOGLE_API_KEY is not set for this worker", 0, false);
+
   const route = applyOverride(await getRoute(opts.sb, opts.stage), opts.routeOverride);
   const attempt = opts.attempt ?? 1;
   const started = Date.now();
@@ -152,19 +158,13 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
     content.push({ type: "image_url", image_url: { url: image.url } });
   }
 
-  const body = {
-    model: route.primary_model,
-    temperature: route.temperature,
-    max_tokens: route.max_tokens,
-    messages: [
-      { role: "system", content: opts.system },
-      { role: "user", content },
-    ],
-    response_format: {
-      type: "json_schema",
-      json_schema: { name: opts.schema.name, schema: opts.schema.schema },
-    },
-  };
+  const system = opts.webTools
+    ? `${opts.system}\n\n${WEB_TOOL_SYSTEM_GUARD}`
+    : opts.system;
+  const messages: Record<string, unknown>[] = [
+    { role: "system", content: system },
+    { role: "user", content },
+  ];
 
   const log = (patch: Record<string, unknown>) =>
     logCall(opts.sb, {
@@ -181,81 +181,213 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
       ...patch,
     });
 
-  let res: Response | undefined;
-  for (let tryNo = 1; ; tryNo++) {
-    let caught: ModelError | null = null;
-    try {
-      res = await fetch(OR_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${key}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": opts.env.MASTERY_SITE_URL ?? "https://mastery.app",
-          "X-Title": "Mastery",
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(opts.timeoutMs ?? 90_000),
-      });
-    } catch (cause) {
-      const timedOut = cause instanceof DOMException && cause.name === "TimeoutError";
-      caught = new ModelError(
-        timedOut ? "timeout" : "network",
-        timedOut ? "the model did not answer in time" : String(cause),
-        0,
-        true
+  let inputTokens: number | null = null;
+  let outputTokens: number | null = null;
+  let costUsd: number | null = null;
+  let served = route.primary_model;
+  let toolCallsUsed = 0;
+  const webSources = new Set<string>();
+
+  const add = (current: number | null, value: number | undefined): number | null =>
+    typeof value === "number" && Number.isFinite(value) ? (current ?? 0) + value : current;
+
+  const request = async (body: Record<string, unknown>): Promise<any> => {
+    let res: Response | undefined;
+    for (let tryNo = 1; ; tryNo++) {
+      let caught: ModelError | null = null;
+      try {
+        res = await fetch(OR_URL, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${key}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(opts.timeoutMs ?? 90_000),
+        });
+      } catch (cause) {
+        const timedOut = cause instanceof DOMException && cause.name === "TimeoutError";
+        caught = new ModelError(
+          timedOut ? "timeout" : "network",
+          timedOut ? "the model did not answer in time" : String(cause),
+          0,
+          true
+        );
+      }
+
+      if (!caught && res!.ok) return await res!.json();
+
+      const rawBody = caught ? "" : await res!.text();
+      const err = caught ?? classify(res!.status, rawBody);
+      const retryHere =
+        tryNo < INLINE_TRIES &&
+        (caught ? caught.code === "network" : TRANSIENT_HTTP.has(res!.status));
+
+      if (!retryHere) {
+        await log(
+          caught
+            ? { model_id: served, ok: false, error_code: err.code }
+            : {
+                model_id: served,
+                ok: false,
+                error_code: err.code,
+                http_status: res!.status,
+                error_detail: rawBody.slice(0, 500),
+              }
+        );
+        throw err;
+      }
+
+      console.warn(
+        "transient Gemini error, retrying in-process",
+        opts.stage,
+        caught ? err.code : res!.status,
+        "try",
+        tryNo
       );
+      await new Promise((sleep) => setTimeout(sleep, 800 * tryNo + Math.floor(Math.random() * 400)));
     }
+  };
 
-    if (!caught && res!.ok) break;
+  // Three Tavily calls allows search -> extract -> one refinement while keeping
+  // the model/tool loop bounded. No current pipeline worker opts in implicitly.
+  const maxRounds = opts.webTools ? 4 : 1;
 
-    const rawBody = caught ? "" : await res!.text();
-    const err = caught ?? classify(res!.status, rawBody);
-    const retryHere = tryNo < INLINE_TRIES && (caught ? caught.code === "network" : TRANSIENT_HTTP.has(res!.status));
-    if (!retryHere) {
-      await log(
-        caught
-          ? { model_id: route.primary_model, ok: false, error_code: err.code }
-          : { model_id: route.primary_model, ok: false, error_code: err.code, http_status: res!.status, error_detail: rawBody.slice(0, 500) }
-      );
+  for (let round = 0; round < maxRounds; round++) {
+    const body: Record<string, unknown> = {
+      model: route.primary_model,
+      temperature: route.temperature,
+      max_tokens: route.max_tokens,
+      messages,
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: opts.schema.name, schema: opts.schema.schema },
+      },
+      ...(opts.webTools ? { tools: TAVILY_TOOLS, tool_choice: "auto" } : {}),
+    };
+
+    const data = await request(body);
+    served = data.model ?? served;
+    inputTokens = add(inputTokens, data.usage?.prompt_tokens);
+    outputTokens = add(outputTokens, data.usage?.completion_tokens);
+    costUsd = add(costUsd, data.usage?.cost);
+
+    const message = data.choices?.[0]?.message;
+    if (data.error || !message) {
+      const err = new ModelError("empty_response", data.error?.message ?? "Gemini returned nothing", 200, true);
+      await log({
+        model_id: served,
+        ok: false,
+        error_code: err.code,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        cost_usd: costUsd,
+      });
       throw err;
     }
-    console.warn("transient model error, retrying in-process", opts.stage, caught ? err.code : res!.status, "try", tryNo);
-    await new Promise((sleep) => setTimeout(sleep, 800 * tryNo + Math.floor(Math.random() * 400)));
+
+    const rawCalls = Array.isArray(message.tool_calls) ? message.tool_calls as TavilyToolCall[] : [];
+    if (rawCalls.length) {
+      if (!opts.webTools) {
+        const err = new ModelError("unexpected_tool_call", "Gemini requested a tool on a tool-free call", 200, false);
+        await log({ model_id: served, ok: false, error_code: err.code });
+        throw err;
+      }
+      if (round === maxRounds - 1) {
+        const err = new ModelError("tool_loop_limit", "Gemini exhausted the live-web round budget", 200, false);
+        await log({ model_id: served, ok: false, error_code: err.code });
+        throw err;
+      }
+
+      const calls = rawCalls.map((call, index) => ({
+        ...call,
+        id: call.id || `${call.function.name}-${round}-${index}`,
+      }));
+
+      // Gemini's OpenAI-compatibility layer expects the assistant tool-call
+      // message to carry non-empty content on the follow-up request.
+      messages.push({
+        role: "assistant",
+        content: typeof message.content === "string" && message.content
+          ? message.content
+          : "Using live web reference tools.",
+        tool_calls: calls,
+      });
+
+      for (const call of calls) {
+        if (toolCallsUsed >= 3) {
+          const err = new ModelError("tool_loop_limit", "Gemini exceeded the live-web tool-call limit", 200, false);
+          await log({ model_id: served, ok: false, error_code: err.code });
+          throw err;
+        }
+        toolCallsUsed += 1;
+
+        const result = await runTavilyTool(opts.env, call);
+        for (const source of result.sources) webSources.add(source);
+
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          name: call.function.name,
+          content: result.content,
+        });
+      }
+      continue;
+    }
+
+    const raw = message.content;
+    if (typeof raw !== "string" || raw.length === 0) {
+      const err = new ModelError("empty_response", "Gemini returned no final content", 200, true);
+      await log({
+        model_id: served,
+        ok: false,
+        error_code: err.code,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        cost_usd: costUsd,
+      });
+      throw err;
+    }
+
+    let parsed: T;
+    try {
+      parsed = opts.validate(JSON.parse(raw));
+    } catch (cause) {
+      const err = new ModelError("bad_shape", `the model's answer did not fit the schema: ${cause}`, 200, true);
+      await log({
+        model_id: served,
+        ok: false,
+        error_code: err.code,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        cost_usd: costUsd,
+      });
+      throw err;
+    }
+
+    await log({
+      model_id: served,
+      ok: true,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      cost_usd: costUsd,
+    });
+
+    return {
+      parsed,
+      model: served,
+      promptVersion: route.prompt_version,
+      inputTokens,
+      outputTokens,
+      costUsd,
+      webSources: [...webSources],
+      latencyMs: Date.now() - started,
+    };
   }
 
-  const data: any = await res!.json();
-  const served = data.model ?? route.primary_model;
-  const usage = {
-    input_tokens: data.usage?.prompt_tokens ?? null,
-    output_tokens: data.usage?.completion_tokens ?? null,
-    cost_usd: data.usage?.cost ?? null,
-  };
-  const raw = data.choices?.[0]?.message?.content;
-  if (data.error || typeof raw !== "string" || raw.length === 0) {
-    const err = new ModelError("empty_response", data.error?.message ?? "the model returned nothing", 200, true);
-    await log({ model_id: served, ok: false, error_code: err.code, ...usage });
-    throw err;
-  }
-
-  let parsed: T;
-  try {
-    parsed = opts.validate(JSON.parse(raw));
-  } catch (cause) {
-    const err = new ModelError("bad_shape", `the model's answer did not fit the schema: ${cause}`, 200, true);
-    await log({ model_id: served, ok: false, error_code: err.code, ...usage });
-    throw err;
-  }
-
-  await log({ model_id: served, ok: true, ...usage });
-  return {
-    parsed,
-    model: served,
-    promptVersion: route.prompt_version,
-    inputTokens: usage.input_tokens,
-    outputTokens: usage.output_tokens,
-    costUsd: usage.cost_usd,
-    latencyMs: Date.now() - started,
-  };
+  const err = new ModelError("tool_loop_limit", "Gemini did not finish within the live-web tool budget", 200, false);
+  await log({ model_id: served, ok: false, error_code: err.code });
+  throw err;
 }
 
 async function logCall(sb: SupabaseClient, row: Record<string, unknown>): Promise<void> {
