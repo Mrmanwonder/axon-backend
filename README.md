@@ -49,10 +49,14 @@ To work on one worker: `cd workers/<name> && npm run dev` (or
 Cloudflare workers already; `wrangler deploy` preserves them, but verify
 per worker after a deploy per `AXON_FIX_BRIEF.md` §5.3.5.
 
-For Gemini live-web grounding, set `TAVILY_API_KEY` as a Cloudflare Worker
-secret on each model worker that may use `callModel({ webTools: true })`.
-Do not put the key in Axon-Site, Supabase Edge Function secrets, Wrangler
-plaintext vars, or any browser-exposed variable.
+Gemini live-web grounding is enabled only for `mastery-explain`. Set
+`TAVILY_API_KEY` as a Cloudflare Worker secret on that worker (and optionally
+`TAVILY_PROJECT` for usage attribution). The model cannot author the Tavily
+search query: `mastery-explain` supplies public-only subject/question context
+and the adapter restricts extraction to URLs returned by that search.
+
+Do not put the Tavily key in Axon-Site, Supabase Edge Function secrets,
+Wrangler plaintext vars, or any browser-exposed variable.
 
 ## Things this repo's CI and `wrangler.toml`s deliberately hold the line on
 
