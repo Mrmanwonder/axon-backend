@@ -120,8 +120,11 @@ export interface CallModelOptions<T> {
   attempt?: number;
   routeOverride?: RouteOverride | null;
   timeoutMs?: number;
-  /** Give Gemini the Tavily Search/Extract tools for this call. Off by default. */
-  webTools?: boolean;
+  /**
+   * Give Gemini Tavily Search/Extract using ONLY this server-approved public
+   * academic context as the outbound search query. Off by default.
+   */
+  webTools?: { searchContext: string };
 }
 
 export interface CallModelResult<T> {
@@ -158,7 +161,8 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
     content.push({ type: "image_url", image_url: { url: image.url } });
   }
 
-  const system = opts.webTools
+  const webEnabled = !!opts.webTools?.searchContext?.trim();
+  const system = webEnabled
     ? `${opts.system}\n\n${WEB_TOOL_SYSTEM_GUARD}`
     : opts.system;
   const messages: Record<string, unknown>[] = [
@@ -251,7 +255,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
 
   // Three Tavily calls allows search -> extract -> one refinement while keeping
   // the model/tool loop bounded. No current pipeline worker opts in implicitly.
-  const maxRounds = opts.webTools ? 4 : 1;
+  const maxRounds = webEnabled ? 4 : 1;
 
   for (let round = 0; round < maxRounds; round++) {
     const body: Record<string, unknown> = {
@@ -263,7 +267,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
         type: "json_schema",
         json_schema: { name: opts.schema.name, schema: opts.schema.schema },
       },
-      ...(opts.webTools ? { tools: TAVILY_TOOLS, tool_choice: "auto" } : {}),
+      ...(webEnabled ? { tools: TAVILY_TOOLS, tool_choice: "auto" } : {}),
     };
 
     const data = await request(body);
@@ -288,7 +292,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
 
     const rawCalls = Array.isArray(message.tool_calls) ? message.tool_calls as TavilyToolCall[] : [];
     if (rawCalls.length) {
-      if (!opts.webTools) {
+      if (!webEnabled) {
         const err = new ModelError("unexpected_tool_call", "Gemini requested a tool on a tool-free call", 200, false);
         await log({ model_id: served, ok: false, error_code: err.code });
         throw err;
@@ -322,7 +326,10 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
         }
         toolCallsUsed += 1;
 
-        const result = await runTavilyTool(opts.env, call);
+        const result = await runTavilyTool(opts.env, call, {
+          searchContext: opts.webTools!.searchContext,
+          allowedUrls: webSources,
+        });
         for (const source of result.sources) webSources.add(source);
 
         messages.push({

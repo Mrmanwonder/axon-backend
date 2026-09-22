@@ -116,7 +116,7 @@ const handler = consumeQueue<ExplainMessage>(
       console.info("question refers to parts not found in this run", regionId, deps.unresolved.join(","));
     }
 
-    const { parsed, model, promptVersion } = await callModel({
+    const { parsed, model, promptVersion, webSources } = await callModel({
       env,
       sb,
       stage: "explain",
@@ -142,6 +142,18 @@ const handler = consumeQueue<ExplainMessage>(
       studentId: region.student_id,
       attempt,
       routeOverride: override,
+      // Live web grounding is allowed only from public academic context. The
+      // Tavily adapter ignores model-authored queries and searches this exact
+      // server-approved context; student answers and teacher remarks never
+      // become outbound search terms.
+      webTools: {
+        searchContext: [
+          paper?.subject,
+          student?.class_level,
+          region.question_text,
+          ...deps.resolved.map((part) => part.questionText),
+        ].filter((value): value is string => typeof value === "string" && value.trim().length > 0).join(" | "),
+      },
     });
 
     const marksLost = Math.round((available - awarded) * 100) / 100;
@@ -226,7 +238,15 @@ const handler = consumeQueue<ExplainMessage>(
     await mustOk(sb.from("question_region").update({ explain_status: "done" }).eq("id", regionId), "explain_status=done");
     await mustRpc(sb.rpc("advance_after_explain", { p_run_id: runId }), "advance_after_explain");
 
-    return { detail: { cause: parsed.cause, floor_cleared: !!doThisNext, prior_parts: deps.resolved.length, grounding: grounding.status } };
+    return {
+      detail: {
+        cause: parsed.cause,
+        floor_cleared: !!doThisNext,
+        prior_parts: deps.resolved.length,
+        grounding: grounding.status,
+        web_sources: webSources,
+      },
+    };
   },
   // Checked, and therefore able to throw. The harness treats a throw here as
   // "the terminal state was not recorded" and retries rather than acknowledging
