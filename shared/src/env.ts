@@ -14,6 +14,11 @@ export interface Env {
 
   // Model
   GOOGLE_API_KEY?: string;
+
+  // Live web grounding for Gemini custom tools. Secrets are bound per Worker.
+  TAVILY_API_KEY?: string;
+  // Optional Tavily project identifier for usage attribution.
+  TAVILY_PROJECT?: string;
   // Legacy, from before the Gemini migration (see AXON_FIX_BRIEF.md §F3).
   // Bindings still exist on the deployed workers; nothing reads them anymore.
   GROQ_API_KEY?: string;
