@@ -54,7 +54,7 @@ function compact(value: unknown): string | null {
 
 function token(value: unknown): string | null {
   const v = compact(value);
-  return v ? v.toUpperCase().replace(/[\s_–—-]+/g, "") : null;
+  return v ? v.toUpperCase().replace(/[^A-Z0-9]+/g, "") : null;
 }
 
 export function normaliseQuestionLabel(value: unknown): string | null {
