@@ -304,6 +304,6 @@ test("prompt requires LaTeX delimiters for every student-facing math field", () 
 
 test("prompt refuses symbolic placeholders when a calculation asks for a final value", () => {
   assert.match(SYSTEM, /must actually answer the question/);
-  assert.match(SYSTEM, /finish with the requested numerical value/);
+  assert.match(SYSTEM, /finish with the\s+requested numerical value/);
   assert.match(SYSTEM, /return model_answer null rather than leaving a placeholder/);
 });
