@@ -142,7 +142,7 @@ export async function resolveAssessmentIdentity(
 
   const resolved = exact[0];
   const { error: paperError } = await sb.from("paper")
-    .update({ assessment_identity_id: resolved.id, subject: matchingOfferings[0].external_code ? undefined : undefined })
+    .update({ assessment_identity_id: resolved.id })
     .eq("id", args.paperId)
     .eq("student_id", args.studentId);
   if (paperError) throw paperError;
