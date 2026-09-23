@@ -157,3 +157,88 @@ export function resolveDependencies(
 
   return { resolved, unresolved, dependent: true };
 }
+
+
+type OrderedPriorPart = PriorPart & { orderIndex: number };
+
+type SequenceLabel = {
+  root: string | null;
+  letter: string | null;
+  roman: string | null;
+};
+
+function sequenceLabel(label: string | null | undefined): SequenceLabel | null {
+  if (typeof label !== "string") return null;
+  const cleaned = label.toLowerCase().replace(/\s+/g, "");
+
+  const full = cleaned.match(/^(?:(\d+)[.)]?)?\(?([a-z])\)?(?:\(([ivx]+)\))?$/);
+  if (full) {
+    return {
+      root: full[1] ?? null,
+      letter: full[2],
+      roman: full[3] ?? null,
+    };
+  }
+
+  const roman = cleaned.match(/^\(([ivx]+)\)$/);
+  if (roman) return { root: null, letter: null, roman: roman[1] };
+  return null;
+}
+
+const ROMAN_ORDER = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x"];
+
+function followsImmediately(previous: SequenceLabel, current: SequenceLabel): boolean {
+  if (previous.root !== current.root) return false;
+
+  if (previous.letter && current.letter && previous.letter === current.letter
+      && previous.roman && current.roman) {
+    return ROMAN_ORDER.indexOf(current.roman) === ROMAN_ORDER.indexOf(previous.roman) + 1;
+  }
+
+  if (!previous.roman && !current.roman && previous.letter && current.letter) {
+    return current.letter.charCodeAt(0) === previous.letter.charCodeAt(0) + 1;
+  }
+
+  if (!previous.letter && !current.letter && previous.roman && current.roman) {
+    return ROMAN_ORDER.indexOf(current.roman) === ROMAN_ORDER.indexOf(previous.roman) + 1;
+  }
+
+  return false;
+}
+
+/**
+ * Safe implicit context for a calculation whose printed part does not say
+ * "using part (a)" but whose immediately preceding sibling supplies the setup.
+ *
+ * Only the immediately previous sequential part is eligible, and only when
+ * the teacher awarded it full marks. That last condition is load-bearing: an
+ * earlier answer can be useful evidence, but a wrong earlier answer must never
+ * be promoted into the corrected working for the next part.
+ */
+export function fullMarkPreviousContext(
+  currentLabel: string | null | undefined,
+  ownOrderIndex: number,
+  siblings: OrderedPriorPart[],
+): PriorPart | null {
+  const current = sequenceLabel(currentLabel);
+  if (!current) return null;
+
+  const previous = [...siblings]
+    .filter((part) => part.orderIndex < ownOrderIndex)
+    .sort((a, b) => b.orderIndex - a.orderIndex)[0];
+  if (!previous) return null;
+
+  const previousLabel = sequenceLabel(previous.label);
+  if (!previousLabel || !followsImmediately(previousLabel, current)) return null;
+
+  if (
+    previous.marksAwarded === null
+    || previous.marksAvailable === null
+    || previous.marksAwarded !== previous.marksAvailable
+  ) {
+    return null;
+  }
+
+  if (!previous.questionText && !previous.studentAnswer) return null;
+  return previous;
+}

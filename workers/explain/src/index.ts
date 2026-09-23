@@ -3,7 +3,7 @@ import { consumeQueue } from "@mastery/shared/worker.js";
 import { mustOk, mustOne, mustMaybe, mustData, mustAffectRows, mustRpc } from "@mastery/shared/db.js";
 import { clearsTheFloor } from "@mastery/shared/quality_floor.js";
 import { SYSTEM, instruction, SCHEMA, validate } from "@mastery/shared/prompts/explain_tier1.v1.js";
-import { normalisePartKey, resolveDependencies } from "@mastery/shared/question_parts.js";
+import { fullMarkPreviousContext, normalisePartKey, resolveDependencies } from "@mastery/shared/question_parts.js";
 import { gateModelAnswer } from "@mastery/shared/grounding.js";
 import type { Env } from "@mastery/shared/env.js";
 
@@ -116,6 +116,17 @@ const handler = consumeQueue<ExplainMessage>(
       console.info("question refers to parts not found in this run", regionId, deps.unresolved.join(","));
     }
 
+    // Some exam parts carry their setup implicitly: part (b) follows directly
+    // from part (a) without saying "using (a)". When the immediately preceding
+    // sequential part earned full marks, its question/answer is safe evidence
+    // to carry forward. Never do this with a partly-wrong earlier answer.
+    const implicitContext = deps.dependent
+      ? null
+      : fullMarkPreviousContext(region.question_label, ownOrderIndex, siblings as any);
+    const promptParts = implicitContext
+      ? [...deps.resolved, implicitContext]
+      : deps.resolved;
+
     const { parsed, model, promptVersion, webSources } = await callModel({
       env,
       sb,
@@ -131,7 +142,7 @@ const handler = consumeQueue<ExplainMessage>(
         studentAnswer: region.student_answer,
         teacherRemark: region.teacher_remark,
         markShapes: (marks ?? []).map((m: any) => m.mark_class).filter((c: string) => c !== "unknown"),
-        priorParts: deps.resolved,
+        priorParts: promptParts,
         unresolvedParts: deps.unresolved,
       }),
       schema: SCHEMA,
@@ -151,7 +162,7 @@ const handler = consumeQueue<ExplainMessage>(
           paper?.subject,
           student?.class_level,
           region.question_text,
-          ...deps.resolved.map((part) => part.questionText),
+          ...promptParts.map((part) => part.questionText),
         ].filter((value): value is string => typeof value === "string" && value.trim().length > 0).join(" | "),
       },
     });
@@ -179,7 +190,7 @@ const handler = consumeQueue<ExplainMessage>(
       modelAnswer: parsed.model_answer,
       questionText: region.question_text,
       studentAnswer: region.student_answer,
-      contextText: deps.resolved.flatMap((p) => [p.questionText, p.studentAnswer].filter(Boolean) as string[]),
+      contextText: promptParts.flatMap((p) => [p.questionText, p.studentAnswer].filter(Boolean) as string[]),
       unresolvedDependencies: deps.unresolved,
     });
     if (grounding.status !== "complete") {
@@ -226,7 +237,7 @@ const handler = consumeQueue<ExplainMessage>(
       model_answer_source: grounding.source,
       // What the explanation was actually built from, so a card can be traced
       // back to its grounding rather than taken on trust.
-      depends_on_parts: deps.resolved.map((p) => p.label),
+      depends_on_parts: promptParts.map((p) => p.label),
       unresolved_parts: deps.unresolved,
       loss_reasons: lossReasons,
       model_version: model,
@@ -242,7 +253,7 @@ const handler = consumeQueue<ExplainMessage>(
       detail: {
         cause: parsed.cause,
         floor_cleared: !!doThisNext,
-        prior_parts: deps.resolved.length,
+        prior_parts: promptParts.length,
         grounding: grounding.status,
         web_sources: webSources,
       },

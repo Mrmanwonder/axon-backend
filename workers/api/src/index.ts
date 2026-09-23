@@ -228,11 +228,15 @@ async function pageAssetUrls(req: Request, env: Env): Promise<Response> {
   if (error) return failure("We could not look up those pages.", 500, error.message);
 
   const urls: Record<number, { url: string | null; mask_url: string | null }> = {};
+  // Sign back to the exact API origin the browser reached. This makes the asset
+  // URL immune to a missing/stale MASTERY_ASSET_URL secret and guarantees that
+  // /page-asset-urls cannot hand the frontend a URL for a different Worker.
+  const assetOrigin = new URL(req.url).origin;
   for (const page of pages ?? []) {
     const bucket = (page.r2_bucket as BucketKind) ?? "derived";
     urls[page.page_number] = {
-      url: page.r2_key ? await signAssetUrl(env, bucket, page.r2_key) : null,
-      mask_url: page.mask_key ? await signAssetUrl(env, bucket, page.mask_key) : null,
+      url: page.r2_key ? await signAssetUrl(env, bucket, page.r2_key, undefined, assetOrigin) : null,
+      mask_url: page.mask_key ? await signAssetUrl(env, bucket, page.mask_key, undefined, assetOrigin) : null,
     };
   }
   return json({ urls });

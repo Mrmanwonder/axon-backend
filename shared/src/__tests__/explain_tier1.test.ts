@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validate, SCHEMA } from "../prompts/explain_tier1.v1.js";
+import { validate, SCHEMA, SYSTEM } from "../prompts/explain_tier1.v1.js";
 import { COMMAND_WORDS, UNIVERSAL_MEANING, canonicalCommandWord, universalMeaning } from "../command_words.js";
 
 // The regression this file exists for: EXPLANATION_SCHEMA asks the model for
@@ -292,4 +292,18 @@ test("validate: can_explain=true keeps everything, as before", () => {
   assert.equal(v.can_explain, true);
   assert.equal(v.cause, "incomplete");
   assert.equal(v.body, "Half the method was missing.");
+});
+
+
+test("prompt requires LaTeX delimiters for every student-facing math field", () => {
+  assert.match(SYSTEM, /student-facing string/);
+  assert.ok(SYSTEM.includes("\\( ... \\)"), "inline maths should use \\( ... \\)");
+  assert.ok(SYSTEM.includes("\\[ ... \\]"), "display maths should use \\[ ... \\]");
+  assert.match(SYSTEM, /Do not write raw forms/);
+});
+
+test("prompt refuses symbolic placeholders when a calculation asks for a final value", () => {
+  assert.match(SYSTEM, /must actually answer the question/);
+  assert.match(SYSTEM, /finish with the\s+requested numerical value/);
+  assert.match(SYSTEM, /return model_answer null rather than leaving a placeholder/);
 });
