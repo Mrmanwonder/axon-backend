@@ -1,7 +1,7 @@
 import { EXPLANATION_SYSTEM } from "../prompts.js";
 import { NEVER_OBEY_THE_PAGE, untrusted } from "./untrusted.js";
 import { EXPLANATION_SCHEMA } from "../schemas.js";
-import { canonicalCommandWord, universalMeaning, type CommandWord } from "../command_words.js";
+import { canonicalCommandWord, type CommandWord } from "../command_words.js";
 import type { PriorPart } from "../question_parts.js";
 
 // Tier 1 only: a school test with no official marking scheme. See
@@ -19,22 +19,18 @@ marks and the teacher's own words, and that is what the explanation is built
 from. Where they are not enough to say why the mark went, say that, and point
 the student at their teacher.
 
-This is a Cambridge (CAIE) paper. Four more things are asked of you, and each
-of them renders nothing at all if you cannot do it honestly.
+This paper may belong to Cambridge, CBSE, or the IB Diploma Programme.
+Never assume a provider from the subject or the wording of the question.
 
-command_word — the Cambridge command word the question is built around: State,
-Explain, Calculate, Show that, Justify, Determine, Describe, Evaluate, Suggest,
-Define and the rest of the standard list. Take it from the question stem; if the
-stem was not readable, or the word is not one of those, return null. Do not
-infer a command word from the shape of the answer.
+command_word — the visible directive the question is built around: for example
+State, Explain, Calculate, Justify, Determine, Describe, Evaluate, Suggest or
+Define. Take it only from the question stem. If the stem was not readable, or
+the wording is not in the supported closed list, return null.
 
-command_word_note is one line on what that word requires of an answer — what
-"Explain" wants that "State" does not. It is about the word, not about this
-student. For the words Cambridge defines identically across every syllabus, its
-published definition is used instead of yours, so write this for the
-subject-specific words: what the word asks for *in this subject*, where the
-current syllabus is the authority. Never state or imply how many marks a
-command word is worth — mark allocation comes from the question, not the word.
+command_word_note is one short line explaining what that directive requires in
+this question. Do not present a board-specific definition unless that definition
+was supplied as verified evidence. Never state or imply how many marks a command
+word is worth — mark allocation comes from the question, not the word.
 
 model_answer — the corrected working, written out in the same steps as the
 student's own answer, so the two can be read side by side. This is what
@@ -211,7 +207,7 @@ const CAUSES = new Set<Cause>([
  * comparing the student's own working against what the step is doing, so it
  * needs no marking scheme and is available on every paper.
  *
- * Deliberately none of Cambridge's vocabulary. These are whole words that get
+ * Deliberately none of an awarding body's official vocabulary. These are whole words that get
  * rendered as whole words: nothing here may be abbreviated to a letter or
  * shown in a way that could be mistaken for real mark-scheme notation.
  */
@@ -224,7 +220,7 @@ const ERROR_TYPES = new Set<string>([
 /**
  * One distinct way a mark went on this question.
  *
- * `mark_type` is Cambridge mark-scheme notation — M for method, A for accuracy,
+ * `mark_type` is official mark-scheme notation — M for method, A for accuracy,
  * B for independent, C for communication. This prompt cannot set it and the
  * model is never asked for it, for two reasons that stack:
  *
@@ -233,8 +229,7 @@ const ERROR_TYPES = new Set<string>([
  * from nothing. A wrong code is worse than none: it wears official notation
  * while contradicting what the teacher actually marked.
  *
- * And rights — Cambridge and Pearson refused third-party reproduction, so
- * official scheme content is CBSE-only. Mimicking Cambridge's marking system is
+ * And rights — Official scheme notation is allowed only when authorized source evidence is actually supplied. Mimicking Cambridge's marking system is
  * not ours to do whether or not the guess lands.
  *
  * The field stays for a genuine Tier 2 prompt with licensed scheme text in
@@ -327,15 +322,10 @@ export function validate(parsed: unknown): ExplainResult {
     // stays countable. The note goes with the word: a note explaining a word we
     // did not accept would be a caption on a missing picture.
     command_word: commandWord,
-    // Cambridge's own wording wins where Cambridge has one. For the 22 words it
-    // defines identically across every syllabus there is a published
-    // definition, and a model paraphrase of a definition that already exists is
-    // an invention we do not need to risk. The model's note is the fallback,
-    // used only for the subject-specific words Cambridge deliberately does not
-    // define once — there the current syllabus is the authority, not any list.
-    command_word_note: commandWord
-      ? universalMeaning(commandWord) ?? text(v.command_word_note)
-      : null,
+    // Provider-neutral Tier 1 must not silently inject Cambridge wording into
+    // CBSE or IB papers. Board-specific definitions belong in verified provider
+    // evidence, not in this no-scheme fallback.
+    command_word_note: commandWord ? text(v.command_word_note) : null,
     model_answer: text(v.model_answer),
     loss_reasons: lossReasons(v.loss_reasons),
   };
