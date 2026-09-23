@@ -84,7 +84,27 @@ const handler = consumeQueue<ExplainMessage>(
     const run = await mustMaybe(sb.from("extraction_run").select("route_override").eq("id", runId).maybeSingle(), "extraction_run read") as any;
     const override = run?.route_override;
     const paper = await mustOne(sb.from("paper").select("subject, tier").eq("id", region.paper_id).maybeSingle(), "paper read") as any;
-    const student = await mustOne(sb.from("student").select("class_level").eq("id", region.student_id).maybeSingle(), "student read") as any;
+    const student = await mustOne(
+      sb.from("student").select("class_level, programme_id, board").eq("id", region.student_id).maybeSingle(),
+      "student read",
+    ) as any;
+
+    let providerKey: string | null = null;
+    if (student?.programme_id) {
+      const programme = await mustMaybe(
+        sb.from("curriculum_programme").select("key").eq("id", student.programme_id).maybeSingle(),
+        "curriculum programme read",
+      ) as any;
+      providerKey = programme?.key?.startsWith("cambridge_") ? "cambridge"
+        : programme?.key?.startsWith("cbse_") ? "cbse"
+        : programme?.key === "ibdp" ? "ib"
+        : null;
+    } else {
+      providerKey = student?.board === "CBSE" ? "cbse"
+        : student?.board === "IBDP" ? "ib"
+        : student?.board ? "cambridge"
+        : null;
+    }
 
     const schemeEvidence = paper?.tier === "tier_2"
       ? await resolveSchemeEvidence(sb, {
@@ -164,6 +184,9 @@ const handler = consumeQueue<ExplainMessage>(
     };
 
     const useTier2 = !!schemeEvidence;
+    const validateExplain = (value: unknown) => useTier2
+      ? validateTier2(value, providerKey)
+      : validateTier1(value, providerKey);
     const { parsed, model, promptVersion, webSources } = await callModel({
       env,
       sb,
@@ -178,7 +201,7 @@ const handler = consumeQueue<ExplainMessage>(
           })
         : tier1Instruction(baseInstruction),
       schema: useTier2 ? TIER2_SCHEMA : TIER1_SCHEMA,
-      validate: useTier2 ? validateTier2 : validateTier1,
+      validate: validateExplain,
       runId,
       paperId: region.paper_id,
       regionId,
