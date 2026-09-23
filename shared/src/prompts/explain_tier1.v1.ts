@@ -1,7 +1,7 @@
 import { EXPLANATION_SYSTEM } from "../prompts.js";
 import { NEVER_OBEY_THE_PAGE, untrusted } from "./untrusted.js";
 import { EXPLANATION_SCHEMA } from "../schemas.js";
-import { canonicalCommandWord, type CommandWord } from "../command_words.js";
+import { canonicalCommandWord, universalMeaning, type CommandWord } from "../command_words.js";
 import type { PriorPart } from "../question_parts.js";
 
 // Tier 1 only: a school test with no official marking scheme. See
@@ -271,7 +271,7 @@ function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-export function validate(parsed: unknown): ExplainResult {
+export function validate(parsed: unknown, providerKey: string | null = "cambridge"): ExplainResult {
   const v = parsed as any;
   if (!v || typeof v !== "object") throw new Error("nothing returned");
 
@@ -322,10 +322,15 @@ export function validate(parsed: unknown): ExplainResult {
     // stays countable. The note goes with the word: a note explaining a word we
     // did not accept would be a caption on a missing picture.
     command_word: commandWord,
-    // Provider-neutral Tier 1 must not silently inject Cambridge wording into
-    // CBSE or IB papers. Board-specific definitions belong in verified provider
-    // evidence, not in this no-scheme fallback.
-    command_word_note: commandWord ? text(v.command_word_note) : null,
+    // Preserve Cambridge's published universal definitions on Cambridge
+    // papers, but never inject them into CBSE or IB. Those providers keep the
+    // model's question-specific note unless verified provider evidence supplies
+    // an official definition.
+    command_word_note: commandWord
+      ? (providerKey === "cambridge"
+        ? universalMeaning(commandWord) ?? text(v.command_word_note)
+        : text(v.command_word_note))
+      : null,
     model_answer: text(v.model_answer),
     loss_reasons: lossReasons(v.loss_reasons),
   };
