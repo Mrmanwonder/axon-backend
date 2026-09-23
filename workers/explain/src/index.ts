@@ -2,9 +2,21 @@ import { callModel } from "@mastery/shared/openrouter.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
 import { mustOk, mustOne, mustMaybe, mustData, mustAffectRows, mustRpc } from "@mastery/shared/db.js";
 import { clearsTheFloor } from "@mastery/shared/quality_floor.js";
-import { SYSTEM, instruction, SCHEMA, validate } from "@mastery/shared/prompts/explain_tier1.v1.js";
+import {
+  SYSTEM as TIER1_SYSTEM,
+  instruction as tier1Instruction,
+  SCHEMA as TIER1_SCHEMA,
+  validate as validateTier1,
+} from "@mastery/shared/prompts/explain_tier1.v1.js";
+import {
+  SYSTEM as TIER2_SYSTEM,
+  instruction as tier2Instruction,
+  SCHEMA as TIER2_SCHEMA,
+  validate as validateTier2,
+} from "@mastery/shared/prompts/explain_tier2.v1.js";
 import { fullMarkPreviousContext, normalisePartKey, resolveDependencies } from "@mastery/shared/question_parts.js";
 import { gateModelAnswer } from "@mastery/shared/grounding.js";
+import { resolveSchemeEvidence } from "@mastery/shared/assessment.js";
 import type { Env } from "@mastery/shared/env.js";
 
 interface ExplainMessage {
@@ -13,10 +25,9 @@ interface ExplainMessage {
   _retries?: number;
 }
 
-// This worker only ever explains as Tier 1 (see shared/prompts/explain_tier1.v1.ts) —
-// there is no Tier 2 prompt grounded in canonical_question.marking_scheme yet.
-// A Tier 2 question with no scheme match logs and falls through to Tier 1
-// rather than fabricating a scheme (CLAUDE.md rule 2).
+// Tier 2 is used only after exact assessment identity + exact question-label
+// resolution against an authorized stored official scheme. Any unresolved Tier
+// 2 paper falls back to Tier 1 without scheme claims rather than fabricating one.
 const handler = consumeQueue<ExplainMessage>(
   async ({ env, sb, msg, attempt, beat }) => {
     const runId = msg.run_id;
@@ -75,11 +86,22 @@ const handler = consumeQueue<ExplainMessage>(
     const paper = await mustOne(sb.from("paper").select("subject, tier").eq("id", region.paper_id).maybeSingle(), "paper read") as any;
     const student = await mustOne(sb.from("student").select("class_level").eq("id", region.student_id).maybeSingle(), "student read") as any;
 
-    if (paper?.tier === "tier_2") {
-      const matched = await mustMaybe(sb.from("question_region").select("canonical_question_id").eq("id", regionId).maybeSingle(), "canonical match read") as any;
-      if (!matched?.canonical_question_id) {
-        console.info("tier 2 question with no scheme match; explaining as tier 1", regionId);
-      }
+    const schemeEvidence = paper?.tier === "tier_2"
+      ? await resolveSchemeEvidence(sb, {
+          paperId: region.paper_id,
+          questionLabel: region.question_label,
+        })
+      : null;
+
+    if (schemeEvidence) {
+      await mustOk(
+        sb.from("question_region")
+          .update({ canonical_question_id: schemeEvidence.canonicalQuestionId })
+          .eq("id", regionId),
+        "canonical question bind",
+      );
+    } else if (paper?.tier === "tier_2") {
+      console.info("tier 2 question unresolved; explaining without scheme claims", regionId);
     }
 
     const marks = await mustData(sb.from("teacher_mark").select("mark_class, comment_text").eq("region_id", regionId), "teacher_mark read") as any[];
@@ -127,44 +149,55 @@ const handler = consumeQueue<ExplainMessage>(
       ? [...deps.resolved, implicitContext]
       : deps.resolved;
 
+    const baseInstruction = {
+      label: region.question_label,
+      subject: paper?.subject ?? null,
+      classLevel: student?.class_level ?? null,
+      marksAwarded: awarded,
+      marksAvailable: available,
+      questionText: region.question_text,
+      studentAnswer: region.student_answer,
+      teacherRemark: region.teacher_remark,
+      markShapes: (marks ?? []).map((m: any) => m.mark_class).filter((value: string) => value !== "unknown"),
+      priorParts: promptParts,
+      unresolvedParts: deps.unresolved,
+    };
+
+    const useTier2 = !!schemeEvidence;
     const { parsed, model, promptVersion, webSources } = await callModel({
       env,
       sb,
       stage: "explain",
-      system: SYSTEM,
-      instruction: instruction({
-        label: region.question_label,
-        subject: paper?.subject ?? null,
-        classLevel: student?.class_level ?? null,
-        marksAwarded: awarded,
-        marksAvailable: available,
-        questionText: region.question_text,
-        studentAnswer: region.student_answer,
-        teacherRemark: region.teacher_remark,
-        markShapes: (marks ?? []).map((m: any) => m.mark_class).filter((c: string) => c !== "unknown"),
-        priorParts: promptParts,
-        unresolvedParts: deps.unresolved,
-      }),
-      schema: SCHEMA,
-      validate,
+      system: useTier2 ? TIER2_SYSTEM : TIER1_SYSTEM,
+      instruction: useTier2
+        ? tier2Instruction({
+            ...baseInstruction,
+            schemeText: schemeEvidence.markingScheme,
+            schemeSource: schemeEvidence.sourceUrl,
+            schemeVersion: schemeEvidence.version,
+          })
+        : tier1Instruction(baseInstruction),
+      schema: useTier2 ? TIER2_SCHEMA : TIER1_SCHEMA,
+      validate: useTier2 ? validateTier2 : validateTier1,
       runId,
       paperId: region.paper_id,
       regionId,
       studentId: region.student_id,
       attempt,
       routeOverride: override,
-      // Live web grounding is allowed only from public academic context. The
-      // Tavily adapter ignores model-authored queries and searches this exact
-      // server-approved context; student answers and teacher remarks never
-      // become outbound search terms.
-      webTools: {
-        searchContext: [
-          paper?.subject,
-          student?.class_level,
-          region.question_text,
-          ...promptParts.map((part) => part.questionText),
-        ].filter((value): value is string => typeof value === "string" && value.trim().length > 0).join(" | "),
-      },
+      // Web context may help Tier 1 explain general academic content. It is
+      // deliberately disabled for Tier 2: official stored scheme evidence is
+      // the authority and a search result must never substitute for it.
+      ...(useTier2 ? {} : {
+        webTools: {
+          searchContext: [
+            paper?.subject,
+            student?.class_level,
+            region.question_text,
+            ...promptParts.map((part) => part.questionText),
+          ].filter((value): value is string => typeof value === "string" && value.trim().length > 0).join(" | "),
+        },
+      }),
     });
 
     const marksLost = Math.round((available - awarded) * 100) / 100;
@@ -192,6 +225,7 @@ const handler = consumeQueue<ExplainMessage>(
       studentAnswer: region.student_answer,
       contextText: promptParts.flatMap((p) => [p.questionText, p.studentAnswer].filter(Boolean) as string[]),
       unresolvedDependencies: deps.unresolved,
+      verifiedSchemeText: schemeEvidence?.markingScheme ?? null,
     });
     if (grounding.status !== "complete") {
       console.info("model_answer withheld", regionId, grounding.status);
@@ -224,7 +258,7 @@ const handler = consumeQueue<ExplainMessage>(
       region_id: regionId,
       run_id: runId,
       student_id: region.student_id,
-      tier: "tier_1",
+      tier: schemeEvidence ? "tier_2" : "tier_1",
       cause: parsed.cause,
       marks_lost: parsed.cause ? marksLost : null,
       body: parsed.body,
@@ -240,6 +274,8 @@ const handler = consumeQueue<ExplainMessage>(
       depends_on_parts: promptParts.map((p) => p.label),
       unresolved_parts: deps.unresolved,
       loss_reasons: lossReasons,
+      scheme_source: schemeEvidence?.sourceUrl ?? null,
+      scheme_version: schemeEvidence?.version ?? null,
       model_version: model,
       prompt_version: promptVersion,
     }, { onConflict: "region_id" }), "region_explanation upsert");
@@ -256,6 +292,9 @@ const handler = consumeQueue<ExplainMessage>(
         prior_parts: promptParts.length,
         grounding: grounding.status,
         web_sources: webSources,
+        assessment_identity: schemeEvidence?.assessmentIdentityId ?? null,
+        scheme_document: schemeEvidence?.schemeDocumentId ?? null,
+        explanation_tier: schemeEvidence ? "tier_2" : "tier_1",
       },
     };
   },
