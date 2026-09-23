@@ -122,7 +122,10 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
   if (!paper) return failure("That paper is not yours.", 403);
 
   const admin = serviceClient(env);
-  const minted: any[] = [];
+
+  // ⚡ Bolt: Optimize sequential network operations by validating synchronously first,
+  // then running presignPut and db inserts concurrently with Promise.all
+  const validObjects = [];
   for (const object of body.objects) {
     const extension = CAPTURE.UPLOAD_EXTENSIONS[object.content_type as keyof typeof CAPTURE.UPLOAD_EXTENSIONS];
     if (!extension) return failure(`We cannot take a ${object.content_type} file.`);
@@ -138,24 +141,35 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
 
     const bucket = BUCKET_FOR[object.kind as keyof typeof BUCKET_FOR];
     const key = objectKey({ studentId: body.student_id, paperId: body.paper_id, kind: object.kind, name: objectName, extension });
-    const entry: any = { kind: object.kind, name: objectName, bucket, key, url: await presignPut(env, bucket, key, object.content_type) };
-    if (object.kind === "upload" || object.kind === "raw") {
+    validObjects.push({ object, extension, objectName, bucket, key });
+  }
+
+  const minted = await Promise.all(validObjects.map(async (v) => {
+    const entry: any = {
+      kind: v.object.kind,
+      name: v.objectName,
+      bucket: v.bucket,
+      key: v.key,
+      url: await presignPut(env, v.bucket, v.key, v.object.content_type)
+    };
+    if (v.object.kind === "upload" || v.object.kind === "raw") {
       const { data: row } = await admin
         .from("upload")
         .insert({
           paper_id: body.paper_id,
           student_id: body.student_id,
-          kind: object.content_type === "application/pdf" ? "pdf" : "image",
-          r2_bucket: bucket,
-          r2_key: key,
-          content_type: object.content_type,
+          kind: v.object.content_type === "application/pdf" ? "pdf" : "image",
+          r2_bucket: v.bucket,
+          r2_key: v.key,
+          content_type: v.object.content_type,
         })
         .select("id")
         .single();
       entry.upload_id = row?.id;
     }
-    minted.push(entry);
-  }
+    return entry;
+  }));
+
   return json({ objects: minted, expires_in: 900 });
 }
 
@@ -171,6 +185,9 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
   const admin = serviceClient(env);
   const confirmed: string[] = [];
   const missing: Array<{ key: string; reason: string }> = [];
+
+  // ⚡ Bolt: Optimize sequential network operations by batching headObject and db updates concurrently
+  const claimsToProcess = [];
   for (const claim of body.uploads) {
     // JSON is untyped at runtime. Do not let an arbitrary string choose a binding.
     if (claim.bucket !== "originals" && claim.bucket !== "derived") {
@@ -181,20 +198,24 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
       missing.push({ key: claim.key ?? "", reason: "that file does not belong to this paper" });
       continue;
     }
+    claimsToProcess.push(claim);
+  }
+
+  await Promise.all(claimsToProcess.map(async (claim) => {
     let head: Awaited<ReturnType<typeof headObject>>;
     try {
       head = await headObject(env, claim.bucket, claim.key);
     } catch (cause) {
       missing.push({ key: claim.key, reason: `we could not check that file (${cause})` });
-      continue;
+      return;
     }
     if (!head) {
       missing.push({ key: claim.key, reason: "that file did not arrive" });
-      continue;
+      return;
     }
     if (claim.bytes && claim.bytes !== head.bytes) {
       missing.push({ key: claim.key, reason: "that file arrived incomplete" });
-      continue;
+      return;
     }
     await admin
       .from("upload")
@@ -209,7 +230,8 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
       .eq("paper_id", body.paper_id)
       .eq("r2_key", claim.key);
     confirmed.push(claim.key);
-  }
+  }));
+
   return json({ confirmed, missing }, missing.length ? 409 : 200);
 }
 
@@ -228,13 +250,14 @@ async function pageAssetUrls(req: Request, env: Env): Promise<Response> {
   if (error) return failure("We could not look up those pages.", 500, error.message);
 
   const urls: Record<number, { url: string | null; mask_url: string | null }> = {};
-  for (const page of pages ?? []) {
+  // ⚡ Bolt: Optimize sequential network operations by batching asset signing concurrently
+  await Promise.all((pages ?? []).map(async (page) => {
     const bucket = (page.r2_bucket as BucketKind) ?? "derived";
     urls[page.page_number] = {
       url: page.r2_key ? await signAssetUrl(env, bucket, page.r2_key) : null,
       mask_url: page.mask_key ? await signAssetUrl(env, bucket, page.mask_key) : null,
     };
-  }
+  }));
   return json({ urls });
 }
 
