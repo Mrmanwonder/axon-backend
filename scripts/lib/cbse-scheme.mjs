@@ -111,7 +111,7 @@ export function parseCbseHeader(text) {
 }
 
 function labelMatch(line) {
-  const match = /^\s*(?:Q(?:uestion)?\.?\s*(?:No\.?)?\s*)?(\d{1,2})(?:\s*\(([AB])\))?\s*[.)]?\s+(.+)$/i.exec(line);
+  const match = /^\s*(?:Q(?:uestion)?\.?\s*(?:No\.?)?\s*)?(\d{1,2})(?:\s*\(([AB])\))?\s*[.)]?\s*(.*)$/i.exec(line);
   if (!match) return null;
   const number = Number(match[1]);
   if (!Number.isInteger(number) || number < 1 || number > 80) return null;
@@ -139,37 +139,64 @@ function isBoilerplate(line) {
     || /^Page\s+\d+\s+of\s+\d+$/i.test(value);
 }
 
-function parseMarkExpression(value) {
-  const parts = String(value).split("+").map(part => Number(part.trim()));
-  if (!parts.length || parts.some(part => !Number.isFinite(part) || part <= 0)) return null;
-  const total = parts.reduce((sum, part) => sum + part, 0);
-  return Number.isInteger(total) && total > 0 && total <= 30 ? total : null;
+function markNumber(value) {
+  const token = String(value).trim();
+  if (token === "½") return 0.5;
+  if (token === "¼") return 0.25;
+  if (token === "¾") return 0.75;
+  const number = Number(token);
+  return Number.isFinite(number) ? number : null;
 }
 
-export function extractMarkTotal(lines) {
+function parseMarkExpression(value) {
+  const terms = String(value).replace(/×/g, "x").split("+");
+  let total = 0;
+  for (const term of terms) {
+    const factors = term.split(/[x*]/i).map(markNumber);
+    if (!factors.length || factors.some(factor => factor === null || factor <= 0)) return null;
+    total += factors.reduce((product, factor) => product * factor, 1);
+  }
+  return total > 0 && total <= 30 ? Number(total.toFixed(4)) : null;
+}
+
+function markExpressionAtEnd(line) {
+  return /(?:^|\s{2,})((?:½|¼|¾|\d+(?:\.\d+)?)(?:\s*(?:\+|[x×*])\s*(?:½|¼|¾|\d+(?:\.\d+)?))*)\s*$/.exec(line);
+}
+
+export function detectMarksColumn(lines) {
+  for (const line of lines) {
+    if (/Q\.?\s*No/i.test(line) && /Marks/i.test(line)) return line.lastIndexOf("Marks");
+  }
+  for (const line of lines) {
+    if (/Question/i.test(line) && /Marks/i.test(line)) return line.lastIndexOf("Marks");
+  }
+  return null;
+}
+
+export function extractMarkTotal(lines, markColumn = null) {
   const candidates = [];
   for (const line of lines) {
-    const match = /\s{3,}(\d+(?:\s*\+\s*\d+)*)\s*$/.exec(line);
+    const match = markExpressionAtEnd(line);
     if (!match) continue;
+    if (markColumn !== null && match.index < Math.max(0, markColumn - 12)) continue;
     const total = parseMarkExpression(match[1]);
-    if (total) candidates.push({ total, compound: match[1].includes("+") });
+    if (total !== null) candidates.push(total);
   }
   if (!candidates.length) return null;
-  const compound = candidates.filter(candidate => candidate.compound);
-  if (compound.length) {
-    const unique = [...new Set(compound.map(candidate => candidate.total))];
-    return unique.length === 1 ? unique[0] : null;
-  }
-  const sum = candidates.reduce((total, candidate) => total + candidate.total, 0);
-  return Number.isInteger(sum) && sum > 0 && sum <= 30 ? sum : null;
+  const total = candidates.reduce((sum, value) => sum + value, 0);
+  return total > 0 && total <= 30 ? Number(total.toFixed(4)) : null;
 }
 
-function stripMarksColumn(line) {
-  return line.replace(/\s{3,}\d+(?:\s*\+\s*\d+)*\s*$/, "").trimEnd();
+function stripMarksColumn(line, markColumn = null) {
+  const match = markExpressionAtEnd(line);
+  if (!match) return line.trimEnd();
+  if (markColumn !== null && match.index < Math.max(0, markColumn - 12)) return line.trimEnd();
+  return line.slice(0, match.index).trimEnd();
 }
 
 export function parseQuestionBlocks(text) {
   const lines = String(text).replace(/\r/g, "").split("\n");
+  const markColumn = detectMarksColumn(lines);
   const starts = [];
   let lastBase = 0;
   const seen = new Set();
@@ -190,9 +217,9 @@ export function parseQuestionBlocks(text) {
   return starts.map((start, i) => {
     const end = starts[i + 1]?.index ?? lines.length;
     const rawLines = lines.slice(start.index, end).filter(line => !isBoilerplate(line));
-    const maxMarks = extractMarkTotal(rawLines);
+    const maxMarks = extractMarkTotal(rawLines, markColumn);
     const cleaned = rawLines
-      .map(stripMarksColumn)
+      .map(line => stripMarksColumn(line, markColumn))
       .filter(line => line.trim())
       .join("\n")
       .trim();
