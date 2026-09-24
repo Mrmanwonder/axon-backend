@@ -28,7 +28,7 @@ function parseArgs(argv) {
     reason: null,
   };
   for (const arg of argv) {
-    if (["discover", "ingest", "revoke"].includes(arg)) out.command = arg;
+    if (["discover", "verify", "ingest", "revoke"].includes(arg)) out.command = arg;
     else if (arg === "--write") out.write = true;
     else if (arg.startsWith("--class=")) out.classLevel = Number(arg.slice(8));
     else if (arg.startsWith("--subject=")) out.subject = arg.slice(10);
@@ -315,6 +315,35 @@ async function storeQuestions(sb, identity, document, offering, pair, write) {
   return count;
 }
 
+async function verifyOne(entry) {
+  const [sqpBytes, msBytes] = await Promise.all([
+    fetchOfficial(entry.sqpUrl),
+    fetchOfficial(entry.msUrl),
+  ]);
+  const sqpHash = sha256(sqpBytes);
+  const msHash = sha256(msBytes);
+  const pair = pairOfficialQuestions(pdfText(sqpBytes), pdfText(msBytes));
+  if (pair.header.classLevel !== entry.classLevel) {
+    throw new Error("Index/PDF class mismatch for " + entry.subject);
+  }
+  if (!normalizedSubjectName(entry.subject).includes(normalizedSubjectName(pair.header.subject))
+      && !normalizedSubjectName(pair.header.subject).includes(normalizedSubjectName(entry.subject))) {
+    throw new Error("Index/PDF subject mismatch for " + entry.subject + " vs " + pair.header.subject);
+  }
+  return {
+    subject: entry.subject,
+    code: pair.header.subjectCode,
+    classLevel: pair.header.classLevel,
+    session: pair.header.session,
+    examYear: pair.header.examYear,
+    coverage: pair.coverage,
+    canonicalQuestions: pair.questions.length,
+    parsed: pair.parsed,
+    sqpSha256: sqpHash,
+    msSha256: msHash,
+  };
+}
+
 async function ingestOne(sb, entry, write) {
   const [sqpBytes, msBytes] = await Promise.all([
     fetchOfficial(entry.sqpUrl),
@@ -396,6 +425,26 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.command === "discover") {
     console.log(JSON.stringify(await indexRows(args.classLevel, args.subject), null, 2));
+    return;
+  }
+
+  if (args.command === "verify") {
+    const rows = await indexRows(args.classLevel, args.subject);
+    if (!rows.length) throw new Error("No matching CBSE SQP/MS rows discovered");
+    const results = [];
+    const failures = [];
+    for (const row of rows) {
+      try {
+        results.push(await verifyOne(row));
+      } catch (error) {
+        failures.push({
+          subject: row.subject,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    console.log(JSON.stringify({ results, failures }, null, 2));
+    if (failures.length) process.exitCode = 2;
     return;
   }
 
