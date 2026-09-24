@@ -63,13 +63,29 @@ export function normaliseQuestionLabel(value: unknown): string | null {
   return v.toUpperCase().replace(/\s+/g, "").replace(/[.]+$/g, "");
 }
 
+export function questionLabelAncestors(value: unknown): string[] {
+  const label = normaliseQuestionLabel(value);
+  if (!label) return [];
+  const out = [label];
+  let current = label;
+  while (/\([^()]+\)$/.test(current)) {
+    current = current.replace(/\([^()]+\)$/, "");
+    if (current && !out.includes(current)) out.push(current);
+  }
+  return out;
+}
+
 export function candidateIsResolvable(candidate: AssessmentCandidate): boolean {
   if (candidate.confidence !== "high") return false;
   if (!token(candidate.subject_code)) return false;
   if (!Number.isInteger(candidate.exam_year) || Number(candidate.exam_year) < 2000 || Number(candidate.exam_year) > 2100) return false;
-  // Subject + year alone is never a paper identity. Require at least one
-  // official paper/component discriminator visible in the header.
-  return !!(token(candidate.paper_code) || token(candidate.component_code));
+  // Subject + year alone is never a paper identity. Cambridge-like papers use
+  // paper/component codes; CBSE sample papers use a printed assessment route.
+  return !!(
+    token(candidate.paper_code)
+    || token(candidate.component_code)
+    || token(candidate.assessment_route)
+  );
 }
 
 function sameNullable(a: unknown, b: unknown): boolean {
@@ -168,21 +184,45 @@ export async function resolveSchemeEvidence(
     .eq("assessment_identity_id", paper.assessment_identity_id);
   if (questionError) throw questionError;
 
-  const exact = (rows ?? []).filter((row: any) => normaliseQuestionLabel(row.question_label) === label);
-  if (exact.length !== 1) return null;
-  const question = exact[0];
+  let question: any = null;
+  for (const candidateLabel of questionLabelAncestors(label)) {
+    const matches = (rows ?? []).filter(
+      (row: any) => normaliseQuestionLabel(row.question_label) === candidateLabel,
+    );
+    if (matches.length > 1) return null;
+    if (matches.length === 1) {
+      question = matches[0];
+      break;
+    }
+  }
+  if (!question) return null;
   if (!question.marking_scheme || !question.scheme_source || !question.scheme_version || !question.scheme_document_id) return null;
 
   const { data: document, error: documentError } = await sb.from("scheme_document")
-    .select("id,source_url,copyright_access_class,extraction_status")
+    .select("id,source_url,copyright_access_class,extraction_status,policy_id,revoked_at")
     .eq("id", question.scheme_document_id)
     .eq("assessment_identity_id", paper.assessment_identity_id)
     .maybeSingle();
   if (documentError) throw documentError;
-  if (!document) return null;
+  if (!document || document.revoked_at || !document.policy_id) return null;
   if (!["public_official", "licensed_official"].includes(document.copyright_access_class)) return null;
   if (!["ready", "complete", "extracted"].includes(document.extraction_status)) return null;
   if (!document.source_url) return null;
+
+  const { data: policy, error: policyError } = await sb.from("scheme_source_policy")
+    .select("id,hostname,copyright_access_class,reproduction_permitted,active")
+    .eq("id", document.policy_id)
+    .maybeSingle();
+  if (policyError) throw policyError;
+  if (!policy?.active || !policy.reproduction_permitted) return null;
+  if (!["public_official", "licensed_official"].includes(policy.copyright_access_class)) return null;
+  let sourceHost: string;
+  try {
+    sourceHost = new URL(document.source_url).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return null;
+  }
+  if (sourceHost !== String(policy.hostname).replace(/^www\./, "").toLowerCase()) return null;
 
   return {
     canonicalQuestionId: question.id,
