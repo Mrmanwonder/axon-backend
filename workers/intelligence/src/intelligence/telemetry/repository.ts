@@ -7,6 +7,7 @@ import type { ProviderObservation } from "../routing/circuit-breaker";
 export interface TraceRecord {
   traceId: string; stage: string; capability: string; deploymentSha: string; configRevision: string; pipelineVersion: string;
   paperId?: string; questionId?: string; confidence?: number;
+  intent?: string; verificationFailures?: string[]; groundingUsed?: boolean; answerStatus?: string;
   provider?: string; requestedModel?: string; servedModel?: string; thinkingLevel?: string; promptId?: string; promptHash?: string;
   schemaId?: string; schemaHash?: string; toolCalls: string[]; retrievalUsed: boolean; verificationStatus: string;
   repairAttempted: boolean; latencyMs?: number; inputTokens?: number; outputTokens?: number; estimatedCost?: number;
@@ -19,8 +20,9 @@ export async function writeTrace(db: D1Database, trace: TraceRecord): Promise<vo
     trace_id, paper_id, question_id, stage, capability, deployment_sha, config_revision, pipeline_version, provider,
     requested_model, served_model, thinking_level, prompt_id, prompt_hash, schema_id, schema_hash,
     tool_calls, retrieval_used, verification_status, repair_attempted, confidence, latency_ms, input_tokens, output_tokens, estimated_cost,
-    transport_success, schema_success, semantic_validation_success, input_artifact_hashes, error
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    transport_success, schema_success, semantic_validation_success, input_artifact_hashes, error,
+    intent, verification_failures, grounding_used, answer_status
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(trace.traceId, trace.paperId ?? null, trace.questionId ?? null, trace.stage, trace.capability, trace.deploymentSha, trace.configRevision, trace.pipelineVersion,
       trace.provider ?? null, trace.requestedModel ?? null, trace.servedModel ?? null, trace.thinkingLevel ?? null,
       trace.promptId ?? null, trace.promptHash ?? null, trace.schemaId ?? null, trace.schemaHash ?? null,
@@ -29,7 +31,8 @@ export async function writeTrace(db: D1Database, trace: TraceRecord): Promise<vo
       trace.transportSuccess === undefined ? null : trace.transportSuccess ? 1 : 0,
       trace.schemaSuccess === undefined ? null : trace.schemaSuccess ? 1 : 0,
       trace.semanticValidationSuccess === undefined ? null : trace.semanticValidationSuccess ? 1 : 0,
-      JSON.stringify(trace.inputArtifactHashes), trace.error ?? null).run();
+      JSON.stringify(trace.inputArtifactHashes), trace.error ?? null,
+      trace.intent ?? null, JSON.stringify(trace.verificationFailures ?? []), trace.groundingUsed ? 1 : 0, trace.answerStatus ?? null).run();
 }
 
 export async function recordDeploymentProvenance(db: D1Database, values: { deploymentSha: string; configRevision: string; pipelineVersion: string }): Promise<void> {

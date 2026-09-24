@@ -17,6 +17,7 @@ export interface TutorRunTrace {
   thinkingLevel?: string; promptId?: string; promptHash?: string; schemaId?: string; schemaHash?: string;
   toolCalls: string[]; retrievalUsed: boolean; verificationStatus: string; repairAttempted: boolean; latencyMs?: number; error?: string;
   inputTokens?: number; outputTokens?: number; transportSuccess?: boolean; schemaSuccess?: boolean; semanticValidationSuccess?: boolean;
+  verificationFailures?: string[]; groundingUsed?: boolean; answerStatus?: TutorResponse["status"];
   evidence?: Evidence[]; claims?: Claim[];
 }
 export interface TutorDependencies { provider: AIProvider; retrieval?: RetrievalService; stableKnowledge?: (message: string) => Promise<Evidence[]>; providerAvailable?: () => Promise<boolean>; trace?: (trace: TutorRunTrace) => void }
@@ -51,7 +52,7 @@ export class TutorOrchestrator {
     const retrievedEvidenceIds = new Set<string>();
     if (decisions.retrieval) {
       if (!this.dependencies.retrieval) {
-        this.emit({ traceId, intent, toolCalls: [], retrievalUsed: false, verificationStatus: "controlled_failure", repairAttempted: false, error: "RETRIEVAL_FAILURE" });
+        this.emit({ traceId, intent, toolCalls: [], retrievalUsed: false, groundingUsed: false, verificationStatus: "controlled_failure", verificationFailures: ["RETRIEVAL_FAILURE"], repairAttempted: false, answerStatus: "controlled_failure", error: "RETRIEVAL_FAILURE" });
         return this.failure(traceId, "Current information requires retrieval, but no compliant retrieval service is configured.");
       }
       try {
@@ -59,13 +60,13 @@ export class TutorOrchestrator {
         for (const item of retrieved) retrievedEvidenceIds.add(item.id);
         evidence.push(...retrieved);
       } catch (error) {
-        this.emit({ traceId, intent, toolCalls: ["retrieval"], retrievalUsed: true, verificationStatus: "controlled_failure", repairAttempted: false, error: "RETRIEVAL_FAILURE" });
+        this.emit({ traceId, intent, toolCalls: ["retrieval"], retrievalUsed: true, groundingUsed: false, verificationStatus: "controlled_failure", verificationFailures: ["RETRIEVAL_FAILURE"], repairAttempted: false, answerStatus: "controlled_failure", error: "RETRIEVAL_FAILURE" });
         return this.failure(traceId, "I couldn’t retrieve reliable current sources, so I won’t guess. Please try again later.", [error instanceof Error ? error.message : "RETRIEVAL_FAILURE"]);
       }
     }
     const context = assembleContext({ intent, ...(request.subject ? { subject: request.subject } : {}), ...(request.topic ? { topic: request.topic } : {}), ...(request.paperId ? { paperId: request.paperId } : {}), evidence });
     if (decisions.paperEvidence && !context.some((item) => item.source === "paper" || item.source === "teacher")) {
-      this.emit({ traceId, intent, toolCalls: [], retrievalUsed: false, verificationStatus: "insufficient_evidence", repairAttempted: false });
+      this.emit({ traceId, intent, toolCalls: [], retrievalUsed: false, groundingUsed: false, verificationStatus: "insufficient_evidence", verificationFailures: [], repairAttempted: false, answerStatus: "insufficient_evidence" });
       return { traceId, status: "insufficient_evidence", answer: "I can’t determine that without the relevant paper, student response, or teacher marking. Share the marked work and I’ll separate what was written, what was marked, and what the evidence can explain.", citations: [], verification: { passed: true, repaired: false, failures: [] } };
     }
     const risk = classifyRisk(intent);
@@ -75,7 +76,7 @@ export class TutorOrchestrator {
       route = this.#router.route({ capability: "tutoring", risk, privacyPolicy: "STUDENT_CHAT_STRICT", latencyBudgetMs: risk === "R4" ? 12_000 : 8_000, difficulty: risk === "R4" ? "complex" : risk === "R3" ? "standard" : "simple", multimodal: false }, providerAvailable ? new Set([this.dependencies.provider.id]) : new Set());
     } catch (error) {
       if (!(error instanceof NoCompliantProviderError)) throw error;
-      this.emit({ traceId, intent, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, verificationStatus: "controlled_failure", repairAttempted: false, error: "NO_COMPLIANT_PROVIDER" });
+      this.emit({ traceId, intent, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, groundingUsed: retrievedEvidenceIds.size > 0, verificationStatus: "controlled_failure", verificationFailures: ["NO_COMPLIANT_PROVIDER"], repairAttempted: false, answerStatus: "controlled_failure", error: "NO_COMPLIANT_PROVIDER" });
       return this.failure(traceId, "No privacy-compliant model endpoint is currently available. Your student data was not sent.");
     }
     const compiled = await promptRegistry.compile(promptIdFor(intent));
@@ -84,7 +85,7 @@ export class TutorOrchestrator {
       modelResponse = await this.dependencies.provider.generate({ model: route.model, system: compiled.system, task: compiled.task, user: request.message, schema: compiled.schema, thinkingLevel: route.thinkingLevel, evidence: context, timeoutMs: route.timeoutMs });
     } catch (error) {
       const code = error instanceof ProviderError ? error.code : "MODEL_FAILURE";
-      this.emit({ traceId, intent, provider: route.provider, requestedModel: route.model, thinkingLevel: route.thinkingLevel, promptId: compiled.id, promptHash: compiled.promptHash, schemaId: compiled.schemaId, schemaHash: compiled.schemaHash, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, verificationStatus: "controlled_failure", repairAttempted: false, error: code, evidence: context });
+      this.emit({ traceId, intent, provider: route.provider, requestedModel: route.model, thinkingLevel: route.thinkingLevel, promptId: compiled.id, promptHash: compiled.promptHash, schemaId: compiled.schemaId, schemaHash: compiled.schemaHash, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, groundingUsed: retrievedEvidenceIds.size > 0, verificationStatus: "controlled_failure", verificationFailures: [code], repairAttempted: false, answerStatus: "controlled_failure", error: code, evidence: context });
       return this.failure(traceId, "The reasoning service is temporarily unavailable. No unverified answer was shown.", [code]);
     }
     let totalLatencyMs = modelResponse.latencyMs;
@@ -110,7 +111,7 @@ export class TutorOrchestrator {
         modelResponse = await this.dependencies.provider.generate({ model: route.model, system: repair.system, task: `${repair.task}\n\nVERIFICATION FAILURES:\n${failures.join("\n")}`, user: request.message, schema: repair.schema, thinkingLevel: route.thinkingLevel, evidence: context, timeoutMs: route.timeoutMs });
       } catch (error) {
         const code = error instanceof ProviderError ? error.code : "MODEL_FAILURE";
-        this.emit({ traceId, intent, provider: route.provider, requestedModel: route.model, thinkingLevel: route.thinkingLevel, promptId: compiled.id, promptHash: compiled.promptHash, schemaId: compiled.schemaId, schemaHash: compiled.schemaHash, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, verificationStatus: "failed", repairAttempted: true, latencyMs: totalLatencyMs, error: code, evidence: context, claims: reasoning.claims });
+        this.emit({ traceId, intent, provider: route.provider, requestedModel: route.model, thinkingLevel: route.thinkingLevel, promptId: compiled.id, promptHash: compiled.promptHash, schemaId: compiled.schemaId, schemaHash: compiled.schemaHash, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, groundingUsed: retrievedEvidenceIds.size > 0, verificationStatus: "failed", verificationFailures: [...failures, code], repairAttempted: true, answerStatus: "controlled_failure", latencyMs: totalLatencyMs, error: code, evidence: context, claims: reasoning.claims });
         return this.failure(traceId, "The answer could not be repaired safely, so it was withheld.", [code], true);
       }
       totalLatencyMs += modelResponse.latencyMs;
@@ -131,13 +132,13 @@ export class TutorOrchestrator {
       }
     }
     if (failures.length > 0) {
-      this.emit({ traceId, intent, provider: route.provider, requestedModel: route.model, servedModel: modelResponse.servedModel, thinkingLevel: route.thinkingLevel, promptId: compiled.id, promptHash: compiled.promptHash, schemaId: compiled.schemaId, schemaHash: compiled.schemaHash, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, verificationStatus: "failed", repairAttempted: repaired, latencyMs: totalLatencyMs, inputTokens, outputTokens, transportSuccess: true, schemaSuccess: !failures.some((failure) => failure.includes("INVALID_SCHEMA")), semanticValidationSuccess: false, error: failures.join("; "), evidence: context, claims: reasoning.claims });
+      this.emit({ traceId, intent, provider: route.provider, requestedModel: route.model, servedModel: modelResponse.servedModel, thinkingLevel: route.thinkingLevel, promptId: compiled.id, promptHash: compiled.promptHash, schemaId: compiled.schemaId, schemaHash: compiled.schemaHash, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, groundingUsed: retrievedEvidenceIds.size > 0, verificationStatus: "failed", verificationFailures: failures, repairAttempted: repaired, answerStatus: "controlled_failure", latencyMs: totalLatencyMs, inputTokens, outputTokens, transportSuccess: true, schemaSuccess: !failures.some((failure) => failure.includes("INVALID_SCHEMA")), semanticValidationSuccess: false, error: failures.join("; "), evidence: context, claims: reasoning.claims });
       return this.failure(traceId, "I don't have enough reliable information to answer that confidently.", failures, repaired);
     }
     const verifiedClaims = verifyClaims(reasoning.claims, context).claims;
     const verifiedReasoning: ReasoningResult = { ...reasoning, claims: verifiedClaims };
     const citations = context.filter((item) => retrievedEvidenceIds.has(item.id) && item.provenance.url).map((item) => ({ title: typeof item.value === "object" && item.value !== null && "title" in item.value ? String(item.value.title) : item.provenance.url ?? "Source", url: item.provenance.url ?? "" }));
-    this.emit({ traceId, intent, provider: route.provider, requestedModel: route.model, servedModel: modelResponse.servedModel, thinkingLevel: route.thinkingLevel, promptId: compiled.id, promptHash: compiled.promptHash, schemaId: compiled.schemaId, schemaHash: compiled.schemaHash, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, verificationStatus: "verified", repairAttempted: repaired, latencyMs: totalLatencyMs, inputTokens, outputTokens, transportSuccess: true, schemaSuccess: true, semanticValidationSuccess: true, evidence: context, claims: verifiedClaims });
+    this.emit({ traceId, intent, provider: route.provider, requestedModel: route.model, servedModel: modelResponse.servedModel, thinkingLevel: route.thinkingLevel, promptId: compiled.id, promptHash: compiled.promptHash, schemaId: compiled.schemaId, schemaHash: compiled.schemaHash, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, groundingUsed: retrievedEvidenceIds.size > 0, verificationStatus: "verified", verificationFailures: [], repairAttempted: repaired, answerStatus: verifiedReasoning.status, latencyMs: totalLatencyMs, inputTokens, outputTokens, transportSuccess: true, schemaSuccess: true, semanticValidationSuccess: true, evidence: context, claims: verifiedClaims });
     return { traceId, status: verifiedReasoning.status, answer: renderReasoning(verifiedReasoning, resolveTutorDepth(request)), citations, verification: { passed: true, repaired, failures: [] } };
   }
 

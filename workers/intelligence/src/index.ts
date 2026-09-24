@@ -71,6 +71,8 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
           ...(trace.promptHash ? { promptHash: trace.promptHash } : {}), ...(trace.schemaId ? { schemaId: trace.schemaId } : {}),
           ...(trace.schemaHash ? { schemaHash: trace.schemaHash } : {}), toolCalls: trace.toolCalls, retrievalUsed: trace.retrievalUsed,
           verificationStatus: trace.verificationStatus, repairAttempted: trace.repairAttempted,
+          intent: trace.intent, verificationFailures: trace.verificationFailures ?? [],
+          groundingUsed: trace.groundingUsed ?? false, ...(trace.answerStatus ? { answerStatus: trace.answerStatus } : {}),
           ...(trace.latencyMs !== undefined ? { latencyMs: trace.latencyMs } : {}),
           ...(trace.inputTokens !== undefined ? { inputTokens: trace.inputTokens } : {}), ...(trace.outputTokens !== undefined ? { outputTokens: trace.outputTokens } : {}),
           ...(estimatedCost !== undefined ? { estimatedCost } : {}),

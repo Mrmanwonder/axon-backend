@@ -124,6 +124,8 @@ export interface CallModelOptions<T> {
   routeOverride?: RouteOverride | null;
   timeoutMs?: number;
   thinkingLevel?: "minimal" | "low" | "medium" | "high";
+  /** Canonical tutor intent when this is a tutor call; scanner stages omit it. */
+  intent?: string;
   /**
    * Give Gemini Tavily Search/Extract using ONLY this server-approved public
    * academic context as the outbound search query. Off by default.
@@ -175,6 +177,14 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
     { role: "user", content },
   ];
 
+  let inputTokens: number | null = null;
+  let outputTokens: number | null = null;
+  let costUsd: number | null = null;
+  let served = route.primary_model;
+  let toolCallsUsed = 0;
+  const toolCallNames = new Set<string>();
+  const webSources = new Set<string>();
+
   const log = (patch: Record<string, unknown>) =>
     logCall(opts.sb, {
       run_id: opts.runId ?? null,
@@ -185,19 +195,17 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
       requested_model: route.primary_model,
       prompt_version: route.prompt_version,
       thinking_level: thinkingLevel ?? null,
+      intent: opts.intent ?? null,
       retrieval_used: webEnabled,
+      grounding_used: webSources.size > 0,
+      tool_calls: [...toolCallNames],
+      verification_failures: [],
+      repair_attempted: false,
       attempt,
       latency_ms: Date.now() - started,
       image_keys: (opts.images ?? []).map((i) => i.key),
       ...patch,
     });
-
-  let inputTokens: number | null = null;
-  let outputTokens: number | null = null;
-  let costUsd: number | null = null;
-  let served = route.primary_model;
-  let toolCallsUsed = 0;
-  const webSources = new Set<string>();
 
   const add = (current: number | null, value: number | undefined): number | null =>
     typeof value === "number" && Number.isFinite(value) ? (current ?? 0) + value : current;
@@ -237,13 +245,16 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
       if (!retryHere) {
         await log(
           caught
-            ? { model_id: served, ok: false, error_code: err.code }
+            ? { model_id: served, ok: false, error_code: err.code, verification_status: "failed", verification_failures: [{ code: err.code }], answer_status: "controlled_failure" }
             : {
                 model_id: served,
                 ok: false,
                 error_code: err.code,
                 http_status: res!.status,
                 error_detail: rawBody.slice(0, 500),
+                verification_status: "failed",
+                verification_failures: [{ code: err.code }],
+                answer_status: "controlled_failure",
               }
         );
         throw err;
@@ -293,6 +304,8 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
         error_code: err.code,
         schema_valid: false,
         verification_status: "failed",
+        verification_failures: [{ code: err.code }],
+        answer_status: "controlled_failure",
         input_tokens: inputTokens,
         output_tokens: outputTokens,
         cost_usd: costUsd,
@@ -304,12 +317,12 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
     if (rawCalls.length) {
       if (!webEnabled) {
         const err = new ModelError("unexpected_tool_call", "Gemini requested a tool on a tool-free call", 200, false);
-        await log({ model_id: served, ok: false, error_code: err.code });
+        await log({ model_id: served, ok: false, error_code: err.code, verification_status: "failed", verification_failures: [{ code: err.code }], answer_status: "controlled_failure" });
         throw err;
       }
       if (round === maxRounds - 1) {
         const err = new ModelError("tool_loop_limit", "Gemini exhausted the live-web round budget", 200, false);
-        await log({ model_id: served, ok: false, error_code: err.code });
+        await log({ model_id: served, ok: false, error_code: err.code, verification_status: "failed", verification_failures: [{ code: err.code }], answer_status: "controlled_failure" });
         throw err;
       }
 
@@ -331,10 +344,11 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
       for (const call of calls) {
         if (toolCallsUsed >= 3) {
           const err = new ModelError("tool_loop_limit", "Gemini exceeded the live-web tool-call limit", 200, false);
-          await log({ model_id: served, ok: false, error_code: err.code });
+          await log({ model_id: served, ok: false, error_code: err.code, verification_status: "failed", verification_failures: [{ code: err.code }], answer_status: "controlled_failure" });
           throw err;
         }
         toolCallsUsed += 1;
+        toolCallNames.add(call.function.name);
 
         const result = await runTavilyTool(opts.env, call, {
           searchContext: opts.webTools!.searchContext,
@@ -361,6 +375,8 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
         error_code: err.code,
         schema_valid: false,
         verification_status: "failed",
+        verification_failures: [{ code: err.code }],
+        answer_status: "controlled_failure",
         input_tokens: inputTokens,
         output_tokens: outputTokens,
         cost_usd: costUsd,
@@ -379,6 +395,8 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
         error_code: err.code,
         schema_valid: false,
         verification_status: "failed",
+        verification_failures: [{ code: err.code }],
+        answer_status: "controlled_failure",
         input_tokens: inputTokens,
         output_tokens: outputTokens,
         cost_usd: costUsd,
@@ -391,6 +409,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
       ok: true,
       schema_valid: true,
       verification_status: "transport_only",
+      answer_status: "pending_verification",
       input_tokens: inputTokens,
       output_tokens: outputTokens,
       cost_usd: costUsd,
@@ -409,7 +428,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
   }
 
   const err = new ModelError("tool_loop_limit", "Gemini did not finish within the live-web tool budget", 200, false);
-  await log({ model_id: served, ok: false, error_code: err.code });
+  await log({ model_id: served, ok: false, error_code: err.code, verification_status: "failed", verification_failures: [{ code: err.code }], answer_status: "controlled_failure" });
   throw err;
 }
 

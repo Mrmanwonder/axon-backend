@@ -59,4 +59,9 @@ test("Gemini 3.5 uses the route thinking level and omits legacy temperature", as
   assert.equal(inserted.at(-1)?.thinking_level, "high");
   assert.equal(inserted.at(-1)?.schema_valid, true);
   assert.equal(inserted.at(-1)?.verification_status, "transport_only");
+  assert.equal(inserted.at(-1)?.answer_status, "pending_verification");
+  assert.deepEqual(inserted.at(-1)?.verification_failures, []);
+  assert.deepEqual(inserted.at(-1)?.tool_calls, []);
+  assert.equal(inserted.at(-1)?.grounding_used, false);
+  assert.equal(inserted.at(-1)?.repair_attempted, false);
 });

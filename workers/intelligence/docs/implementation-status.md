@@ -7,6 +7,7 @@
 - Deterministic calculator, polynomial equivalence, linear solving/step validation, dimensional units/conversion, formula/molar-mass chemistry, and equation balancing.
 - Immutable R2 paper ingestion, SHA-256 deduplication, quality policy, non-generative conditioning contract, layout/question/ink/mark/read stages, confidence escalation, trusted fields, student review, additive corrections, and active-learning prioritization.
 - D1 provenance for deployments, routes, prompts, schemas, traces, evidence, claims, provider health, document stages, evaluation, shadow results, and capability probes.
+- Supabase and D1 traces distinguish transport, schema, and semantic success and record canonical intent, bounded tool identifiers, grounding use, verifier failures, repair attempts, and final answer status without raw student content.
 - HMAC-pseudonymized student identifiers, bounded bodies, internal bearer authentication, D1 rate windows, correction idempotency, redacted trace evidence, and fail-closed public retrieval minimization.
 - Canary/rollback policy, shadow-mode storage rules, minimum benchmark release gates, CI, migrations, and operational runbooks.
 - Live Supabase routing now targets `gemini-3.5-flash-lite` for all six enabled stages, disables training on every route, records stage-specific thinking levels, and identifies the active paper-feedback contract as `paper_feedback.v2`.

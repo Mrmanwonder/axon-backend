@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { env, exports } from "cloudflare:workers";
 import { processPaperPage } from "../src/document/orchestrator";
 import type { DocumentVisionProvider, VisionAnalysis } from "../src/document/vision/provider";
-import { providerIsAvailable, recordProviderObservation } from "../src/intelligence/telemetry/repository";
+import { providerIsAvailable, recordProviderObservation, writeTutorAudit } from "../src/intelligence/telemetry/repository";
 import { runShadowTutor } from "../src/evaluation/shadow";
 import type { AIProvider } from "../src/providers/types";
 import { enforceRateLimit } from "../src/intelligence/security/rate-limit";
@@ -58,6 +58,28 @@ describe("operational pipeline", () => {
     const provider = `provider-${crypto.randomUUID()}`;
     for (let index = 0; index < 5; index += 1) await recordProviderObservation(env.DB, provider, "model", { success: false, serverError: true, latencyMs: 100 });
     await expect(providerIsAvailable(env.DB, provider, "model")).resolves.toBe(false);
+  });
+
+  it("persists semantic observability separately from transport success", async () => {
+    const traceId = crypto.randomUUID();
+    await writeTutorAudit(env.DB, {
+      traceId, stage: "tutor", capability: "current_information", intent: "current_information",
+      deploymentSha: "test-sha", configRevision: "test-config", pipelineVersion: "3.0.0",
+      toolCalls: ["tavily.search"], retrievalUsed: true, groundingUsed: true,
+      verificationStatus: "failed", verificationFailures: ["unsupported_claim c1"],
+      repairAttempted: true, answerStatus: "controlled_failure", transportSuccess: true,
+      schemaSuccess: true, semanticValidationSuccess: false, inputArtifactHashes: []
+    });
+    const stored = await env.DB.prepare(`SELECT intent, verification_failures, tool_calls, retrieval_used,
+      grounding_used, verification_status, repair_attempted, answer_status,
+      transport_success, schema_success, semantic_validation_success
+      FROM ai_trace WHERE trace_id = ?`).bind(traceId).first<Record<string, unknown>>();
+    expect(stored).toMatchObject({
+      intent: "current_information", verification_failures: '["unsupported_claim c1"]',
+      tool_calls: '["tavily.search"]', retrieval_used: 1, grounding_used: 1,
+      verification_status: "failed", repair_attempted: 1, answer_status: "controlled_failure",
+      transport_success: 1, schema_success: 1, semantic_validation_success: 0
+    });
   });
 
   it("enforces a durable per-route request window without storing raw identity", async () => {
