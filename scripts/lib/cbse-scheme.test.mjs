@@ -93,7 +93,7 @@ test("pairs only exact SQP/MS labels with matching mark totals", () => {
 
   const ms = header + "\n" + [
     "1. Accept the stated observation.           1",
-    "2. One mark for method and one for result.  2",
+    "2. One mark for method and one for result.     2",
     "3. Three valid linked points.               3",
     "4. Accept the stated result.                1",
   ].join("\n");
