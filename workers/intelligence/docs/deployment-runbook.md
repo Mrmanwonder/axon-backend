@@ -2,7 +2,7 @@
 
 ## Before a canary
 
-1. Provision the real D1 database, R2 bucket, KV namespace, and queue. Replace only the placeholder resource IDs in `wrangler.jsonc`.
+1. Confirm the provisioned D1 database, R2 bucket, KV namespace, processing queue, and dead-letter queue still match the checked-in resource IDs in `wrangler.jsonc`.
 2. Set secrets with Wrangler: `GOOGLE_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `TAVILY_API_KEY`, separate `AXON_INTERNAL_TOKEN` and `AXON_ADMIN_TOKEN` values, `AXON_PSEUDONYM_KEY`, and, when document automation is enabled, `AXON_VISION_TOKEN`.
 3. Obtain explicit zero-data-retention attestations for the Gemini and document endpoints. Only then set their privacy modes to `zdr` in the deployment environment.
 4. Set the current audited Gemini input/output USD-per-million-token rates; AXON will not report itself ready when cost telemetry is unconfigured.

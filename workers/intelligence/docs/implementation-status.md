@@ -9,7 +9,9 @@
 - D1 provenance for deployments, routes, prompts, schemas, traces, evidence, claims, provider health, document stages, evaluation, shadow results, and capability probes.
 - HMAC-pseudonymized student identifiers, bounded bodies, internal bearer authentication, D1 rate windows, correction idempotency, redacted trace evidence, and fail-closed public retrieval minimization.
 - Canary/rollback policy, shadow-mode storage rules, minimum benchmark release gates, CI, migrations, and operational runbooks.
+- Live Supabase routing now targets `gemini-3.5-flash-lite` for all six enabled stages, disables training on every route, records stage-specific thinking levels, and identifies the active paper-feedback contract as `paper_feedback.v2`.
+- The intelligence Worker uses generated Wrangler bindings checked into source, the 2026-09-24 compatibility date, and current Cloudflare tooling; clean CI verifies that generated bindings remain in sync.
 
 ## Intentionally blocked from production release
 
-The repository contains no fabricated certification. Release remains blocked until real Cloudflare resource IDs and secrets exist, zero-retention is contractually attested, the document-vision service is deployed, live Gemini/Tavily/vision probes pass, a reviewed scanner set reaches at least 100 papers and 1,500 questions, a hand-reviewed tutor set reaches at least 500 cases, a rollback drill is evidenced, and staged canary metrics pass. Physical scanner accuracy and provider behavior cannot be proven by local unit tests.
+The repository contains no fabricated certification. Cloudflare D1, R2, KV, and queue resources exist and their IDs are versioned, but the release remains blocked until production secrets are installed on `axon-intelligence`, zero-retention is contractually attested, the document-vision service is deployed, live Gemini/Tavily/vision probes pass, a reviewed scanner set reaches at least 100 papers and 1,500 questions, a hand-reviewed tutor set reaches at least 500 cases, a rollback drill is evidenced, and staged canary metrics pass. Physical scanner accuracy and provider behavior cannot be proven by local unit tests.

@@ -1,7 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validate, SCHEMA } from "../prompts/explain_tier1.v1.js";
+import { validate, SCHEMA, SYSTEM } from "../prompts/explain_tier1.v2.js";
 import { COMMAND_WORDS, UNIVERSAL_MEANING, canonicalCommandWord, universalMeaning } from "../command_words.js";
+
+test("paper feedback treats the mark and its reason as separate claims", () => {
+  assert.match(SYSTEM, /mark is immutable historical evidence/i);
+  assert.match(SYSTEM, /reason for that mark is a separate claim/i);
+  assert.match(SYSTEM, /set can_explain to false/i);
+  assert.doesNotMatch(SYSTEM, /teacher was right|not negotiable/i);
+});
 
 // The regression this file exists for: EXPLANATION_SCHEMA asks the model for
 // `explanation`, and validate() read `v.body`. Nothing threw, nothing logged,

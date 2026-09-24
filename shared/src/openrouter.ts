@@ -29,6 +29,7 @@ export interface ModelRoute {
   temperature: number;
   max_tokens: number;
   prompt_version: string;
+  thinking_level: "minimal" | "low" | "medium" | "high" | null;
   allow_training: boolean;
   enabled: boolean;
 }
@@ -39,6 +40,7 @@ export interface RouteOverride {
   temperature?: number;
   max_tokens?: number;
   prompt_version?: string;
+  thinking_level?: "minimal" | "low" | "medium" | "high";
 }
 
 const ROUTE_TTL_MS = 60_000;
@@ -49,7 +51,7 @@ export async function getRoute(sb: SupabaseClient, stage: string): Promise<Model
   if (cached && Date.now() - cached.at < ROUTE_TTL_MS) return cached.route;
   const { data, error } = await sb
     .from("model_route")
-    .select("stage, primary_model, fallbacks, temperature, max_tokens, prompt_version, allow_training, enabled")
+    .select("stage, primary_model, fallbacks, temperature, max_tokens, prompt_version, thinking_level, allow_training, enabled")
     .eq("stage", stage)
     .maybeSingle();
   if (error) throw new ModelError("route_lookup_failed", `could not read the route for ${stage}: ${error.message}`);
@@ -69,6 +71,7 @@ function applyOverride(route: ModelRoute, override?: RouteOverride | null): Mode
     ...(typeof override.temperature === "number" ? { temperature: override.temperature } : {}),
     ...(typeof override.max_tokens === "number" ? { max_tokens: override.max_tokens } : {}),
     ...(override.prompt_version ? { prompt_version: override.prompt_version } : {}),
+    ...(override.thinking_level ? { thinking_level: override.thinking_level } : {}),
     // A route override can swap models or tune sampling, but never opt a
     // stage into training on its own — that stays a route-level decision.
     allow_training: route.allow_training,
@@ -152,6 +155,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
   if (!key) throw new ModelError("no_key", "GOOGLE_API_KEY is not set for this worker", 0, false);
 
   const route = applyOverride(await getRoute(opts.sb, opts.stage), opts.routeOverride);
+  const thinkingLevel = opts.thinkingLevel ?? route.thinking_level ?? undefined;
   const attempt = opts.attempt ?? 1;
   const started = Date.now();
 
@@ -180,6 +184,8 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
       stage: opts.stage,
       requested_model: route.primary_model,
       prompt_version: route.prompt_version,
+      thinking_level: thinkingLevel ?? null,
+      retrieval_used: webEnabled,
       attempt,
       latency_ms: Date.now() - started,
       image_keys: (opts.images ?? []).map((i) => i.key),
@@ -263,7 +269,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
       model: route.primary_model,
       ...(!route.primary_model.startsWith("gemini-3.5-") ? { temperature: route.temperature } : {}),
       max_tokens: route.max_tokens,
-      ...(opts.thinkingLevel ? { reasoning_effort: opts.thinkingLevel } : {}),
+      ...(thinkingLevel ? { reasoning_effort: thinkingLevel } : {}),
       messages,
       response_format: {
         type: "json_schema",
@@ -285,6 +291,8 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
         model_id: served,
         ok: false,
         error_code: err.code,
+        schema_valid: false,
+        verification_status: "failed",
         input_tokens: inputTokens,
         output_tokens: outputTokens,
         cost_usd: costUsd,
@@ -351,6 +359,8 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
         model_id: served,
         ok: false,
         error_code: err.code,
+        schema_valid: false,
+        verification_status: "failed",
         input_tokens: inputTokens,
         output_tokens: outputTokens,
         cost_usd: costUsd,
@@ -367,6 +377,8 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
         model_id: served,
         ok: false,
         error_code: err.code,
+        schema_valid: false,
+        verification_status: "failed",
         input_tokens: inputTokens,
         output_tokens: outputTokens,
         cost_usd: costUsd,
@@ -377,6 +389,8 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
     await log({
       model_id: served,
       ok: true,
+      schema_valid: true,
+      verification_status: "transport_only",
       input_tokens: inputTokens,
       output_tokens: outputTokens,
       cost_usd: costUsd,

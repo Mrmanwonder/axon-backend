@@ -64,7 +64,7 @@ Live counts (verified 2026-08-31): `question_region` 48, `student_attempt` 7, `r
 
 ### Model
 
-All five model-calling stages use `gemini-3.1-flash-lite` via an OpenAI-compatible endpoint with `GOOGLE_API_KEY`. **Paid tier.** No fallbacks configured. `model_route.allow_training = true` (a deliberate prior decision by the user — see the notes column, do not silently change it).
+All five model-calling stages and the tutor route use `gemini-3.5-flash-lite` via an OpenAI-compatible endpoint with `GOOGLE_API_KEY`. No fallbacks are configured. `model_route.allow_training = false` for every enabled stage, and each route carries an explicit `thinking_level`; the 2026-09-24 forward migration is the source of truth.
 
 ---
 
@@ -336,7 +336,7 @@ The 2026-08-26 audit found no `.github/` directory in Axon-Site. `npm test` runs
 
 #### F1 · Fixed: model IDs pointed at nonexistent models
 
-Older docs state `model_route` points at `google/gemma-4-31b-it:free` and that 10/10 triage calls failed with `no_compliant_provider`. **Superseded.** All stages now run paid `gemini-3.1-flash-lite` and the pipeline completes.
+Older docs state `model_route` points at `google/gemma-4-31b-it:free` and that 10/10 triage calls failed with `no_compliant_provider`. **Superseded.** All enabled stages now target `gemini-3.5-flash-lite`; production capability evidence is still required before an Intelligence v2 release is certified.
 
 #### F2 · Superseded: "delete the Cloudflare pipeline, deploy the Supabase one"
 

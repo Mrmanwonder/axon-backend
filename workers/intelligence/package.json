@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "types": "wrangler types",
+    "types": "wrangler types src/generated-bindings.d.ts --include-runtime false --env-interface IntelligenceBindings",
+    "types:check": "wrangler types src/generated-bindings.d.ts --include-runtime false --env-interface IntelligenceBindings --check",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply axon-intelligence --local",
@@ -23,13 +24,13 @@
     "@sinclair/typebox": "^0.34.52"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.2.3",
+    "@cloudflare/vitest-plugin": "^1.2.4",
     "@types/node": "^24.10.1",
     "@eslint/js": "^9.36.0",
     "eslint": "^9.36.0",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.70.1",
     "vitest": "^4.1.11",
-    "wrangler": "^4.136.3"
+    "wrangler": "^4.137.0"
   }
 }

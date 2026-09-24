@@ -2,7 +2,7 @@ import { callModel } from "@mastery/shared/openrouter.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
 import { mustOk, mustOne, mustMaybe, mustData, mustAffectRows, mustRpc } from "@mastery/shared/db.js";
 import { clearsTheFloor } from "@mastery/shared/quality_floor.js";
-import { SYSTEM, instruction, SCHEMA, validate } from "@mastery/shared/prompts/explain_tier1.v1.js";
+import { SYSTEM, instruction, SCHEMA, validate } from "@mastery/shared/prompts/explain_tier1.v2.js";
 import { normalisePartKey, resolveDependencies } from "@mastery/shared/question_parts.js";
 import { gateModelAnswer } from "@mastery/shared/grounding.js";
 import type { Env } from "@mastery/shared/env.js";
@@ -13,7 +13,7 @@ interface ExplainMessage {
   _retries?: number;
 }
 
-// This worker only ever explains as Tier 1 (see shared/prompts/explain_tier1.v1.ts) —
+// This worker only ever explains as Tier 1 (see shared/prompts/explain_tier1.v2.ts) —
 // there is no Tier 2 prompt grounded in canonical_question.marking_scheme yet.
 // A Tier 2 question with no scheme match logs and falls through to Tier 1
 // rather than fabricating a scheme (CLAUDE.md rule 2).

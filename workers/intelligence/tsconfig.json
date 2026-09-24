@@ -14,5 +14,5 @@
     "types": ["node", "@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"],
     "skipLibCheck": true
   },
-  "include": ["src", "test", "evals", "worker-configuration.d.ts", "vitest.config.ts", "eslint.config.js"]
+  "include": ["src", "test", "evals", "vitest.config.ts", "eslint.config.js"]
 }
