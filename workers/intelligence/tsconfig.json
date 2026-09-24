@@ -11,7 +11,7 @@
     "noFallthroughCasesInSwitch": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "types": ["node", "@cloudflare/vitest-plugin/types"],
+    "types": ["node", "@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"],
     "skipLibCheck": true
   },
   "include": ["src", "test", "evals", "worker-configuration.d.ts", "vitest.config.ts", "eslint.config.js"]
