@@ -173,6 +173,28 @@ export function detectMarksColumn(lines) {
   return null;
 }
 
+export function markColumnDiagnostics(text) {
+  const lines = String(text).replace(/\r/g, "").split("\n");
+  const detected = detectMarksColumn(lines);
+  const histogram = new Map();
+  let maxLength = 0;
+  for (const line of lines) {
+    maxLength = Math.max(maxLength, line.length);
+    const match = markExpressionAtEnd(line);
+    if (!match) continue;
+    const key = String(match.index);
+    histogram.set(key, (histogram.get(key) ?? 0) + 1);
+  }
+  return {
+    detected,
+    maxLength,
+    positions: [...histogram.entries()]
+      .map(([index, count]) => ({ index: Number(index), count }))
+      .sort((a, b) => b.count - a.count || b.index - a.index)
+      .slice(0, 20),
+  };
+}
+
 export function extractMarkTotal(lines, markColumn = null) {
   const candidates = [];
   for (const line of lines) {
@@ -298,6 +320,8 @@ export function pairOfficialQuestions(sqpText, msText, minCoverage = 0.75) {
       sqpMissingBase,
       msMissingBase,
       pairingFailures,
+      sqpColumns: markColumnDiagnostics(sqpText),
+      msColumns: markColumnDiagnostics(msText),
     };
     throw new Error(
       "Verified question coverage " + (coverage * 100).toFixed(1)
