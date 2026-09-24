@@ -219,11 +219,31 @@ export function pairOfficialQuestions(sqpText, msText, minCoverage = 0.75) {
   const msBlocks = parseQuestionBlocks(msText);
   const schemeByLabel = new Map(msBlocks.map(block => [block.label, block]));
   const questions = [];
+  const pairingFailures = [];
 
   for (const question of sqpBlocks) {
     const scheme = schemeByLabel.get(question.label);
-    if (!scheme) continue;
-    if (!question.maxMarks || !scheme.maxMarks || question.maxMarks !== scheme.maxMarks) continue;
+    if (!scheme) {
+      pairingFailures.push({ label: question.label, reason: "scheme_label_missing" });
+      continue;
+    }
+    if (!question.maxMarks) {
+      pairingFailures.push({ label: question.label, reason: "sqp_marks_missing", schemeMarks: scheme.maxMarks });
+      continue;
+    }
+    if (!scheme.maxMarks) {
+      pairingFailures.push({ label: question.label, reason: "scheme_marks_missing", sqpMarks: question.maxMarks });
+      continue;
+    }
+    if (question.maxMarks !== scheme.maxMarks) {
+      pairingFailures.push({
+        label: question.label,
+        reason: "mark_mismatch",
+        sqpMarks: question.maxMarks,
+        schemeMarks: scheme.maxMarks,
+      });
+      continue;
+    }
     questions.push({
       label: question.label,
       questionText: question.text,
@@ -233,14 +253,29 @@ export function pairOfficialQuestions(sqpText, msText, minCoverage = 0.75) {
   }
 
   const expected = sqpHeader.expectedQuestions ?? Math.max(0, ...sqpBlocks.map(block => block.number));
+  const sqpBase = new Set(sqpBlocks.map(block => block.number));
+  const msBase = new Set(msBlocks.map(block => block.number));
   const coveredBase = new Set(
     questions.map(question => Number(/^\d+/.exec(question.label)?.[0] ?? 0)).filter(Boolean),
   );
+  const expectedLabels = expected ? Array.from({ length: expected }, (_, index) => index + 1) : [];
+  const sqpMissingBase = expectedLabels.filter(number => !sqpBase.has(number));
+  const msMissingBase = expectedLabels.filter(number => !msBase.has(number));
   const coverage = expected ? coveredBase.size / expected : 0;
   if (coverage < minCoverage) {
+    const diagnostic = {
+      sqpParsed: sqpBlocks.length,
+      msParsed: msBlocks.length,
+      coveredBaseQuestions: coveredBase.size,
+      expectedQuestions: expected,
+      sqpMissingBase,
+      msMissingBase,
+      pairingFailures,
+    };
     throw new Error(
       "Verified question coverage " + (coverage * 100).toFixed(1)
-      + "% is below " + (minCoverage * 100).toFixed(0) + "%",
+      + "% is below " + (minCoverage * 100).toFixed(0)
+      + "%; diagnostics=" + JSON.stringify(diagnostic),
     );
   }
 
