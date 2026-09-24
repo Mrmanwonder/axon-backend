@@ -79,7 +79,17 @@ async function finish(env: Env, sb: any, runId: string, pageId: string, status: 
   if (advance?.advanced) {
     const regionIds: string[] = advance.enqueue_content ?? [];
     if (env.CONTENT_QUEUE && regionIds.length) {
-      await env.CONTENT_QUEUE.sendBatch(regionIds.map((regionId) => ({ body: { run_id: runId, region_id: regionId } })));
+      // ⚡ Bolt: Chunk queue dispatch to avoid Cloudflare Workers' 100-message limit per batch
+      const promises = [];
+      for (let i = 0; i < regionIds.length; i += 100) {
+        const chunk = regionIds.slice(i, i + 100);
+        promises.push(
+          env.CONTENT_QUEUE.sendBatch(
+            chunk.map((regionId) => ({ body: { run_id: runId, region_id: regionId } }))
+          )
+        );
+      }
+      await Promise.all(promises);
     }
     if (advance.enqueue_reconcile && env.RECONCILE_QUEUE) {
       await env.RECONCILE_QUEUE.send({ run_id: runId });
