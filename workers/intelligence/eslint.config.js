@@ -14,5 +14,13 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/consistent-type-imports": "error"
     }
+  },
+  {
+    ...tseslint.configs.disableTypeChecked,
+    files: ["evals/*.mjs"],
+    languageOptions: {
+      ...tseslint.configs.disableTypeChecked.languageOptions,
+      globals: { Buffer: "readonly" }
+    }
   }
 );

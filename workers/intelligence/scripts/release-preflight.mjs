@@ -1,5 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 import process from "node:process";
+import { RELEASE_ARTIFACT_HASH_FIELDS, ROLLOUT_ORDER, validateReleaseEvidence } from "./release-evidence.mjs";
 
 const failures = [];
 const pass = (condition, message) => { if (!condition) failures.push(message); };
@@ -15,27 +17,50 @@ pass(Boolean(config.queues?.consumers?.[0]?.dead_letter_queue), "paper dead-lett
 
 let certification;
 try { certification = JSON.parse(await readFile(new URL("../certification/release.json", import.meta.url), "utf8")); }
-catch { failures.push("certification/release.json is absent; copy the example only after real evidence exists"); }
-if (certification) {
-  pass(certification.scannerPapers >= 100, "scanner benchmark has fewer than 100 papers");
-  pass(certification.scannerQuestions >= 1_500, "scanner benchmark has fewer than 1500 questions");
-  pass(certification.tutorCases >= 500, "tutor benchmark has fewer than 500 cases");
-  pass(certification.handReviewedTutorCases >= 500, "fewer than 500 tutor cases are hand reviewed");
-  pass(certification.privacyCertified === true, "zero-retention privacy is not certified");
-  pass(certification.rollbackValidated === true, "rollback drill is not validated");
-  pass(typeof certification.evidenceUri === "string" && certification.evidenceUri.length > 0, "certification evidence URI is absent");
-  for (const field of ["scannerDatasetSha256", "tutorDatasetSha256", "reviewManifestSha256", "geminiZdrEvidenceSha256", "visionZdrEvidenceSha256", "rollbackEvidenceSha256"]) {
-    pass(typeof certification[field] === "string" && /^[a-f0-9]{64}$/.test(certification[field]), `${field} is not a SHA-256 digest`);
+catch { failures.push("certification/release.json is absent; create it only from real reviewed evidence"); }
+
+const evidenceDirectory = process.env.AXON_RELEASE_EVIDENCE_DIR;
+const targetStage = process.env.AXON_RELEASE_TARGET_STAGE ?? "FULL";
+let verifiedEvidence;
+pass(Boolean(evidenceDirectory), "AXON_RELEASE_EVIDENCE_DIR is not present in the release environment");
+pass(ROLLOUT_ORDER.includes(targetStage), `AXON_RELEASE_TARGET_STAGE ${targetStage} is invalid`);
+if (certification && evidenceDirectory && ROLLOUT_ORDER.includes(targetStage)) {
+  const evidenceRoot = resolve(evidenceDirectory);
+  const artifactBytes = {};
+  for (const artifactName of Object.keys(RELEASE_ARTIFACT_HASH_FIELDS)) {
+    const filename = certification.artifacts?.[artifactName];
+    if (typeof filename !== "string" || filename.length === 0) continue;
+    const artifactPath = resolve(evidenceRoot, filename);
+    const pathFromRoot = relative(evidenceRoot, artifactPath);
+    if (isAbsolute(filename) || pathFromRoot.startsWith("..") || isAbsolute(pathFromRoot)) {
+      failures.push(`artifact ${artifactName} escapes AXON_RELEASE_EVIDENCE_DIR`);
+      continue;
+    }
+    try {
+      const metadata = await stat(artifactPath);
+      pass(metadata.isFile(), `artifact ${artifactName} is not a regular file`);
+      pass(metadata.size <= 64 * 1024 * 1024, `artifact ${artifactName} exceeds the 64 MiB verification limit`);
+      if (metadata.isFile() && metadata.size <= 64 * 1024 * 1024) artifactBytes[artifactName] = await readFile(artifactPath);
+    } catch {
+      failures.push(`artifact ${artifactName} is unavailable at its certified path`);
+    }
   }
-  pass(typeof certification.reviewer === "string" && certification.reviewer.length > 0, "certification reviewer is absent");
-  pass(typeof certification.certifiedAt === "string" && Number.isFinite(Date.parse(certification.certifiedAt)), "certification timestamp is invalid");
+  const evidence = validateReleaseEvidence(certification, artifactBytes, { targetStage });
+  failures.push(...evidence.errors);
+  if (evidence.valid) verifiedEvidence = evidence;
 }
 
 for (const name of ["CLOUDFLARE_API_TOKEN", "GOOGLE_API_KEY", "SUPABASE_SERVICE_ROLE_KEY", "TAVILY_API_KEY", "AXON_INTERNAL_TOKEN", "AXON_ADMIN_TOKEN", "AXON_PSEUDONYM_KEY", "AXON_VISION_TOKEN", "GEMINI_INPUT_USD_PER_MILLION", "GEMINI_OUTPUT_USD_PER_MILLION"]) {
   pass(Boolean(process.env[name]), `${name} is not present in the release environment`);
 }
+pass(Boolean(process.env.AXON_VISION_API_BASE), "AXON_VISION_API_BASE is not present in the release environment");
+pass(process.env.GEMINI_PRIVACY_MODE === "zdr", "GEMINI_PRIVACY_MODE is not certified as zdr");
+pass(process.env.AXON_VISION_PRIVACY_MODE === "zdr", "AXON_VISION_PRIVACY_MODE is not certified as zdr");
 
 if (failures.length > 0) {
   console.error(`AXON release preflight blocked:\n- ${failures.join("\n- ")}`);
   process.exitCode = 1;
-} else console.log("AXON release preflight passed.");
+} else {
+  console.log(JSON.stringify({ releaseEvidence: "verified", targetStage, metrics: verifiedEvidence.metrics }));
+  console.log("AXON release preflight passed.");
+}

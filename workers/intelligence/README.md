@@ -33,4 +33,4 @@ Create secrets with `wrangler secret put GOOGLE_API_KEY`, `wrangler secret put S
 
 Paper uploads are immutable R2 artifacts and queued for bounded background processing. Tutor responses are rendered only from claims that pass schema, evidence, contradiction, retrieval, and tool-use checks.
 
-Production release is deliberately fail-closed. See `docs/implementation-status.md`, `docs/vision-provider-contract.md`, and `docs/deployment-runbook.md`. `npm run release:preflight` must remain blocked until real resource configuration and immutable certification evidence are present.
+Production release is deliberately fail-closed. See `docs/implementation-status.md`, `docs/vision-provider-contract.md`, `docs/release-evidence.md`, and `docs/deployment-runbook.md`. `npm run release:preflight` requires `AXON_RELEASE_EVIDENCE_DIR` and verifies immutable artifact hashes, derived benchmark metrics, privacy attestations, live capability probes, rollback evidence, and the completed stages preceding `AXON_RELEASE_TARGET_STAGE`. It must remain blocked until real evidence and resource configuration are present.

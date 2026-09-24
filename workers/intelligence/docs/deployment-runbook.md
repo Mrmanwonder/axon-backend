@@ -7,7 +7,7 @@
 3. Obtain explicit zero-data-retention attestations for the Gemini and document endpoints. Only then set their privacy modes to `zdr` in the deployment environment.
 4. Set the current audited Gemini input/output USD-per-million-token rates; AXON will not report itself ready when cost telemetry is unconfigured.
 5. Apply D1 migrations remotely, run the authenticated capability probe, and retain its rows as deployment evidence.
-6. Populate `certification/release.json` from reviewed benchmark and rollback evidence. Never copy the example values without evidence.
+6. Assemble the private evidence bundle described in `release-evidence.md`, populate `certification/release.json` with its exact digests, and set `AXON_RELEASE_EVIDENCE_DIR` plus the stage being promoted in `AXON_RELEASE_TARGET_STAGE`. Never copy the example values without evidence. The preflight derives counts and quality metrics from the reviewed records rather than trusting the JSON summary.
 7. Run `npm ci`, `npm run types`, `npm run check`, `npm run eval`, `npm audit`, and `npm run release:preflight`.
 
 ## Rollout

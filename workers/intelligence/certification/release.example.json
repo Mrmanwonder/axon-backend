@@ -1,4 +1,5 @@
 {
+  "formatVersion": "axon-release.v2",
   "scannerPapers": 100,
   "scannerQuestions": 1500,
   "tutorCases": 500,
@@ -6,12 +7,30 @@
   "privacyCertified": true,
   "rollbackValidated": true,
   "evidenceUri": "replace-with-an-immutable-internal-evidence-location",
+  "deploymentSha": "replace-with-deployed-git-sha",
+  "configRevision": "replace-with-immutable-config-revision",
+  "artifacts": {
+    "scannerCases": "scanner-cases.jsonl",
+    "tutorCases": "tutor-cases.jsonl",
+    "retrievalCases": "retrieval-cases.jsonl",
+    "reviewManifest": "review-manifest.json",
+    "geminiZdrEvidence": "gemini-zdr-attestation.pdf",
+    "visionZdrEvidence": "vision-zdr-attestation.pdf",
+    "capabilityProbe": "capability-probe.json",
+    "modelComparison": "model-comparison.json",
+    "rollbackEvidence": "rollback-evidence.json",
+    "canaryEvidence": "canary-evidence.json"
+  },
   "scannerDatasetSha256": "replace-with-64-lowercase-hex-characters",
   "tutorDatasetSha256": "replace-with-64-lowercase-hex-characters",
+  "retrievalDatasetSha256": "replace-with-64-lowercase-hex-characters",
   "reviewManifestSha256": "replace-with-64-lowercase-hex-characters",
   "geminiZdrEvidenceSha256": "replace-with-64-lowercase-hex-characters",
   "visionZdrEvidenceSha256": "replace-with-64-lowercase-hex-characters",
+  "capabilityProbeEvidenceSha256": "replace-with-64-lowercase-hex-characters",
+  "modelComparisonEvidenceSha256": "replace-with-64-lowercase-hex-characters",
   "rollbackEvidenceSha256": "replace-with-64-lowercase-hex-characters",
+  "canaryEvidenceSha256": "replace-with-64-lowercase-hex-characters",
   "reviewer": "replace-with-accountable-reviewer",
   "certifiedAt": "replace-with-ISO-8601-timestamp"
 }
