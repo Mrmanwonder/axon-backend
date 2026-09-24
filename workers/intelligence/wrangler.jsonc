@@ -1,0 +1,51 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "axon-intelligence",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "AXON_DEPLOYMENT_SHA": "development",
+    "AXON_CONFIG_REVISION": "v3.default",
+    "AXON_PIPELINE_VERSION": "3.0.0",
+    "GEMINI_PRIVACY_MODE": "unverified",
+    "TAVILY_API_BASE": "https://api.tavily.com",
+    "SUPABASE_URL": "https://dlgcqieyevoebefhcggi.supabase.co"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "axon-intelligence",
+      "database_id": "f4d5b07c-f960-45e3-b25a-f56bab682fe2",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "PAPER_ARTIFACTS",
+      "bucket_name": "axon-paper-artifacts"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "PIPELINE_CACHE",
+      "id": "c1a921d9e8f049e6b88e48ad71bd8277"
+    }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "PAPER_QUEUE", "queue": "axon-paper-processing" }
+    ],
+    "consumers": [
+      { "queue": "axon-paper-processing", "max_batch_size": 5, "max_batch_timeout": 5, "max_retries": 3, "dead_letter_queue": "axon-paper-dead-letter" }
+    ]
+  },
+  "triggers": {
+    "crons": ["17 * * * *"]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.1 }
+  }
+}

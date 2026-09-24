@@ -120,6 +120,7 @@ export interface CallModelOptions<T> {
   attempt?: number;
   routeOverride?: RouteOverride | null;
   timeoutMs?: number;
+  thinkingLevel?: "minimal" | "low" | "medium" | "high";
   /**
    * Give Gemini Tavily Search/Extract using ONLY this server-approved public
    * academic context as the outbound search query. Off by default.
@@ -260,8 +261,9 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
   for (let round = 0; round < maxRounds; round++) {
     const body: Record<string, unknown> = {
       model: route.primary_model,
-      temperature: route.temperature,
+      ...(!route.primary_model.startsWith("gemini-3.5-") ? { temperature: route.temperature } : {}),
       max_tokens: route.max_tokens,
+      ...(opts.thinkingLevel ? { reasoning_effort: opts.thinkingLevel } : {}),
       messages,
       response_format: {
         type: "json_schema",

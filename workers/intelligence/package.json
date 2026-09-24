@@ -1,0 +1,35 @@
+{
+  "name": "@mastery/intelligence",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run build && npm run lint && npm test",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "types": "wrangler types",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply axon-intelligence --local",
+    "db:migrate:remote": "wrangler d1 migrations apply axon-intelligence --remote",
+    "eval": "vitest run evals",
+    "release:preflight": "node scripts/release-preflight.mjs"
+  },
+  "dependencies": {
+    "@mastery/shared": "*",
+    "@sinclair/typebox": "^0.34.52"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.2.3",
+    "@types/node": "^24.10.1",
+    "@eslint/js": "^9.36.0",
+    "eslint": "^9.36.0",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.136.3"
+  }
+}

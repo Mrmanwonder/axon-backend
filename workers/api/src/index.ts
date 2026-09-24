@@ -23,6 +23,8 @@ export default {
           return await uploadComplete(req, env);
         case "/review-complete":
           return await reviewComplete(req, env);
+        case "/tutor":
+          return await tutor(req, env);
         case "/page-asset-urls":
           return await pageAssetUrls(req, env);
         default:
@@ -63,6 +65,66 @@ async function serveAsset(req: Request, env: Env, url: URL): Promise<Response> {
       "Content-Type": obj.httpMetadata?.contentType ?? "application/octet-stream",
       "Cache-Control": "private, max-age=60",
     },
+  });
+}
+
+async function tutor(req: Request, env: Env): Promise<Response> {
+  const user = clientFor(req, env);
+  if (!user) return failure("Sign in first.", 401);
+  const contentLength = Number(req.headers.get("content-length") ?? "0");
+  if (Number.isFinite(contentLength) && contentLength > 100_000) {
+    return failure("That tutor request is too large.", 413);
+  }
+  const body = await readJson<any>(req);
+  if (typeof body?.studentId !== "string" || !body.studentId || typeof body.message !== "string" || !body.message.trim() || body.message.length > 20_000) {
+    return failure("Choose a student and write a question.");
+  }
+  const { data: student, error } = await user
+    .from("student")
+    .select("id")
+    .eq("id", body.studentId)
+    .maybeSingle();
+  if (error || !student) return failure("That student profile is not yours.", 403);
+  if (body.paperId !== undefined) {
+    if (typeof body.paperId !== "string" || !body.paperId) return failure("Choose a valid paper.");
+    const { data: paper, error: paperError } = await user
+      .from("paper")
+      .select("id")
+      .eq("id", body.paperId)
+      .eq("student_id", student.id)
+      .maybeSingle();
+    if (paperError || !paper) return failure("That paper is not available for this student.", 403);
+  }
+  if (!env.INTELLIGENCE || !env.AXON_INTERNAL_TOKEN) {
+    return failure("The tutor is not available yet.", 503);
+  }
+
+  // The public gateway never accepts caller-authored evidence. Evidence used by
+  // the intelligence service must come from an authenticated server-side source.
+  const tutorRequest = {
+    studentId: student.id,
+    message: body.message.trim(),
+    ...(typeof body.requestId === "string" && body.requestId.length <= 128 ? { requestId: body.requestId } : {}),
+    ...(Number.isInteger(body.grade) && body.grade >= 1 && body.grade <= 16 ? { grade: body.grade } : {}),
+    ...(typeof body.board === "string" && body.board.length <= 100 ? { board: body.board } : {}),
+    ...(typeof body.subject === "string" && body.subject.length <= 100 ? { subject: body.subject } : {}),
+    ...(typeof body.topic === "string" && body.topic.length <= 200 ? { topic: body.topic } : {}),
+    ...(typeof body.paperId === "string" ? { paperId: body.paperId } : {}),
+    ...(["BRIEF", "NORMAL", "DEEP"].includes(body.depth) ? { depth: body.depth } : {}),
+  };
+
+  const upstream = await env.INTELLIGENCE.fetch("https://axon-intelligence.internal/v1/tutor", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${env.AXON_INTERNAL_TOKEN}`,
+      "x-axon-client-id": student.id,
+    },
+    body: JSON.stringify(tutorRequest),
+  });
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers: { ...CORS, "Content-Type": upstream.headers.get("content-type") ?? "application/json", "Cache-Control": "no-store" },
   });
 }
 
