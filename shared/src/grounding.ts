@@ -92,10 +92,9 @@ export type GroundingStatus =
 /**
  * Where a shown corrected working came from.
  *
- * `verified_scheme` is reserved and currently unreachable: Cambridge and
- * Pearson refused third-party reproduction, so official CAIE scheme content is
- * not ours to render. Everything we show is our own method, and it is labelled
- * as ours rather than borrowing an authority we do not have.
+ * `verified_scheme` is used only when an exact assessment + exact question match
+ * resolves to stored official evidence whose access class explicitly permits
+ * ingestion. Restricted or metadata-only material can never reach this path.
  */
 export type AnswerSource = "axon_method" | "verified_scheme";
 
@@ -107,6 +106,8 @@ export interface GroundingInput {
   contextText: string[];
   /** Referenced parts that could not be found in the run. */
   unresolvedDependencies: string[];
+  /** Exact stored official scheme evidence for a deterministic Tier 2 match. */
+  verifiedSchemeText?: string | null;
 }
 
 export interface GroundingVerdict {
@@ -158,13 +159,17 @@ export function gateModelAnswer(input: GroundingInput): GroundingVerdict {
   // The net. Shared subject vocabulary with the question and everything it
   // depends on. Not a verifier — see GroundingStatus.
   const context = subjectTerms(
-    [input.questionText, input.studentAnswer, ...input.contextText].filter(Boolean).join(" "),
+    [input.questionText, input.studentAnswer, ...input.contextText, input.verifiedSchemeText].filter(Boolean).join(" "),
   );
 
   // Too little transcribed to judge topicality either way. The gates above have
   // passed, so the answer is not withheld on a test it cannot sit.
   if (context.size < MIN_CONTEXT_TERMS) {
-    return { modelAnswer: answer, status: "complete", source: "axon_method" };
+    return {
+      modelAnswer: answer,
+      status: "complete",
+      source: input.verifiedSchemeText ? "verified_scheme" : "axon_method",
+    };
   }
 
   let shared = 0;
@@ -174,5 +179,9 @@ export function gateModelAnswer(input: GroundingInput): GroundingVerdict {
     return { modelAnswer: null, status: "heuristic_off_topic", source: null };
   }
 
-  return { modelAnswer: answer, status: "complete", source: "axon_method" };
+  return {
+    modelAnswer: answer,
+    status: "complete",
+    source: input.verifiedSchemeText ? "verified_scheme" : "axon_method",
+  };
 }

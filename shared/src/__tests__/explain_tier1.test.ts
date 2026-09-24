@@ -300,3 +300,17 @@ test("validate: can_explain=true keeps everything, as before", () => {
   assert.equal(v.cause, "incomplete");
   assert.equal(v.body, "Half the method was missing.");
 });
+
+
+test("prompt requires LaTeX delimiters for every student-facing math field", () => {
+  assert.match(SYSTEM, /student-facing string/);
+  assert.ok(SYSTEM.includes("\\( ... \\)"), "inline maths should use \\( ... \\)");
+  assert.ok(SYSTEM.includes("\\[ ... \\]"), "display maths should use \\[ ... \\]");
+  assert.match(SYSTEM, /Do not write raw forms/);
+});
+
+test("prompt refuses symbolic placeholders when a calculation asks for a final value", () => {
+  assert.match(SYSTEM, /must actually answer the question/);
+  assert.match(SYSTEM, /finish with the\s+requested numerical value/);
+  assert.match(SYSTEM, /return model_answer null rather than leaving a placeholder/);
+});

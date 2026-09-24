@@ -3,6 +3,7 @@ import { consumeQueue, failRun } from "@mastery/shared/worker.js";
 import { imageRef } from "@mastery/shared/r2.js";
 import { SYSTEM, instruction, SCHEMA, validate, REJECTION_REASON, qualityFailureMessage, type QualitySignals } from "@mastery/shared/prompts/triage.v1.js";
 import { CAPTURE } from "@mastery/shared/contract.js";
+import { resolveAssessmentIdentity } from "@mastery/shared/assessment.js";
 import type { Env } from "@mastery/shared/env.js";
 
 const PAGES_TO_LOOK_AT = 6;
@@ -110,10 +111,30 @@ const handler = consumeQueue<TriageMessage>(
       return { detail: { rejected: parsed.classification } };
     }
 
+    let resolvedAssessment = null;
+    if (parsed.assessment_identity) {
+      try {
+        resolvedAssessment = await resolveAssessmentIdentity(sb, {
+          studentId: run.student_id,
+          paperId: run.paper_id,
+          candidate: parsed.assessment_identity,
+        });
+      } catch (error) {
+        // Identity lookup is enrichment, never a reason to lose a scan. A
+        // transient DB failure is recorded and the paper proceeds unbound;
+        // exact scheme retrieval remains disabled until a later retry resolves it.
+        console.warn("assessment identity resolution failed", run.paper_id, String(error));
+      }
+    }
+
     await sb
       .from("extraction_run")
       .update({
-        tier_routing: { triage: parsed },
+        tier_routing: {
+          triage: parsed,
+          assessment_identity_id: resolvedAssessment?.id ?? null,
+          assessment_identity_status: resolvedAssessment ? "exact" : "unresolved",
+        },
         ...(parsed.ink_colour !== "red" ? { status_reason: null } : {}),
       })
       .eq("id", runId);
@@ -144,6 +165,7 @@ const handler = consumeQueue<TriageMessage>(
         pages: allPages?.length ?? 0,
         looked_at: sampledPages.length,
         on_thumbnails: onThumbs,
+        assessment_identity: resolvedAssessment?.id ?? null,
       },
     };
   },

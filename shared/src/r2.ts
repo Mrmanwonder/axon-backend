@@ -147,12 +147,22 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 /** A short-lived, HMAC-signed URL to mastery-api's /asset proxy — the path the frontend actually reads pages and crops through. */
-export async function signAssetUrl(env: Env, bucket: BucketKind, key: string, ttlSeconds = GET_TTL_SECONDS): Promise<string> {
+export async function signAssetUrl(
+  env: Env,
+  bucket: BucketKind,
+  key: string,
+  ttlSeconds = GET_TTL_SECONDS,
+  baseUrl?: string,
+): Promise<string> {
   const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
   const cryptoKey = await hmacKey(env.ASSET_SIGNING_SECRET!);
   const mac = await crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(`${bucket}:${key}:${exp}`));
   const sig = base64url(new Uint8Array(mac));
-  const base = env.MASTERY_ASSET_URL ?? "https://mastery-api.workers.dev";
+  // Keep the fallback on the actual deployed API Worker. The old generic
+  // mastery-api.workers.dev hostname does not belong to this account, so a
+  // missing MASTERY_ASSET_URL produced perfectly signed URLs that pointed at
+  // nowhere and every frontend crop degraded to "could not show this part".
+  const base = baseUrl ?? env.MASTERY_ASSET_URL ?? "https://mastery-api.tanmay-harkawat.workers.dev";
   return `${base}/asset/${bucket}/${encodeURIComponent(key)}?exp=${exp}&sig=${sig}`;
 }
 
