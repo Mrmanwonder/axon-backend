@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   assertOfficialCbseUrl,
   discoverCbseIndex,
+  detectMarksColumn,
   extractMarkTotal,
   pairOfficialQuestions,
   parseCbseHeader,
@@ -53,10 +54,25 @@ test("parses CBSE subject code, class and ending year from a session header", ()
   });
 });
 
-test("extracts right-aligned mark totals including compound allocations", () => {
+test("extracts right-aligned mark totals including compound and fractional allocations", () => {
   assert.equal(extractMarkTotal(["step one                  1", "step two                  1"]), 2);
   assert.equal(extractMarkTotal(["award for method          2 + 1"]), 3);
+  assert.equal(extractMarkTotal(["method                    ½", "result                    ½ x 2"]), 1.5);
   assert.equal(extractMarkTotal(["no numeric mark column here"]), null);
+});
+
+test("uses the detected Marks column and ignores formula numbers to its left", () => {
+  const lines = [
+    "Q.No.                 Question                                      Marks",
+    "10.                    R = 100 / 60                                  1",
+  ];
+  const column = detectMarksColumn(lines);
+  assert.ok(column !== null);
+  assert.equal(extractMarkTotal([
+    "                        100",
+    "                         60",
+    "                                                                     1",
+  ], column), 1);
 });
 
 test("parses sequential question blocks and preserves alternatives", () => {
@@ -74,6 +90,19 @@ test("parses sequential question blocks and preserves alternatives", () => {
   const rows = parseQuestionBlocks(text);
   assert.deepEqual(rows.map(row => row.label), ["1", "2", "3(A)", "3(B)", "4"]);
   assert.deepEqual(rows.map(row => row.maxMarks), [1, 2, 3, 3, 1]);
+});
+
+test("accepts a standalone alternative label without losing later questions", () => {
+  const rows = parseQuestionBlocks([
+    "Q.No.                 Question                                      Marks",
+    "1. First question                                                   1",
+    "2(A) First choice                                                   2",
+    "2(B)",
+    "Second choice text                                                  2",
+    "3. Final question                                                   1",
+  ].join("\n"));
+  assert.deepEqual(rows.map(row => row.label), ["1", "2(A)", "2(B)", "3"]);
+  assert.deepEqual(rows.map(row => row.maxMarks), [1, 2, 2, 1]);
 });
 
 test("pairs only exact SQP/MS labels with matching mark totals", () => {
