@@ -101,6 +101,9 @@ export function classifyDbError(error: unknown, context: string): Error {
     // JWT/role problem: a deployment or grant issue, not a busy server.
     return new ConfigurationError("db_unauthorized", message);
   }
+  if (["42703", "42P01", "42883", "PGRST202", "PGRST204", "PGRST205"].includes(code)) {
+    return new ConfigurationError("db_schema", message);
+  }
   if (RETRYABLE_PG_CODES.has(code)) return new RetryableError("db_transient", message);
   if (code.startsWith("28") || code === "42501") {
     return new ConfigurationError("db_permission", message);
