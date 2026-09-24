@@ -182,7 +182,8 @@ export function markColumnDiagnostics(text) {
     maxLength = Math.max(maxLength, line.length);
     const match = markExpressionAtEnd(line);
     if (!match) continue;
-    const key = String(match.index);
+    const expressionIndex = line.lastIndexOf(match[1]);
+    const key = String(expressionIndex);
     histogram.set(key, (histogram.get(key) ?? 0) + 1);
   }
   return {
@@ -200,7 +201,8 @@ export function extractMarkTotal(lines, markColumn = null) {
   for (const line of lines) {
     const match = markExpressionAtEnd(line);
     if (!match) continue;
-    if (markColumn !== null && match.index < Math.max(0, markColumn - 12)) continue;
+    const expressionIndex = line.lastIndexOf(match[1]);
+    if (markColumn !== null && expressionIndex < Math.max(0, markColumn - 12)) continue;
     const total = parseMarkExpression(match[1]);
     if (total !== null) candidates.push(total);
   }
@@ -212,8 +214,9 @@ export function extractMarkTotal(lines, markColumn = null) {
 function stripMarksColumn(line, markColumn = null) {
   const match = markExpressionAtEnd(line);
   if (!match) return line.trimEnd();
-  if (markColumn !== null && match.index < Math.max(0, markColumn - 12)) return line.trimEnd();
-  return line.slice(0, match.index).trimEnd();
+  const expressionIndex = line.lastIndexOf(match[1]);
+  if (markColumn !== null && expressionIndex < Math.max(0, markColumn - 12)) return line.trimEnd();
+  return line.slice(0, expressionIndex).trimEnd();
 }
 
 export function parseQuestionBlocks(text) {
