@@ -14,7 +14,7 @@ const clamp = (value: number): number => Math.max(0, Math.min(1, value));
 
 export function assessPageQuality(metrics: PageQualityMetrics): QualityAssessment {
   const penalties = {
-    blur: clamp(metrics.blur), glare: clamp(metrics.glareFraction * 4), perspective: clamp(metrics.perspectiveDegrees / 15),
+    blur: clamp(metrics.blur), glare: clamp(metrics.glareFraction * 4), perspective: clamp(Math.abs(metrics.perspectiveDegrees) / 15),
     resolution: clamp(1 - metrics.resolution), compression: clamp(metrics.compression), crop: clamp(1 - metrics.cropCompleteness), shadow: clamp(metrics.shadowFraction * 2)
   };
   const score = clamp(1 - (penalties.blur * 0.24 + penalties.glare * 0.16 + penalties.perspective * 0.12 + penalties.resolution * 0.2 + penalties.compression * 0.1 + penalties.crop * 0.12 + penalties.shadow * 0.06));

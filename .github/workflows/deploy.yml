@@ -25,7 +25,7 @@ jobs:
     needs: typecheck-and-test
     strategy:
       matrix:
-        worker: [triage, structure, crop, content, reconcile, adjudicate, explain, sweep, api, intelligence]
+        worker: [triage, structure, crop, content, reconcile, adjudicate, explain, sweep, api, intelligence, document-vision]
       # One worker's dry-run failing should not hide the result for the rest.
       fail-fast: false
     steps:

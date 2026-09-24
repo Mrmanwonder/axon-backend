@@ -159,16 +159,19 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     return json({ providers: rows.results });
   }
   if (request.method === "GET" && url.pathname === "/v1/admin/readiness") {
-    const [promptCount, openProviders, structuredProbe, thinkingProbe] = await Promise.all([
+    const [promptCount, openProviders, structuredProbe, thinkingProbe, visionServiceReady] = await Promise.all([
       env.DB.prepare("SELECT COUNT(*) AS count FROM prompt_artifact").first<{ count: number }>(),
       env.DB.prepare("SELECT COUNT(*) AS count FROM provider_health WHERE state = 'OPEN'").first<{ count: number }>(),
       env.DB.prepare("SELECT passed FROM capability_probe WHERE model = ? AND capability = 'structured_output' ORDER BY probed_at DESC LIMIT 1").bind(RUNTIME_CONFIG_V3.primaryModel).first<{ passed: number }>(),
-      env.DB.prepare("SELECT passed FROM capability_probe WHERE model = ? AND capability = 'thinking' ORDER BY probed_at DESC LIMIT 1").bind(RUNTIME_CONFIG_V3.primaryModel).first<{ passed: number }>()
+      env.DB.prepare("SELECT passed FROM capability_probe WHERE model = ? AND capability = 'thinking' ORDER BY probed_at DESC LIMIT 1").bind(RUNTIME_CONFIG_V3.primaryModel).first<{ passed: number }>(),
+      String(env.AXON_VISION_PRIVACY_MODE) === "zdr"
+        ? env.DOCUMENT_VISION.fetch("https://axon-document-vision/health").then((response) => response.ok).catch(() => false)
+        : Promise.resolve(false)
     ]);
     const rates = configuredModelRates(env.GEMINI_INPUT_USD_PER_MILLION, env.GEMINI_OUTPUT_USD_PER_MILLION);
     const checks = {
       geminiZdr: String(env.GEMINI_PRIVACY_MODE) === "zdr",
-      visionZdr: Boolean(env.AXON_VISION_API_BASE && env.AXON_VISION_TOKEN && String(env.AXON_VISION_PRIVACY_MODE) === "zdr"),
+      visionZdr: String(env.AXON_VISION_PRIVACY_MODE) === "zdr" && visionServiceReady,
       retrievalConfigured: Boolean(env.TAVILY_API_KEY),
       pseudonymizationConfigured: Boolean(env.AXON_PSEUDONYM_KEY),
       promptArtifactsPersisted: (promptCount?.count ?? 0) > 0,

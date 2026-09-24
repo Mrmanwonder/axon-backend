@@ -6,9 +6,6 @@ interface IntelligenceSecretBindings {
   AXON_INTERNAL_TOKEN: string;
   AXON_ADMIN_TOKEN: string;
   TAVILY_API_KEY?: string;
-  AXON_VISION_API_BASE?: string;
-  AXON_VISION_TOKEN?: string;
-  AXON_VISION_PRIVACY_MODE?: string;
   AXON_SHADOW_MODEL?: string;
   AXON_SHADOW_CONFIG_REVISION?: string;
   AXON_PSEUDONYM_KEY: string;

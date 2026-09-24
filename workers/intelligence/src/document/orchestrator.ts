@@ -83,7 +83,7 @@ async function persistAnalysis(env: Env, metadata: PaperIngestMetadata, analysis
     const conditioned = base64Bytes(analysis.conditionedImageBase64);
     conditionedHash = await digest(conditioned);
     conditionedObjectKey = `papers/${metadata.paperId}/conditioned/${metadata.pageId}/${conditionedHash}`;
-    await env.PAPER_ARTIFACTS.put(conditionedObjectKey, conditioned, { httpMetadata: { contentType: metadata.sourceType }, customMetadata: { originalHash: metadata.originalHash, conditionedHash } });
+    await env.PAPER_ARTIFACTS.put(conditionedObjectKey, conditioned, { httpMetadata: { contentType: analysis.conditionedImageMimeType ?? metadata.sourceType }, customMetadata: { originalHash: metadata.originalHash, conditionedHash } });
   }
 
   const regions: LayoutRegion[] = analysis.regions.map((region) => ({
@@ -98,6 +98,8 @@ async function persistAnalysis(env: Env, metadata: PaperIngestMetadata, analysis
   for (const source of analysis.regions) {
     if (source.inkSignals) inkByRegion.set(`${metadata.pageId}:${source.id}`, classifyInk(source.inkSignals));
   }
+  const inkSensitiveClasses = new Set<LayoutRegion["class"]>(["student_answer", "teacher_annotation", "teacher_comment", "marginal_mark", "crossed_out_work"]);
+  if (regions.some((region) => inkSensitiveClasses.has(region.class) && !inkByRegion.has(region.id))) reviewReasons.push("MISSING_INK_CLASSIFICATION");
   if ([...inkByRegion.values()].some((item) => item.class === "UNKNOWN")) reviewReasons.push("AMBIGUOUS_INK_LAYER");
 
   const regionById = new Map(regions.map((region) => [region.id, region]));
@@ -126,7 +128,7 @@ async function persistAnalysis(env: Env, metadata: PaperIngestMetadata, analysis
     statements.push(env.DB.prepare(`INSERT OR REPLACE INTO layout_region
       (id, page_id, class, box_json, confidence, ink_class, text_value, trust_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(region.id, region.pageId, region.class, JSON.stringify(region.box), region.confidence, ink?.class ?? null, region.text ?? null,
-        region.confidence >= 0.9 && ink?.class !== "UNKNOWN" ? "AUTO_VERIFIED" : "UNVERIFIED"));
+        region.confidence >= 0.9 && (!inkSensitiveClasses.has(region.class) || (ink !== undefined && ink.class !== "UNKNOWN")) ? "AUTO_VERIFIED" : "UNVERIFIED"));
   }
   for (const [order, question] of graph.questions.entries()) {
     statements.push(env.DB.prepare("INSERT OR REPLACE INTO question_node (id, paper_id, label, parent_id, page_ids_json, reading_order) VALUES (?, ?, ?, ?, ?, ?)")

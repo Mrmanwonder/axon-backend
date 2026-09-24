@@ -7,6 +7,7 @@ const failures = [];
 const pass = (condition, message) => { if (!condition) failures.push(message); };
 
 const config = JSON.parse(await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
+const visionConfig = JSON.parse(await readFile(new URL("../../document-vision/wrangler.jsonc", import.meta.url), "utf8"));
 const databaseId = config.d1_databases?.[0]?.database_id;
 const kvId = config.kv_namespaces?.[0]?.id;
 pass(databaseId && !/^0+$|^00000000-0000-0000-0000-000000000000$/.test(databaseId), "real D1 database_id is not configured");
@@ -14,6 +15,14 @@ pass(kvId && !/^0+$/.test(kvId), "real KV namespace id is not configured");
 pass(Boolean(config.r2_buckets?.[0]?.bucket_name), "R2 paper bucket is not configured");
 pass(Boolean(config.queues?.producers?.[0]?.queue), "paper-processing queue is not configured");
 pass(Boolean(config.queues?.consumers?.[0]?.dead_letter_queue), "paper dead-letter queue is not configured");
+pass(config.services?.some((binding) => binding?.binding === "DOCUMENT_VISION" && binding?.service === "axon-document-vision"), "private DOCUMENT_VISION service binding is not configured");
+pass(visionConfig.name === "axon-document-vision", "document-vision Worker name does not match the service binding");
+pass(visionConfig.workers_dev === false && visionConfig.preview_urls === false, "document-vision Worker is not private-only");
+pass(visionConfig.ai?.binding === "AI", "document-vision Workers AI binding is not configured");
+pass(config.vars?.GEMINI_PRIVACY_MODE === "zdr", "intelligence Gemini privacy mode is not certified as zdr in deployment config");
+pass(config.vars?.AXON_VISION_PRIVACY_MODE === "zdr", "intelligence vision privacy mode is not certified as zdr in deployment config");
+pass(visionConfig.vars?.GEMINI_PRIVACY_MODE === "zdr", "document-vision Gemini privacy mode is not certified as zdr in deployment config");
+pass(visionConfig.vars?.WORKERS_AI_PRIVACY_MODE === "zdr", "document-vision Workers AI privacy mode is not certified as zdr in deployment config");
 
 let certification;
 try { certification = JSON.parse(await readFile(new URL("../certification/release.json", import.meta.url), "utf8")); }
@@ -50,12 +59,9 @@ if (certification && evidenceDirectory && ROLLOUT_ORDER.includes(targetStage)) {
   if (evidence.valid) verifiedEvidence = evidence;
 }
 
-for (const name of ["CLOUDFLARE_API_TOKEN", "GOOGLE_API_KEY", "SUPABASE_SERVICE_ROLE_KEY", "TAVILY_API_KEY", "AXON_INTERNAL_TOKEN", "AXON_ADMIN_TOKEN", "AXON_PSEUDONYM_KEY", "AXON_VISION_TOKEN", "GEMINI_INPUT_USD_PER_MILLION", "GEMINI_OUTPUT_USD_PER_MILLION"]) {
+for (const name of ["CLOUDFLARE_API_TOKEN", "GOOGLE_API_KEY", "SUPABASE_SERVICE_ROLE_KEY", "TAVILY_API_KEY", "AXON_INTERNAL_TOKEN", "AXON_ADMIN_TOKEN", "AXON_PSEUDONYM_KEY", "GEMINI_INPUT_USD_PER_MILLION", "GEMINI_OUTPUT_USD_PER_MILLION"]) {
   pass(Boolean(process.env[name]), `${name} is not present in the release environment`);
 }
-pass(Boolean(process.env.AXON_VISION_API_BASE), "AXON_VISION_API_BASE is not present in the release environment");
-pass(process.env.GEMINI_PRIVACY_MODE === "zdr", "GEMINI_PRIVACY_MODE is not certified as zdr");
-pass(process.env.AXON_VISION_PRIVACY_MODE === "zdr", "AXON_VISION_PRIVACY_MODE is not certified as zdr");
 
 if (failures.length > 0) {
   console.error(`AXON release preflight blocked:\n- ${failures.join("\n- ")}`);

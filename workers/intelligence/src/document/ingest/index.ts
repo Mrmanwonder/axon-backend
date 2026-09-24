@@ -52,17 +52,19 @@ export async function ingestPaperPage(request: Request, env: Env): Promise<{ met
 }
 
 export async function processPaperBatch(batch: MessageBatch<PaperJob>, env: Env): Promise<void> {
-  const { HttpDocumentVisionProvider } = await import("../vision/provider");
+  const { ServiceBindingDocumentVisionProvider } = await import("../vision/provider");
   const { markPageForReview, processPaperPage } = await import("../orchestrator");
   for (const message of batch.messages) {
     try {
       const { metadata } = message.body;
       const object = await env.PAPER_ARTIFACTS.head(metadata.objectKey);
       if (!object) throw new Error("Original paper artifact missing");
-      if (!env.AXON_VISION_API_BASE || !env.AXON_VISION_TOKEN || String(env.AXON_VISION_PRIVACY_MODE) !== "zdr") {
+      if (!new Set(["image/jpeg", "image/png", "image/webp"]).has(metadata.sourceType)) {
+        await markPageForReview(env.DB, metadata, "DOCUMENT_FORMAT_REQUIRES_NORMALIZATION");
+      } else if (String(env.AXON_VISION_PRIVACY_MODE) !== "zdr") {
         await markPageForReview(env.DB, metadata, "NO_PRIVACY_COMPLIANT_DOCUMENT_PROVIDER");
       } else {
-        const provider = new HttpDocumentVisionProvider(env.AXON_VISION_API_BASE, env.AXON_VISION_TOKEN, "zdr");
+        const provider = new ServiceBindingDocumentVisionProvider(env.DOCUMENT_VISION, "zdr");
         await processPaperPage(env, metadata, provider);
       }
       message.ack();

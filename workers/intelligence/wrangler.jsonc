@@ -9,6 +9,7 @@
     "AXON_CONFIG_REVISION": "v3.default",
     "AXON_PIPELINE_VERSION": "3.0.0",
     "GEMINI_PRIVACY_MODE": "unverified",
+    "AXON_VISION_PRIVACY_MODE": "unverified",
     "TAVILY_API_BASE": "https://api.tavily.com",
     "SUPABASE_URL": "https://dlgcqieyevoebefhcggi.supabase.co"
   },
@@ -31,6 +32,9 @@
       "binding": "PIPELINE_CACHE",
       "id": "c1a921d9e8f049e6b88e48ad71bd8277"
     }
+  ],
+  "services": [
+    { "binding": "DOCUMENT_VISION", "service": "axon-document-vision" }
   ],
   "queues": {
     "producers": [

@@ -41,7 +41,8 @@ export const VisionAnalysisSchema = Type.Object({
     text: Type.Optional(Type.String({ maxLength: 10_000 })), inkSignals: Type.Optional(InkSignalsSchema)
   }, { additionalProperties: false }), { maxItems: 2_000 }),
   reads: Type.Array(Type.Object({ regionId: Type.String(), reads: Type.Array(ReadSchema, { minItems: 1, maxItems: 5 }) }, { additionalProperties: false }), { maxItems: 2_000 }),
-  conditionedImageBase64: Type.Optional(Type.String({ maxLength: 30_000_000 }))
+  conditionedImageBase64: Type.Optional(Type.String({ maxLength: 30_000_000 })),
+  conditionedImageMimeType: Type.Optional(Type.Literal("image/webp"))
 }, { additionalProperties: false });
 
 export type VisionAnalysis = Static<typeof VisionAnalysisSchema>;
@@ -52,9 +53,9 @@ export interface DocumentVisionProvider {
   analyze(input: { bytes: ArrayBuffer; mimeType: string; pageId: string; timeoutMs: number }): Promise<{ analysis: VisionAnalysis; latencyMs: number }>;
 }
 
-export class HttpDocumentVisionProvider implements DocumentVisionProvider {
-  readonly id = "axon-vision";
-  constructor(readonly endpoint: string, readonly token: string, readonly privacyMode: "zdr" | "unverified") {}
+export class ServiceBindingDocumentVisionProvider implements DocumentVisionProvider {
+  readonly id = "axon-document-vision";
+  constructor(readonly service: Fetcher, readonly privacyMode: "zdr" | "unverified") {}
 
   async analyze(input: { bytes: ArrayBuffer; mimeType: string; pageId: string; timeoutMs: number }): Promise<{ analysis: VisionAnalysis; latencyMs: number }> {
     const started = Date.now();
@@ -64,9 +65,10 @@ export class HttpDocumentVisionProvider implements DocumentVisionProvider {
       const bytes = new Uint8Array(input.bytes);
       let binary = "";
       for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-      const response = await fetch(this.endpoint, {
-        method: "POST", signal: controller.signal,
-        headers: { "content-type": "application/json", authorization: `Bearer ${this.token}` },
+      const response = await this.service.fetch("https://axon-document-vision/v1/analyze", {
+        method: "POST",
+        signal: controller.signal,
+        headers: { "content-type": "application/json", "x-axon-contract-version": "axon-document-vision.v1" },
         body: JSON.stringify({ pageId: input.pageId, mimeType: input.mimeType, dataBase64: btoa(binary), contractVersion: "axon-document-vision.v1" })
       });
       if (!response.ok) throw new Error(`VISION_PROVIDER_${response.status}`);

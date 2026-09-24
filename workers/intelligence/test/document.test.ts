@@ -15,6 +15,10 @@ describe("AxonQuality", () => {
     expect(result.classification).toBe("UNREADABLE");
     expect(result.requiredAction).toBe("rescan");
   });
+  it("penalizes perspective distortion in either direction", () => {
+    const base = { blur: 0, glareFraction: 0, resolution: 1, compression: 0, cropCompleteness: 1, shadowFraction: 0 };
+    expect(assessPageQuality({ ...base, perspectiveDegrees: -15 }).score).toBe(assessPageQuality({ ...base, perspectiveDegrees: 15 }).score);
+  });
   it("never enables generative enhancement", () => {
     expect(conditioningPlan({ blur: 0.2, glareFraction: 0.1, perspectiveDegrees: 2, resolution: 0.7, compression: 0.2, cropCompleteness: 1, shadowFraction: 0.1 }, 91).generativeEnhancement).toBe(false);
   });
