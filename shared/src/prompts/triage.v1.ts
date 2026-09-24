@@ -30,12 +30,15 @@ Also report:
 For assessment_identity:
   - subject_code is the printed syllabus/subject code, preserving leading zeros
   - level is SL/HL only when explicitly printed
-  - exam_year is the printed examination year
-  - session is the printed series/session
-  - paper_code/component_code/variant/zone/assessment_route are copied exactly
-    where printed
-  - confidence is high only when subject_code, exam_year, and a paper or
-    component code are all clearly legible; otherwise low
+  - exam_year is the printed examination year. If the paper prints an academic
+    session such as 2026-27 instead of one year, use the ending year (2027)
+  - session preserves the printed series/session, for example 2026-27
+  - paper_code/component_code/variant/zone are copied exactly where printed
+  - assessment_route is sample_paper only when the page explicitly says Sample
+    Question Paper or SQP; otherwise copy a clearly printed route or return null
+  - confidence is high only when subject_code and exam_year are clear AND at
+    least one exact discriminator is clear: paper_code, component_code, or
+    assessment_route; otherwise low
 Return null for the whole assessment_identity when this is an ordinary school
 test or the header cannot be read. Never guess missing metadata.
 
@@ -130,6 +133,16 @@ function clean(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim().slice(0, 120) : null;
 }
 
+function normaliseAssessmentRoute(value: unknown): string | null {
+  const route = clean(value);
+  if (!route) return null;
+  const compactRoute = route.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (compactRoute === "sqp" || compactRoute === "samplequestionpaper" || compactRoute === "samplepaper") {
+    return "sample_paper";
+  }
+  return route;
+}
+
 function normaliseAssessmentIdentity(value: unknown): TriageAssessmentIdentity | null {
   if (!value || typeof value !== "object") return null;
   const v = value as Partial<TriageAssessmentIdentity>;
@@ -143,7 +156,7 @@ function normaliseAssessmentIdentity(value: unknown): TriageAssessmentIdentity |
     component_code: clean(v.component_code),
     variant: clean(v.variant),
     zone: clean(v.zone),
-    assessment_route: clean(v.assessment_route),
+    assessment_route: normaliseAssessmentRoute(v.assessment_route),
     confidence: v.confidence === "high" ? "high" : "low",
   };
 }

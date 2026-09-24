@@ -4,6 +4,7 @@ import {
   candidateIsResolvable,
   identityMatchesCandidate,
   normaliseQuestionLabel,
+  questionLabelAncestors,
   type AssessmentCandidate,
 } from "../assessment.js";
 
@@ -26,6 +27,12 @@ test("assessment candidates require visible exact discriminators", () => {
   assert.equal(candidateIsResolvable({ ...candidate, subject_code: null }), false);
   assert.equal(candidateIsResolvable({ ...candidate, exam_year: null }), false);
   assert.equal(candidateIsResolvable({ ...candidate, paper_code: null, component_code: null }), false);
+  assert.equal(candidateIsResolvable({
+    ...candidate,
+    paper_code: null,
+    component_code: null,
+    assessment_route: "sample_paper",
+  }), true);
 });
 
 test("identity matching compares every stored discriminator, not semantic similarity", () => {
@@ -75,4 +82,11 @@ test("question labels are normalized only typographically", () => {
   assert.equal(normaliseQuestionLabel(" 3 (b) (ii). "), "3(B)(II)");
   assert.equal(normaliseQuestionLabel(null), null);
   assert.notEqual(normaliseQuestionLabel("3(b)(ii)"), normaliseQuestionLabel("3(b)(iii)"));
+});
+
+
+test("question-label ancestry is deterministic and only strips trailing parts", () => {
+  assert.deepEqual(questionLabelAncestors("29 (b) (ii)"), ["29(B)(II)", "29(B)", "29"]);
+  assert.deepEqual(questionLabelAncestors("29"), ["29"]);
+  assert.deepEqual(questionLabelAncestors(null), []);
 });
