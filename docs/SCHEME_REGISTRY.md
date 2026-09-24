@@ -38,6 +38,15 @@ Filter to one subject:
 npm run schemes:cbse -- discover --class=12 --subject=Physics
 ```
 
+Verify the live official PDFs through the exact parser without Supabase credentials:
+
+```sh
+npm run schemes:cbse -- verify --class=12 --subject=Physics
+```
+
+This is also run by the dedicated weekly/PR source-smoke workflow. It performs
+no database writes.
+
 Dry-run ingestion. This downloads the official SQP/MS, verifies identity,
 question labels and mark totals, and prints the result without writing:
 
