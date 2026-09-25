@@ -16,12 +16,9 @@ export default {
   async scheduled(_controller: ScheduledController, env: Env) {
     const sb = serviceClient(env);
 
-    // Recovers runs stranded mid-pipeline (see AXON_FIX_BRIEF.md §3.2, §4.D3 —
-    // the sweep only resets paper_page.structure_status where it is 'running';
-    // a page left 'done' by a failed run is not its job, and stays covered by
-    // the triage-side reset instead until §9.3 closes that gap).
-    const { error: stuckError } = await sb.rpc("sweep_stuck_runs", {});
-    if (stuckError) console.error("sweep_stuck_runs failed", stuckError.message);
+    // Stuck-run recovery executes in pg_cron; see
+    // db/operations/enable-stuck-run-recovery.sql. The function is private,
+    // so calling sb.rpc("sweep_stuck_runs") through the public API cannot work.
 
     const { data: claims, error: claimError } = await sb.rpc("claim_deletions", { p_limit: CLAIMS_PER_TICK });
     if (claimError) {
