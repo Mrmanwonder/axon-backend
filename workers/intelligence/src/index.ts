@@ -24,6 +24,8 @@ import {
   listLearningTargets, reviewActiveLearning
 } from "./intelligence/corrections/repository";
 import { recordStableKnowledge, resolveStableKnowledge, resolveStableKnowledgeFromDb } from "./academic/stable-knowledge";
+import { pseudonymizeIdentifier } from "./intelligence/security/privacy";
+import { resolveLearningConsent, validStudentId, type LearningConsentDecision } from "./intelligence/corrections/consent";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
 const json = (value: unknown, status = 200): Response => new Response(JSON.stringify(value), { status, headers: JSON_HEADERS });
@@ -118,21 +120,35 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
   }
   if (request.method === "POST" && url.pathname === "/v1/corrections") {
     const correction = parseSchema(CorrectionEventSchema, await readBoundedJson(request));
-    const idempotency = await lookupIdempotentResult(env.DB, request, url.pathname, correction);
+    const sourceStudentId = request.headers.get("x-axon-student-id");
+    if (!validStudentId(sourceStudentId)) throw new Error("Missing or invalid x-axon-student-id");
+    const studentPseudonym = await pseudonymizeIdentifier(sourceStudentId, env.AXON_PSEUDONYM_KEY);
+    const idempotency = await lookupIdempotentResult(env.DB, request, url.pathname, { correction, studentPseudonym });
     if (idempotency.cached) return json(idempotency.cached.payload, idempotency.cached.status);
+    const consent = await resolveLearningConsent(env, sourceStudentId);
     const id = crypto.randomUUID();
-    const learning = prioritizeCorrection(correction);
-    const learningPlan = await planCorrectionLearning(correction, learning.reasons);
     const createdAt = new Date().toISOString();
-    const learningId = crypto.randomUUID();
-    await env.DB.batch([
-      env.DB.prepare("INSERT INTO student_correction (id, field, predicted_json, corrected_json, accepted_json, artifact_id, pipeline_version, model, prompt_hash, context_metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(id, correction.field, JSON.stringify(correction.predicted), JSON.stringify(correction.corrected), JSON.stringify(correction.acceptedValue), correction.artifactId, correction.pipelineVersion, correction.model, correction.promptHash, JSON.stringify(correction.contextMetadata), createdAt),
-      env.DB.prepare("INSERT INTO active_learning_queue (id, correction_id, priority, reasons_json, status, created_at) VALUES (?, ?, ?, ?, 'QUEUED', ?)")
-        .bind(learningId, id, learning.priority, JSON.stringify(learning.reasons), createdAt),
-      ...correctionLearningStatements(env.DB, id, learningPlan, createdAt)
-    ]);
-    const result = { id, accepted: true, activeLearningId: learningId };
+    const statements: D1PreparedStatement[] = [
+      env.DB.prepare(`INSERT INTO student_correction
+        (id, field, predicted_json, corrected_json, accepted_json, artifact_id, pipeline_version, model, prompt_hash, context_metadata_json, created_at,
+         student_id, learning_consent_granted, learning_consent_seq, learning_consent_notice_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(id, correction.field, JSON.stringify(correction.predicted), JSON.stringify(correction.corrected), JSON.stringify(correction.acceptedValue), correction.artifactId, correction.pipelineVersion, correction.model, correction.promptHash, JSON.stringify(correction.contextMetadata), createdAt,
+          studentPseudonym, consent.granted ? 1 : 0, consent.seq ?? null, consent.noticeVersion ?? null)
+    ];
+    let learningId: string | null = null;
+    if (consent.granted) {
+      const learning = prioritizeCorrection(correction);
+      const learningPlan = await planCorrectionLearning(correction, learning.reasons);
+      learningId = crypto.randomUUID();
+      statements.push(
+        env.DB.prepare("INSERT INTO active_learning_queue (id, correction_id, priority, reasons_json, status, created_at) VALUES (?, ?, ?, ?, 'QUEUED', ?)")
+          .bind(learningId, id, learning.priority, JSON.stringify(learning.reasons), createdAt),
+        ...correctionLearningStatements(env.DB, id, learningPlan, createdAt)
+      );
+    }
+    await env.DB.batch(statements);
+    const result = { id, accepted: true, activeLearningId: learningId, learningConsent: consent.state };
     await storeIdempotentResult(env.DB, url.pathname, idempotency, { status: 201, payload: result });
     return json(result, 201);
   }
@@ -181,7 +197,16 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
   }
   const activeLearningMatch = url.pathname.match(/^\/v1\/admin\/active-learning\/([^/]+)$/);
   if (request.method === "POST" && activeLearningMatch?.[1]) {
-    await reviewActiveLearning(env.DB, decodeURIComponent(activeLearningMatch[1]), await readBoundedJson(request));
+    const sourceStudentId = request.headers.get("x-axon-student-id");
+    let decision: LearningConsentDecision = { state: "UNVERIFIED", granted: false, reason: "INVALID_STUDENT_ID" };
+    let studentPseudonym: string | undefined;
+    if (validStudentId(sourceStudentId)) {
+      [decision, studentPseudonym] = await Promise.all([
+        resolveLearningConsent(env, sourceStudentId),
+        pseudonymizeIdentifier(sourceStudentId, env.AXON_PSEUDONYM_KEY)
+      ]);
+    }
+    await reviewActiveLearning(env.DB, decodeURIComponent(activeLearningMatch[1]), await readBoundedJson(request), { decision, ...(studentPseudonym ? { studentPseudonym } : {}) });
     return json({ updated: true });
   }
   if (request.method === "GET" && url.pathname === "/v1/admin/provider-health") {
@@ -208,6 +233,7 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
       retrievalProbePassed: retrievalProbe?.passed === 1,
       visionProbePassed: visionProbe?.passed === 1,
       pseudonymizationConfigured: Boolean(env.AXON_PSEUDONYM_KEY),
+      supabaseAdminKeyConfigured: Boolean(env.SUPABASE_SECRET_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY),
       promptArtifactsPersisted: (promptCount?.count ?? 0) > 0,
       providerCircuitsClosed: (openProviders?.count ?? 0) === 0,
       structuredOutputProbePassed: structuredProbe?.model === RUNTIME_CONFIG_V3.primaryModel && structuredProbe.passed === 1,

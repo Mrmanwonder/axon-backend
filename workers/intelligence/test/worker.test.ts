@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env, exports } from "cloudflare:workers";
 import { pseudonymizeIdentifier } from "../src/intelligence/security/privacy";
+import { mockSupabaseConsent, TEST_STUDENT_ID } from "./supabase-consent.mock";
 
 describe("Worker", () => {
+  beforeEach(() => { mockSupabaseConsent(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
   it("reports immutable deployment provenance", async () => {
     const response = await exports.default.fetch(new Request("https://axon.test/health"));
     expect(response.status).toBe(200);
@@ -15,7 +19,7 @@ describe("Worker", () => {
       promptHash: "abc", contextMetadata: { pageId: "p1" }
     };
     const response = await exports.default.fetch(new Request("https://axon.test/v1/corrections", {
-      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer test-token" }, body: JSON.stringify(correction)
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer test-token", "x-axon-student-id": TEST_STUDENT_ID }, body: JSON.stringify(correction)
     }));
     expect(response.status).toBe(201);
     const row = await env.DB.prepare("SELECT predicted_json, corrected_json, accepted_json FROM student_correction WHERE artifact_id = ?").bind("paper:q1").first<{ predicted_json: string; corrected_json: string; accepted_json: string }>();
@@ -26,6 +30,33 @@ describe("Worker", () => {
     expect(targets.results.map((item) => item.target)).toEqual(["BENCHMARK_EXPANSION", "ERROR_CLUSTERING", "HTR_DATASET", "LAYOUT_TRAINING", "PROMPT_REGRESSION"]);
     const cluster = await env.DB.prepare("SELECT field, correction_count, high_confidence_count FROM correction_error_cluster").first<{ field: string; correction_count: number; high_confidence_count: number }>();
     expect(cluster).toEqual({ field: "mark", correction_count: 1, high_confidence_count: 0 });
+    const provenance = await env.DB.prepare("SELECT student_id, learning_consent_granted, learning_consent_seq, learning_consent_notice_version FROM student_correction WHERE artifact_id = ?").bind("paper:q1").first<Record<string, unknown>>();
+    expect(provenance).toEqual({
+      student_id: await pseudonymizeIdentifier(TEST_STUDENT_ID, "test-pseudonym-key"),
+      learning_consent_granted: 1,
+      learning_consent_seq: 42,
+      learning_consent_notice_version: "privacy.v1"
+    });
+  });
+
+  it("preserves a correction but creates no learning data when optional consent is denied", async () => {
+    vi.restoreAllMocks();
+    mockSupabaseConsent(false);
+    const artifactId = `paper:${crypto.randomUUID()}`;
+    const response = await exports.default.fetch(new Request("https://axon.test/v1/corrections", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test-token", "x-axon-student-id": TEST_STUDENT_ID },
+      body: JSON.stringify({
+        field: "recognized_text", predicted: "private prediction", corrected: "private correction", acceptedValue: "private correction",
+        artifactId, pipelineVersion: "3.0.0", model: "vision", promptHash: "prompt-hash", contextMetadata: { confidence: 0.99 }
+      })
+    }));
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({ accepted: true, activeLearningId: null, learningConsent: "DENIED" });
+    const correction = await env.DB.prepare("SELECT learning_consent_granted FROM student_correction WHERE artifact_id = ?").bind(artifactId).first<{ learning_consent_granted: number }>();
+    expect(correction).toEqual({ learning_consent_granted: 0 });
+    const queued = await env.DB.prepare("SELECT COUNT(*) AS count FROM active_learning_queue WHERE correction_id IN (SELECT id FROM student_correction WHERE artifact_id = ?)").bind(artifactId).first<{ count: number }>();
+    expect(queued?.count).toBe(0);
   });
 
   it("routes correction evidence into calibration and private learning ledgers without copying values", async () => {
@@ -36,7 +67,7 @@ describe("Worker", () => {
       contextMetadata: { confidence: 0.92, layer: "STUDENT", regionClass: "student_answer", stage: "document_reading" }
     };
     const response = await exports.default.fetch(new Request("https://axon.test/v1/corrections", {
-      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer test-token" }, body: JSON.stringify(correction)
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer test-token", "x-axon-student-id": TEST_STUDENT_ID }, body: JSON.stringify(correction)
     }));
     expect(response.status).toBe(201);
     const targetResponse = await exports.default.fetch(new Request("https://axon.test/v1/admin/learning/targets?status=QUEUED", { headers: { authorization: "Bearer test-admin-token" } }));
@@ -59,7 +90,7 @@ describe("Worker", () => {
       pipelineVersion: "3.0.0", model: "test-model", promptHash: "hash", contextMetadata: {}
     };
     const request = () => new Request("https://axon.test/v1/corrections", {
-      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer test-token", "idempotency-key": "same-correction-request" }, body: JSON.stringify(correction)
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer test-token", "idempotency-key": "same-correction-request", "x-axon-student-id": TEST_STUDENT_ID }, body: JSON.stringify(correction)
     });
     const first = await exports.default.fetch(request());
     const second = await exports.default.fetch(request());
@@ -86,6 +117,14 @@ describe("Worker", () => {
   it("rejects unauthenticated student-data requests", async () => {
     const response = await exports.default.fetch(new Request("https://axon.test/v1/corrections", { method: "POST", body: "{}" }));
     expect(response.status).toBe(401);
+  });
+  it("requires the correction owner before storing student data", async () => {
+    const response = await exports.default.fetch(new Request("https://axon.test/v1/corrections", {
+      method: "POST", headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+      body: JSON.stringify({ field: "answer", predicted: "x", corrected: "y", acceptedValue: "y", artifactId: "paper:owner", pipelineVersion: "3", model: "vision", promptHash: "hash", contextMetadata: {} })
+    }));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "INVALID_REQUEST", message: "Missing or invalid x-axon-student-id" });
   });
   it("reports fail-closed production readiness until external evidence exists", async () => {
     const response = await exports.default.fetch(new Request("https://axon.test/v1/admin/readiness", { headers: { authorization: "Bearer test-admin-token" } }));
