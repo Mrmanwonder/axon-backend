@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { parseSchema } from "../../schemas";
 import type { CorrectionLearningPlan, LearningTarget } from "./active-learning";
+import type { LearningConsentDecision } from "./consent";
 
 const ReviewSchema = Type.Object({
   status: Type.Union([Type.Literal("LABELLED"), Type.Literal("PROMOTED"), Type.Literal("REJECTED")]),
@@ -56,12 +57,22 @@ export async function listActiveLearning(db: D1Database, status = "QUEUED", limi
   return rows.results;
 }
 
-export async function reviewActiveLearning(db: D1Database, id: string, input: unknown): Promise<void> {
+export async function reviewActiveLearning(
+  db: D1Database,
+  id: string,
+  input: unknown,
+  consent: { decision: LearningConsentDecision; studentPseudonym?: string }
+): Promise<void> {
   const request = parseSchema(ReviewSchema, input);
-  const current = await db.prepare("SELECT status, correction_id FROM active_learning_queue WHERE id = ?").bind(id).first<{ status: string; correction_id: string }>();
+  const current = await db.prepare(`SELECT al.status, al.correction_id, sc.student_id, sc.learning_consent_granted
+    FROM active_learning_queue al JOIN student_correction sc ON sc.id = al.correction_id WHERE al.id = ?`)
+    .bind(id).first<{ status: string; correction_id: string; student_id: string | null; learning_consent_granted: number }>();
   if (!current) throw new Error("Active-learning item not found");
   if (!(ALLOWED[current.status] ?? []).includes(request.status)) throw new Error(`Invalid active-learning transition ${current.status} -> ${request.status}`);
   if (request.status === "PROMOTED") {
+    if (current.learning_consent_granted !== 1 || consent.decision.state !== "GRANTED" || !consent.studentPseudonym || consent.studentPseudonym !== current.student_id) {
+      throw new Error("Promotion requires current improve_extraction consent for the correction owner");
+    }
     if (!request.evalRunId) throw new Error("Promotion requires a passing evaluation run");
     const run = await db.prepare("SELECT passed FROM eval_run WHERE id = ?").bind(request.evalRunId).first<{ passed: number }>();
     if (run?.passed !== 1) throw new Error("Promotion requires a passing evaluation run");

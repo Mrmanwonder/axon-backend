@@ -59,9 +59,10 @@ if (certification && evidenceDirectory && ROLLOUT_ORDER.includes(targetStage)) {
   if (evidence.valid) verifiedEvidence = evidence;
 }
 
-for (const name of ["CLOUDFLARE_API_TOKEN", "GOOGLE_API_KEY", "SUPABASE_SERVICE_ROLE_KEY", "TAVILY_API_KEY", "AXON_INTERNAL_TOKEN", "AXON_ADMIN_TOKEN", "AXON_PSEUDONYM_KEY", "GEMINI_INPUT_USD_PER_MILLION", "GEMINI_OUTPUT_USD_PER_MILLION"]) {
+for (const name of ["CLOUDFLARE_API_TOKEN", "GOOGLE_API_KEY", "TAVILY_API_KEY", "AXON_INTERNAL_TOKEN", "AXON_ADMIN_TOKEN", "AXON_PSEUDONYM_KEY", "GEMINI_INPUT_USD_PER_MILLION", "GEMINI_OUTPUT_USD_PER_MILLION"]) {
   pass(Boolean(process.env[name]), `${name} is not present in the release environment`);
 }
+pass(Boolean(process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY), "SUPABASE_SECRET_KEY is not present in the release environment (legacy SUPABASE_SERVICE_ROLE_KEY is temporarily accepted)");
 
 if (failures.length > 0) {
   console.error(`AXON release preflight blocked:\n- ${failures.join("\n- ")}`);

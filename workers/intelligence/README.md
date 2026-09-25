@@ -12,7 +12,7 @@ npm test
 npm run dev
 ```
 
-Create secrets with `wrangler secret put GOOGLE_API_KEY`, `wrangler secret put SUPABASE_SERVICE_ROLE_KEY`, `wrangler secret put TAVILY_API_KEY`, `wrangler secret put AXON_INTERNAL_TOKEN`, `wrangler secret put AXON_ADMIN_TOKEN`, and `wrangler secret put AXON_PSEUDONYM_KEY`. Document automation additionally requires `AXON_VISION_TOKEN`. Every `/v1/*` call must carry a Bearer credential; `/v1/admin/*` requires the separate admin token. Never place student data or secrets in configuration files.
+Create secrets with `wrangler secret put GOOGLE_API_KEY`, `wrangler secret put SUPABASE_SECRET_KEY`, `wrangler secret put TAVILY_API_KEY`, `wrangler secret put AXON_INTERNAL_TOKEN`, `wrangler secret put AXON_ADMIN_TOKEN`, and `wrangler secret put AXON_PSEUDONYM_KEY`. `SUPABASE_SERVICE_ROLE_KEY` is accepted only as a temporary legacy fallback. Document automation additionally requires `AXON_VISION_TOKEN`. Every `/v1/*` call must carry a Bearer credential; `/v1/admin/*` requires the separate admin token. Never place student data or secrets in configuration files.
 
 ## Worker endpoints
 
@@ -32,5 +32,7 @@ Create secrets with `wrangler secret put GOOGLE_API_KEY`, `wrangler secret put S
 - `POST /v1/admin/active-learning/:id`
 
 Paper uploads are immutable R2 artifacts and queued for bounded background processing. Tutor responses are rendered only from claims that pass schema, evidence, contradiction, retrieval, and tool-use checks.
+
+Correction writes require `x-axon-student-id`. The Worker stores only its keyed pseudonym in D1 and reads the live Supabase `improve_extraction` decision before creating any product-improvement queue or aggregate. Missing, withdrawn, or unverifiable optional consent preserves the correction but produces no learning data.
 
 Production release is deliberately fail-closed. See `docs/implementation-status.md`, `docs/vision-provider-contract.md`, `docs/release-evidence.md`, and `docs/deployment-runbook.md`. `npm run release:preflight` requires `AXON_RELEASE_EVIDENCE_DIR` and verifies immutable artifact hashes, derived benchmark metrics, privacy attestations, live capability probes, rollback evidence, and the completed stages preceding `AXON_RELEASE_TARGET_STAGE`. It must remain blocked until real evidence and resource configuration are present.

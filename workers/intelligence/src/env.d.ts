@@ -2,7 +2,8 @@
 // generated-bindings.d.ts. Only secret or deployment-only bindings belong here.
 interface IntelligenceSecretBindings {
   GOOGLE_API_KEY: string;
-  SUPABASE_SERVICE_ROLE_KEY: string;
+  SUPABASE_SECRET_KEY?: string;
+  SUPABASE_SERVICE_ROLE_KEY?: string;
   AXON_INTERNAL_TOKEN: string;
   AXON_ADMIN_TOKEN: string;
   TAVILY_API_KEY?: string;

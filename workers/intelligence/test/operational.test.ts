@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env, exports } from "cloudflare:workers";
 import { processPaperPage } from "../src/document/orchestrator";
 import type { DocumentVisionProvider, VisionAnalysis } from "../src/document/vision/provider";
@@ -8,6 +8,7 @@ import type { AIProvider } from "../src/providers/types";
 import { enforceRateLimit } from "../src/intelligence/security/rate-limit";
 import { pseudonymizeIdentifier } from "../src/intelligence/security/privacy";
 import { probeReleaseCapabilities } from "../src/providers/capabilities";
+import { mockSupabaseConsent, TEST_STUDENT_ID } from "./supabase-consent.mock";
 
 const printed = { printedProbability: 0.98, colourDistanceFromPrint: 0.02, strokeDifference: 0.02, marginTendency: 0.05, annotationOverlap: 0.05, handwritingDifference: 0.05 };
 const student = { printedProbability: 0.02, colourDistanceFromPrint: 0.1, strokeDifference: 0.9, marginTendency: 0.05, annotationOverlap: 0.05, handwritingDifference: 0.05 };
@@ -16,6 +17,9 @@ const region = (id: string, kind: VisionAnalysis["regions"][number]["class"], x:
 const read = (id: string, value: string, x: number, y: number) => ({ regionId: id, reads: ["reader-a", "reader-b"].map((readerId) => ({ value, alternatives: [], status: "read" as const, region: { x, y, width: 0.2, height: 0.05 }, readerIds: [readerId] })) });
 
 describe("operational pipeline", () => {
+  beforeEach(() => { mockSupabaseConsent(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
   it("runs privacy-compliant document analysis through deterministic trusted commit", async () => {
     const pageId = crypto.randomUUID();
     const paperId = crypto.randomUUID();
@@ -257,16 +261,16 @@ describe("operational pipeline", () => {
       pipelineVersion: "3.0.0", model: "vision", promptHash: "prompt", contextMetadata: { confidence: 0.2 }
     };
     const created = await exports.default.fetch(new Request("https://axon.test/v1/corrections", {
-      method: "POST", headers: { authorization: "Bearer test-token", "content-type": "application/json" }, body: JSON.stringify(correction)
+      method: "POST", headers: { authorization: "Bearer test-token", "content-type": "application/json", "x-axon-student-id": TEST_STUDENT_ID }, body: JSON.stringify(correction)
     }));
     const { activeLearningId } = await created.json<{ activeLearningId: string }>();
     const labelled = await exports.default.fetch(new Request(`https://axon.test/v1/admin/active-learning/${activeLearningId}`, {
-      method: "POST", headers: { authorization: "Bearer test-admin-token", "content-type": "application/json" },
+      method: "POST", headers: { authorization: "Bearer test-admin-token", "content-type": "application/json", "x-axon-student-id": TEST_STUDENT_ID },
       body: JSON.stringify({ status: "LABELLED", reviewer: "reviewer-1", evidenceUri: "urn:axon:review:evidence" })
     }));
     expect(labelled.status).toBe(200);
     const promoted = await exports.default.fetch(new Request(`https://axon.test/v1/admin/active-learning/${activeLearningId}`, {
-      method: "POST", headers: { authorization: "Bearer test-admin-token", "content-type": "application/json" },
+      method: "POST", headers: { authorization: "Bearer test-admin-token", "content-type": "application/json", "x-axon-student-id": TEST_STUDENT_ID },
       body: JSON.stringify({ status: "PROMOTED", reviewer: "reviewer-1", evidenceUri: "urn:axon:review:evidence" })
     }));
     expect(promoted.status).toBe(400);
@@ -281,8 +285,18 @@ describe("operational pipeline", () => {
       env.DB.prepare("INSERT INTO eval_suite (id, name, version, category, created_at) VALUES (?, 'review gate', '1', 'correction', ?)").bind(suiteId, new Date().toISOString()),
       env.DB.prepare("INSERT INTO eval_run (id, suite_id, candidate_config, deployment_sha, started_at, completed_at, passed) VALUES (?, ?, 'candidate', 'test', ?, ?, 1)").bind(runId, suiteId, new Date().toISOString(), new Date().toISOString())
     ]);
+    vi.restoreAllMocks();
+    mockSupabaseConsent(false);
+    const withdrawnPromotion = await exports.default.fetch(new Request(`https://axon.test/v1/admin/active-learning/${activeLearningId}`, {
+      method: "POST", headers: { authorization: "Bearer test-admin-token", "content-type": "application/json", "x-axon-student-id": TEST_STUDENT_ID },
+      body: JSON.stringify({ status: "PROMOTED", reviewer: "reviewer-1", evidenceUri: "urn:axon:review:evidence", evalRunId: runId })
+    }));
+    expect(withdrawnPromotion.status).toBe(400);
+
+    vi.restoreAllMocks();
+    mockSupabaseConsent(true);
     const acceptedPromotion = await exports.default.fetch(new Request(`https://axon.test/v1/admin/active-learning/${activeLearningId}`, {
-      method: "POST", headers: { authorization: "Bearer test-admin-token", "content-type": "application/json" },
+      method: "POST", headers: { authorization: "Bearer test-admin-token", "content-type": "application/json", "x-axon-student-id": TEST_STUDENT_ID },
       body: JSON.stringify({ status: "PROMOTED", reviewer: "reviewer-1", evidenceUri: "urn:axon:review:evidence", evalRunId: runId })
     }));
     expect(acceptedPromotion.status).toBe(200);
