@@ -1,0 +1,9 @@
+# AXON document vision contract
+
+The Intelligence Worker calls the private `DOCUMENT_VISION` service binding only when `AXON_VISION_PRIVACY_MODE=zdr`. The bound `axon-document-vision` Worker has `workers_dev=false`, disables preview URLs, has no public route, and independently refuses inference until its Gemini and Workers AI privacy modes are both attested as `zdr`. It must not retain request bodies, use them for training, or log raw images. It receives JSON with `contractVersion: "axon-document-vision.v1"`, `pageId`, `mimeType`, and `dataBase64` plus the matching contract header.
+
+The response is schema-validated and bounded to 32 MB. It includes normalized deterministic quality metrics, consensus orientation, layout regions, multi-signal ink features, and one or more recognition reads per textual region. The service uses two different model families and preserves their reader IDs; automatic text trust still requires exact normalized agreement downstream. Conditioning may return `conditionedImageBase64` with `conditionedImageMimeType=image/webp`; AXON stores it as a separate immutable R2 artifact linked to the original hash. Conditioning is limited to deterministic rotation and contrast normalization. Generative enhancement is forbidden.
+
+The provider does not decide truth, marks, question ownership, or insight eligibility. Those decisions remain in the Worker: quality policy, question graph construction, ink classification, global mark matching, read reconciliation, confidence calculation, and trusted-field state are deterministic owners.
+
+If the service is missing, either reader fails, privacy is unattested, output fails schema validation, or evidence is ambiguous, the page is retried and then moved to `REVIEW_REQUIRED`. The Worker never substitutes a single reader, the tutor path, or a less private endpoint.

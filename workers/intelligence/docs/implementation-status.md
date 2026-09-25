@@ -1,0 +1,20 @@
+# Specification implementation status
+
+## Implemented and verified locally
+
+- Worker-first tutor orchestration with immutable prompt/schema hashes, checked-in routing, strict privacy policies, provider abstraction, structured output, deterministic and model verification, one repair, controlled failure, and pedagogy rendering.
+- Evidence and claim graphs with explicit information classes, provenance, contradiction checks, teacher-mark protection, current-fact retrieval requirements, prompt-injection fencing, and insufficient-evidence responses.
+- Deterministic calculator, polynomial equivalence, linear solving/step validation, dimensional units/conversion, formula/molar-mass chemistry, and equation balancing.
+- Immutable R2 paper ingestion, SHA-256 deduplication, quality policy, non-generative conditioning contract, layout/question/ink/mark/read stages, confidence escalation, trusted fields, student review, additive corrections, and active-learning prioritization.
+- A private `axon-document-vision` Worker with pre-decode byte/pixel bounds, deterministic quality metrics, deterministic rotation/contrast conditioning policy, Gemini 3.5 Flash-Lite plus Workers AI Moondream independent reads, conservative geometry/text reconciliation, and a private service binding into `axon-intelligence`.
+- D1 provenance for deployments, routes, prompts, schemas, traces, evidence, claims, provider health, document stages, evaluation, shadow results, and capability probes. The authenticated release probe now exercises live Gemini structured output/thinking, Tavily search/extract authority, and both private document readers through a synthetic image before emitting the certification artifact.
+- Supabase and D1 traces distinguish transport, schema, and semantic success and record canonical intent, bounded tool identifiers, grounding use, verifier failures, repair attempts, and final answer status without raw student content.
+- HMAC-pseudonymized student identifiers, bounded bodies, internal bearer authentication, D1 rate windows, correction idempotency, redacted trace evidence, and fail-closed public retrieval minimization.
+- Canary/rollback policy, shadow-mode storage rules, minimum benchmark release gates, CI, migrations, and operational runbooks.
+- Cryptographically bound release-evidence verification derives scanner, tutor, retrieval, privacy, capability-probe, rollback, and staged-canary gates from private reviewed artifacts instead of trusting self-reported counts.
+- Live Supabase routing now targets `gemini-3.5-flash-lite` for all six enabled stages, disables training on every route, records stage-specific thinking levels, and identifies the active paper-feedback contract as `paper_feedback.v2`.
+- The intelligence Worker uses generated Wrangler bindings checked into source, the 2026-09-24 compatibility date, and current Cloudflare tooling; clean CI verifies that generated bindings remain in sync.
+
+## Intentionally blocked from production release
+
+The repository contains no fabricated certification. Cloudflare D1, R2, KV, and queue resources exist and their IDs are versioned, but the release remains blocked until production secrets are installed on `axon-intelligence` and `axon-document-vision`, zero-retention is contractually attested for both document readers, the private vision service is deployed, live Gemini/Tavily/vision probes pass, the private evidence bundle proves a reviewed scanner set of at least 100 papers and 1,500 questions plus a hand-reviewed tutor set of at least 500 cases, a rollback drill is evidenced, and staged canary metrics pass. Physical scanner accuracy and provider behavior cannot be proven by local unit tests.

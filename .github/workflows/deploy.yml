@@ -15,6 +15,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run check:generated-types
       - run: npm run typecheck
       - run: npm test
       - run: npm run test:registry
@@ -25,7 +26,7 @@ jobs:
     needs: typecheck-and-test
     strategy:
       matrix:
-        worker: [triage, structure, crop, content, reconcile, adjudicate, explain, sweep, api]
+        worker: [triage, structure, crop, content, reconcile, adjudicate, explain, sweep, api, intelligence, document-vision]
       # One worker's dry-run failing should not hide the result for the rest.
       fail-fast: false
     steps:
@@ -52,6 +53,8 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     strategy:
       matrix:
+        # intelligence is deliberately excluded until its release preflight has
+        # real privacy, benchmark, rollback, and secret evidence.
         worker: [triage, structure, crop, content, reconcile, adjudicate, explain, sweep, api]
       # One worker's deploy failing should not silently skip verifying the
       # rest — each is independent and every failure should be visible.

@@ -1,0 +1,33 @@
+{
+  "name": "@mastery/document-vision",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run build && npm run lint && npm test",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "types": "wrangler types src/generated-bindings.d.ts --include-runtime false --env-interface DocumentVisionBindings",
+    "types:check": "wrangler types src/generated-bindings.d.ts --include-runtime false --env-interface DocumentVisionBindings --check",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@jsquash/jpeg": "^1.6.0",
+    "@jsquash/png": "^3.1.1",
+    "@jsquash/webp": "^1.5.0",
+    "@mastery/shared": "*",
+    "@sinclair/typebox": "^0.34.52"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "@types/node": "^24.10.1",
+    "eslint": "^9.36.0",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.138.0"
+  }
+}

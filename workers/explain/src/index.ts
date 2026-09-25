@@ -7,7 +7,7 @@ import {
   instruction as tier1Instruction,
   SCHEMA as TIER1_SCHEMA,
   validate as validateTier1,
-} from "@mastery/shared/prompts/explain_tier1.v1.js";
+} from "@mastery/shared/prompts/explain_tier1.v2.js";
 import {
   SYSTEM as TIER2_SYSTEM,
   instruction as tier2Instruction,

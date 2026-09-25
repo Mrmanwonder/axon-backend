@@ -1,6 +1,6 @@
 # axon-backend
 
-The `mastery-*` Cloudflare Workers pipeline behind [Axon](https://github.com/Mrmanwonder/Axon-Site):
+The `mastery-*` Cloudflare Workers pipeline behind [Axon](https://github.com/Mrmanwonder/Axon-Site), plus the fail-closed `axon-intelligence` tutor and document-intelligence service:
 triage → structure → content → reconcile → adjudicate → explain, plus
 `mastery-sweep` (a `*/15 * * * *` cron for stuck-run recovery and R2
 garbage collection) and `mastery-api` (the student-facing HTTP worker).
@@ -29,7 +29,7 @@ shared/                 the actually-shared library — one copy, not six
     prompts.ts + prompts/*.ts  stage system prompts, schemas, validators
     __tests__/                unit tests for the pure logic above
 workers/
-  triage/ structure/ content/ reconcile/ adjudicate/ explain/ sweep/ api/
+  triage/ structure/ content/ reconcile/ adjudicate/ explain/ sweep/ api/ intelligence/
     src/index.ts    wrangler.toml    package.json
 db/migrations/       reference snapshot of RPCs + migration history
 docs/                 AXON_FIX_BRIEF.md, and why this repo exists
