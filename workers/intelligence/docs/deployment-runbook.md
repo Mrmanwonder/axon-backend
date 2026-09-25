@@ -9,7 +9,8 @@
 5. Apply D1 migrations remotely, then `POST /v1/admin/capabilities/probe` with the admin bearer token and retain its complete JSON response as `capability-probe.json`. The endpoint persists the individual Gemini, Tavily, and document-vision results in D1 and emits the exact certification artifact; a false flag is a release blocker.
 6. Assemble the private evidence bundle described in `release-evidence.md`, populate `certification/release.json` with its exact digests, and set `AXON_RELEASE_EVIDENCE_DIR` plus the stage being promoted in `AXON_RELEASE_TARGET_STAGE`. Never copy the example values without evidence. The preflight derives counts and quality metrics from the reviewed records rather than trusting the JSON summary.
 7. Run `npm ci`, generated-binding checks, the repository typecheck/tests, both Worker checks, both dry-runs, `npm audit`, and `npm run release:preflight`.
-8. Deploy `axon-document-vision` first and verify its private `/health` through a service binding. Deploy `axon-intelligence` only after that target exists. Neither Worker is part of the automatic `main` deployment matrix until certification is complete.
+8. Deploy `axon-document-vision` first and verify its private `/health` through a temporary audited service binding. Deploy `axon-intelligence` only after that target exists. Neither Worker is part of the automatic `main` deployment matrix until certification is complete.
+9. Only after the certified intelligence deployment is healthy, add the `INTELLIGENCE` service binding to `workers/api/wrangler.toml`, deploy `mastery-api`, and verify an authenticated synthetic tutor request. Until that cutover the checked-in API intentionally has no service binding and returns a controlled `503` for `/tutor`; this keeps ordinary pipeline deployments independent of an unreleased target.
 
 ## Rollout
 

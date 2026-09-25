@@ -53,8 +53,10 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     strategy:
       matrix:
-        # intelligence is deliberately excluded until its release preflight has
-        # real privacy, benchmark, rollback, and secret evidence.
+        # intelligence and document-vision are deliberately excluded until the
+        # release preflight has real privacy, benchmark, rollback, probe, and
+        # secret evidence. No deployed Worker may bind to either service before
+        # they are admitted to this same deployment plan.
         worker: [triage, structure, crop, content, reconcile, adjudicate, explain, sweep, api]
       # One worker's deploy failing should not silently skip verifying the
       # rest — each is independent and every failure should be visible.
