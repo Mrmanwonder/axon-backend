@@ -3,6 +3,9 @@ import { RequestSchema, parseSchema, type VisionAnalysis, type VisionRequest } f
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
 const MAX_JSON_BYTES = 17_000_000;
 const EXPECTED_CONTRACT = "axon-document-vision.v1";
+// A small, immutable, synthetic page. It contains no student data and exists only
+// to exercise both live image readers through the exact production pipeline.
+const PROBE_IMAGE_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAIAAAABACAIAAABdtOgoAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAoUlEQVR4nO3RMQEAAAyDsPk33cnIQwxwcAt1Np8GYA3AGoA1AGsA1gCsAVgDsAZgDcAagDUAawDWAKwBWAOwBmANwBqANQBrANYArAFYA7AGYA3AGoA1AGsA1gCsAVgDsAZgDcAagDUAawDWAKwBWAOwBmANwBqANQBrANYArAFYA7AGYA3AGoA1AGsA1gCsAVgDsAZgDcAagDUAawDWgFkPFV6lksnA/9EAAAAASUVORK5CYII=";
 
 const json = (value: unknown, status = 200): Response => new Response(JSON.stringify(value), { status, headers: JSON_HEADERS });
 
@@ -46,6 +49,29 @@ export async function handleRequestWith(request: Request, env: Env, analyze: (in
   if (request.method === "GET" && url.pathname === "/health") {
     const privacyReady = privacyIsReady(env);
     return json({ status: privacyReady ? "ready" : "not_ready", version: env.AXON_VISION_VERSION, privacyReady }, privacyReady ? 200 : 503);
+  }
+  if (request.method === "POST" && url.pathname === "/v1/probe") {
+    if (request.headers.get("x-axon-contract-version") !== EXPECTED_CONTRACT) return json({ error: "CONTRACT_VERSION_REQUIRED" }, 400);
+    if (!privacyIsReady(env)) return json({ error: "PRIVACY_ATTESTATION_REQUIRED" }, 503);
+    try {
+      const analysis = await analyze({
+        contractVersion: EXPECTED_CONTRACT,
+        pageId: "synthetic-capability-probe",
+        mimeType: "image/png",
+        dataBase64: PROBE_IMAGE_BASE64
+      });
+      return json({
+        status: "passed",
+        contractVersion: EXPECTED_CONTRACT,
+        version: env.AXON_VISION_VERSION,
+        regionCount: analysis.regions.length,
+        readGroupCount: analysis.reads.length
+      });
+    } catch (error) {
+      const failure = safeError(error);
+      console.error(JSON.stringify({ event: "document_vision_probe_failed", code: failure.code }));
+      return json({ status: "failed", error: failure.code }, 502);
+    }
   }
   if (url.pathname !== "/v1/analyze") return json({ error: "NOT_FOUND" }, 404);
   if (request.method !== "POST") return json({ error: "METHOD_NOT_ALLOWED" }, 405);

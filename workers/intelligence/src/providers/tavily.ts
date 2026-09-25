@@ -24,7 +24,7 @@ export function sourceAuthority(url: string, purpose: RetrievalRequest["purpose"
 }
 
 export class TavilyRetrievalService implements RetrievalService {
-  constructor(readonly apiKey: string, readonly apiBase: string, readonly cache?: KVNamespace) {}
+  constructor(readonly apiKey: string, readonly apiBase: string, readonly cache?: KVNamespace, readonly timeoutMs = 8_000) {}
 
   async retrieve(request: RetrievalRequest): Promise<Evidence[]> {
     const query = request.query.replace(/\s+/g, " ").trim().slice(0, 400);
@@ -37,6 +37,7 @@ export class TavilyRetrievalService implements RetrievalService {
     const searchResponse = await fetch(`${this.apiBase}/search`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${this.apiKey}` },
+      signal: AbortSignal.timeout(this.timeoutMs),
       body: JSON.stringify({
         query, search_depth: "advanced", chunks_per_source: 3, max_results: maximum,
         include_domains: request.preferredDomains ?? [], include_answer: false,
@@ -61,6 +62,7 @@ export class TavilyRetrievalService implements RetrievalService {
     const extractResponse = await fetch(`${this.apiBase}/extract`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${this.apiKey}` },
+      signal: AbortSignal.timeout(this.timeoutMs),
       body: JSON.stringify({ urls: candidates.map((item) => item.url), extract_depth: "advanced", query, chunks_per_source: 3, format: "markdown", include_images: false })
     });
     if (!extractResponse.ok) throw new Error(`RETRIEVAL_FAILURE extract ${extractResponse.status}`);

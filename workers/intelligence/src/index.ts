@@ -11,7 +11,7 @@ import { ConceptTaxonomy } from "./academic/concepts/taxonomy";
 import { promptRegistry } from "./prompts";
 import { commitReviewedPaperPage, getPaperPage, reviewPaperPage } from "./document/repository";
 import { RUNTIME_CONFIG_V3 } from "./config/runtime.v3";
-import { persistCapabilityProbe, probeTutorProvider } from "./providers/capabilities";
+import { persistCapabilityProbe, probeReleaseCapabilities } from "./providers/capabilities";
 import { runShadowTutor } from "./evaluation/shadow";
 import { enforceRateLimit } from "./intelligence/security/rate-limit";
 import { lookupIdempotentResult, storeIdempotentResult } from "./intelligence/security/idempotency";
@@ -142,9 +142,24 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
   }
   if (request.method === "POST" && url.pathname === "/v1/admin/capabilities/probe") {
     const provider = new GeminiProvider(env, String(env.GEMINI_PRIVACY_MODE) === "zdr" ? "zdr" : "unverified");
-    const results = await probeTutorProvider(provider, RUNTIME_CONFIG_V3.primaryModel);
-    await persistCapabilityProbe(env.DB, provider.id, RUNTIME_CONFIG_V3.primaryModel, results);
-    return json({ provider: provider.id, model: RUNTIME_CONFIG_V3.primaryModel, results });
+    // Certification must exercise the live search and extract endpoints, not a
+    // previously cached result that merely proves an older deployment worked.
+    const retrieval = env.TAVILY_API_KEY ? new TavilyRetrievalService(env.TAVILY_API_KEY, env.TAVILY_API_BASE, undefined, 5_000) : undefined;
+    const result = await probeReleaseCapabilities({
+      provider,
+      model: RUNTIME_CONFIG_V3.primaryModel,
+      ...(retrieval ? { retrieval } : {}),
+      visionService: env.DOCUMENT_VISION,
+      visionPrivacyAttested: String(env.AXON_VISION_PRIVACY_MODE) === "zdr",
+      deploymentSha: env.AXON_DEPLOYMENT_SHA,
+      configRevision: env.AXON_CONFIG_REVISION
+    });
+    await Promise.all([
+      persistCapabilityProbe(env.DB, provider.id, RUNTIME_CONFIG_V3.primaryModel, result.tutor),
+      persistCapabilityProbe(env.DB, "tavily", "search-extract", [result.tavily]),
+      persistCapabilityProbe(env.DB, "axon-document-vision", "private-v1", [result.vision])
+    ]);
+    return json({ ...result.artifact, details: { tutor: result.tutor, tavily: result.tavily, vision: result.vision } });
   }
   if (request.method === "GET" && url.pathname === "/v1/admin/active-learning") {
     return json({ items: await listActiveLearning(env.DB, url.searchParams.get("status") ?? "QUEUED", Number(url.searchParams.get("limit") ?? "50")) });
@@ -159,11 +174,13 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     return json({ providers: rows.results });
   }
   if (request.method === "GET" && url.pathname === "/v1/admin/readiness") {
-    const [promptCount, openProviders, structuredProbe, thinkingProbe, visionServiceReady] = await Promise.all([
+    const [promptCount, openProviders, structuredProbe, thinkingProbe, retrievalProbe, visionProbe, visionServiceReady] = await Promise.all([
       env.DB.prepare("SELECT COUNT(*) AS count FROM prompt_artifact").first<{ count: number }>(),
       env.DB.prepare("SELECT COUNT(*) AS count FROM provider_health WHERE state = 'OPEN'").first<{ count: number }>(),
       env.DB.prepare("SELECT passed FROM capability_probe WHERE model = ? AND capability = 'structured_output' ORDER BY probed_at DESC LIMIT 1").bind(RUNTIME_CONFIG_V3.primaryModel).first<{ passed: number }>(),
       env.DB.prepare("SELECT passed FROM capability_probe WHERE model = ? AND capability = 'thinking' ORDER BY probed_at DESC LIMIT 1").bind(RUNTIME_CONFIG_V3.primaryModel).first<{ passed: number }>(),
+      env.DB.prepare("SELECT passed FROM capability_probe WHERE provider = 'tavily' AND capability = 'native_search' ORDER BY probed_at DESC LIMIT 1").first<{ passed: number }>(),
+      env.DB.prepare("SELECT passed FROM capability_probe WHERE provider = 'axon-document-vision' AND capability = 'image_input' ORDER BY probed_at DESC LIMIT 1").first<{ passed: number }>(),
       String(env.AXON_VISION_PRIVACY_MODE) === "zdr"
         ? env.DOCUMENT_VISION.fetch("https://axon-document-vision/health").then((response) => response.ok).catch(() => false)
         : Promise.resolve(false)
@@ -173,6 +190,8 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
       geminiZdr: String(env.GEMINI_PRIVACY_MODE) === "zdr",
       visionZdr: String(env.AXON_VISION_PRIVACY_MODE) === "zdr" && visionServiceReady,
       retrievalConfigured: Boolean(env.TAVILY_API_KEY),
+      retrievalProbePassed: retrievalProbe?.passed === 1,
+      visionProbePassed: visionProbe?.passed === 1,
       pseudonymizationConfigured: Boolean(env.AXON_PSEUDONYM_KEY),
       promptArtifactsPersisted: (promptCount?.count ?? 0) > 0,
       providerCircuitsClosed: (openProviders?.count ?? 0) === 0,

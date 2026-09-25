@@ -56,6 +56,38 @@ describe("document-vision Worker", () => {
     await expect(response.json()).resolves.toMatchObject({ status: "not_ready", privacyReady: false });
   });
 
+  it("runs the private capability probe through the production analysis callback", async () => {
+    const env = {
+      GEMINI_PRIVACY_MODE: "zdr",
+      WORKERS_AI_PRIVACY_MODE: "zdr",
+      AXON_VISION_VERSION: "vision-test",
+      GOOGLE_API_KEY: "test-key",
+      AI: {}
+    } as unknown as Env;
+    let inputPageId: string | undefined;
+    const response = await handleRequestWith(new Request("https://vision.test/v1/probe", {
+      method: "POST",
+      headers: { "x-axon-contract-version": "axon-document-vision.v1" }
+    }), env, (input) => {
+      inputPageId = input.pageId;
+      return Promise.resolve({
+        qualityMetrics: { blur: 0, glareFraction: 0, perspectiveDegrees: 0, resolution: 1, compression: 0, cropCompleteness: 1, shadowFraction: 0 },
+        orientationDegrees: 0,
+        regions: [],
+        reads: []
+      });
+    });
+    expect(inputPageId).toBe("synthetic-capability-probe");
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "passed",
+      contractVersion: "axon-document-vision.v1",
+      version: "vision-test",
+      regionCount: 0,
+      readGroupCount: 0
+    });
+  });
+
   it("builds a consumer-valid analysis from two readers", async () => {
     const decoded: RgbaImage = { data: new Uint8ClampedArray(4 * 4 * 4).fill(240), width: 4, height: 4 };
     const analysis = await analyzeDocument({

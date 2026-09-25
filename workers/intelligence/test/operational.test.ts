@@ -7,6 +7,7 @@ import { runShadowTutor } from "../src/evaluation/shadow";
 import type { AIProvider } from "../src/providers/types";
 import { enforceRateLimit } from "../src/intelligence/security/rate-limit";
 import { pseudonymizeIdentifier } from "../src/intelligence/security/privacy";
+import { probeReleaseCapabilities } from "../src/providers/capabilities";
 
 const printed = { printedProbability: 0.98, colourDistanceFromPrint: 0.02, strokeDifference: 0.02, marginTendency: 0.05, annotationOverlap: 0.05, handwritingDifference: 0.05 };
 const student = { printedProbability: 0.02, colourDistanceFromPrint: 0.1, strokeDifference: 0.9, marginTendency: 0.05, annotationOverlap: 0.05, handwritingDifference: 0.05 };
@@ -92,9 +93,65 @@ describe("operational pipeline", () => {
   it("records an unattested capability probe without sending a model request", async () => {
     const response = await exports.default.fetch(new Request("https://axon.test/v1/admin/capabilities/probe", { method: "POST", headers: { authorization: "Bearer test-admin-token" } }));
     expect(response.status).toBe(200);
-    const payload = await response.json<{ results: Array<{ capability: string; passed: boolean }> }>();
-    expect(payload.results.find((item) => item.capability === "zero_data_retention")?.passed).toBe(false);
-    expect(payload.results.find((item) => item.capability === "structured_output")?.passed).toBe(false);
+    const payload = await response.json<{
+      formatVersion: string;
+      geminiPassed: boolean;
+      tavilyPassed: boolean;
+      visionPassed: boolean;
+      details: { tutor: Array<{ capability: string; passed: boolean }> };
+    }>();
+    expect(payload).toMatchObject({
+      formatVersion: "axon-capability-probe.v1",
+      geminiPassed: false,
+      tavilyPassed: false,
+      visionPassed: false
+    });
+    expect(payload.details.tutor.find((item) => item.capability === "zero_data_retention")?.passed).toBe(false);
+    expect(payload.details.tutor.find((item) => item.capability === "structured_output")?.passed).toBe(false);
+    const persisted = await env.DB.prepare("SELECT provider, capability, passed FROM capability_probe ORDER BY provider, capability").all<{ provider: string; capability: string; passed: number }>();
+    expect(persisted.results).toEqual(expect.arrayContaining([
+      { provider: "axon-document-vision", capability: "image_input", passed: 0 },
+      { provider: "tavily", capability: "native_search", passed: 0 }
+    ]));
+  });
+
+  it("produces a certification-shaped artifact only when Gemini, Tavily, and vision all pass live contracts", async () => {
+    const provider: AIProvider = {
+      id: "gemini-zdr",
+      generate: (request) => Promise.resolve({ requestedModel: request.model, servedModel: request.model, latencyMs: 1, usage: {}, output: { probe: "ok" } })
+    };
+    const result = await probeReleaseCapabilities({
+      provider,
+      model: "gemini-3.5-flash-lite",
+      retrieval: {
+        retrieve: () => Promise.resolve([{
+          id: "probe-source",
+          informationClass: "VERIFIED_EXTERNAL",
+          source: "official_source",
+          authority: "primary",
+          value: { title: "Official assessment objectives" },
+          provenance: { url: "https://www.aqa.org.uk/subjects", retrievedAt: "2026-09-25T00:00:00.000Z" },
+          verification: "verified"
+        }])
+      },
+      visionService: {
+        fetch: () => Promise.resolve(new Response(JSON.stringify({ status: "passed", contractVersion: "axon-document-vision.v1", version: "vision-v1", regionCount: 0, readGroupCount: 0 }), { headers: { "content-type": "application/json" } }))
+      },
+      visionPrivacyAttested: true,
+      deploymentSha: "abc123",
+      configRevision: "v3.test",
+      now: () => new Date("2026-09-25T00:00:00.000Z")
+    });
+    expect(result.artifact).toEqual({
+      formatVersion: "axon-capability-probe.v1",
+      model: "gemini-3.5-flash-lite",
+      geminiPassed: true,
+      tavilyPassed: true,
+      visionPassed: true,
+      deploymentSha: "abc123",
+      configRevision: "v3.test",
+      observedAt: "2026-09-25T00:00:00.000Z"
+    });
   });
 
   it("runs shadow output invisibly and stores only metrics plus a hash", async () => {
