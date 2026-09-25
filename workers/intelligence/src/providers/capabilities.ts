@@ -113,14 +113,15 @@ async function probeVision(service: ServiceFetcher, privacyAttested: boolean): P
       method: "POST",
       headers: { "x-axon-contract-version": "axon-document-vision.v1" }
     });
-    const payload = await readBoundedJsonBody<{ status?: string; contractVersion?: string; version?: string; regionCount?: number; readGroupCount?: number }>(response.body, 100_000);
-    const passed = response.ok && payload.status === "passed" && payload.contractVersion === "axon-document-vision.v1";
+    const payload = await readBoundedJsonBody<{ status?: string; contractVersion?: string; version?: string; regionCount?: number; readGroupCount?: number; readerCount?: number }>(response.body, 100_000);
+    const passed = response.ok && payload.status === "passed" && payload.contractVersion === "axon-document-vision.v1" &&
+      (payload.regionCount ?? 0) > 0 && (payload.readGroupCount ?? 0) > 0 && (payload.readerCount ?? 0) >= 2;
     return {
       capability: "image_input",
       passed,
       details: passed
-        ? { contractVersion: payload.contractVersion, version: payload.version, regionCount: payload.regionCount, readGroupCount: payload.readGroupCount }
-        : { reason: `Vision probe returned ${response.status}.` }
+        ? { contractVersion: payload.contractVersion, version: payload.version, regionCount: payload.regionCount, readGroupCount: payload.readGroupCount, readerCount: payload.readerCount }
+        : { reason: "Vision probe did not prove a live staged read by two distinct readers.", responseStatus: response.status, contractVersion: payload.contractVersion, regionCount: payload.regionCount, readGroupCount: payload.readGroupCount, readerCount: payload.readerCount }
     };
   } catch (error) {
     return { capability: "image_input", passed: false, details: { reason: error instanceof Error ? error.message : "Unknown vision probe failure" } };

@@ -3,9 +3,9 @@ import { RequestSchema, parseSchema, type VisionAnalysis, type VisionRequest } f
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
 const MAX_JSON_BYTES = 17_000_000;
 const EXPECTED_CONTRACT = "axon-document-vision.v1";
-// A small, immutable, synthetic page. It contains no student data and exists only
-// to exercise both live image readers through the exact production pipeline.
-const PROBE_IMAGE_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAIAAAABACAIAAABdtOgoAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAoUlEQVR4nO3RMQEAAAyDsPk33cnIQwxwcAt1Np8GYA3AGoA1AGsA1gCsAVgDsAZgDcAagDUAawDWAKwBWAOwBmANwBqANQBrANYArAFYA7AGYA3AGoA1AGsA1gCsAVgDsAZgDcAagDUAawDWAKwBWAOwBmANwBqANQBrANYArAFYA7AGYA3AGoA1AGsA1gCsAVgDsAZgDcAagDUAawDWgFkPFV6lksnA/9EAAAAASUVORK5CYII=";
+// A small, immutable, synthetic printed page. It contains no student data and
+// forces the production probe through layout discovery and a targeted crop read.
+const PROBE_IMAGE_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAUAAAAC0AQMAAADfKmdSAAAABlBMVEX///8AAABVwtN+AAAACXBIWXMAAAsTAAALEwEAmpwYAAABxUlEQVRYw+3ZMUvDQBQA4Duu5BRq4lgwJk7OneTA0uYH+CMCDl2FLgUFM8WlmJ/g31AcmlJpl6Kr4wX/QLqlEI13VEKXPCNUcXhve/Al797LHTeEEAwoaFErgh/AoFZdhAgR/ib0aZwkuS2s9+ImKYJqKKlcTj86GkYrAFLJ5GB+1xU0kc6wU12aS5aeRrwn6CS2hYAgv+iZfKyhSwBIFHRNNr6nkyKSMBSOyR41vMlAaAr1xodMQQpDK+/dcg3jnc438DLiQkPbBqFtD+aRGNKJdAQMzeXbh4bFC7xGYckkF2qOxTwVeBQQIkT4vyCVxFun6pkLALKMxGWWAdBoraHHVDaCYLMdK0M8S2VNAHKSv/bjc+LtBtcBBFkyW5z5JyzTA2hB41mFi8WRzXINBQQPw6eX1CYeVaWh8TT2wtmIfEEJdb0XzkdHJxoSGkNd3z9Pb/3+OsvBL3M15Wo8OmM57nCECBEi3IS0LmSVhDfEJuTV0ChhY58QtxIaTqu8FdpuelANuyXkviur12gcl5BJqBnDKKG+hGpCN60FmQTXuAH9mqWNdk1oipoQ3g4G2TbkZIinECFChAgR/gHc+j8kDCg+AfhL0r/YuEyWAAAAAElFTkSuQmCC";
 
 const json = (value: unknown, status = 200): Response => new Response(JSON.stringify(value), { status, headers: JSON_HEADERS });
 
@@ -60,12 +60,16 @@ export async function handleRequestWith(request: Request, env: Env, analyze: (in
         mimeType: "image/png",
         dataBase64: PROBE_IMAGE_BASE64
       });
+      const readerIds = new Set(analysis.reads.flatMap((group) => group.reads.flatMap((read) => read.readerIds)));
+      const independentlyReadRegion = analysis.reads.some((group) => new Set(group.reads.flatMap((read) => read.readerIds)).size >= 2);
+      if (analysis.regions.length === 0 || analysis.reads.length === 0 || !independentlyReadRegion) throw new Error("TWO_INDEPENDENT_READERS_REQUIRED");
       return json({
         status: "passed",
         contractVersion: EXPECTED_CONTRACT,
         version: env.AXON_VISION_VERSION,
         regionCount: analysis.regions.length,
-        readGroupCount: analysis.reads.length
+        readGroupCount: analysis.reads.length,
+        readerCount: readerIds.size
       });
     } catch (error) {
       const failure = safeError(error);

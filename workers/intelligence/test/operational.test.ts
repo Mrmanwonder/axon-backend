@@ -139,7 +139,7 @@ describe("operational pipeline", () => {
         }])
       },
       visionService: {
-        fetch: () => Promise.resolve(new Response(JSON.stringify({ status: "passed", contractVersion: "axon-document-vision.v1", version: "vision-v1", regionCount: 0, readGroupCount: 0 }), { headers: { "content-type": "application/json" } }))
+        fetch: () => Promise.resolve(new Response(JSON.stringify({ status: "passed", contractVersion: "axon-document-vision.v1", version: "vision-v1", regionCount: 1, readGroupCount: 1, readerCount: 2 }), { headers: { "content-type": "application/json" } }))
       },
       visionPrivacyAttested: true,
       deploymentSha: "abc123",

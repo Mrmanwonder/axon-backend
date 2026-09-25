@@ -1,37 +1,65 @@
 import { describe, expect, it } from "vitest";
 import type { RgbaImage } from "@mastery/shared/crop.js";
-import { reconcileReaders } from "../src/reconcile";
-import type { ReaderOutput } from "../src/schema";
+import { reconcileTargetedRegion } from "../src/reconcile";
+import type { ReaderRegion, TargetedRegionRead } from "../src/schema";
 
 const pixels: RgbaImage = { data: new Uint8ClampedArray(100 * 100 * 4).fill(220), width: 100, height: 100 };
-const quality = { blur: 0.1, glareFraction: 0, perspectiveDegrees: 0, resolution: 1, compression: 0, cropCompleteness: 1, shadowFraction: 0 };
+const region: ReaderRegion = {
+  class: "printed_question",
+  box: { x: 0.1, y: 0.1, width: 0.5, height: 0.1 },
+  confidence: 0.96,
+  text: "Solve x + 1 = 2",
+  layer: "PRINTED"
+};
 
-function output(text: string | null, x = 0.1, layer: ReaderOutput["regions"][number]["layer"] = "PRINTED"): ReaderOutput {
+function targeted(overrides: Partial<TargetedRegionRead> = {}): TargetedRegionRead {
   return {
-    orientationDegrees: 0,
-    perspectiveDegrees: 0,
-    cropCompleteness: 1,
-    regions: [{ class: "printed_question", box: { x, y: 0.1, width: 0.5, height: 0.1 }, confidence: 0.96, text, layer }]
+    class: "printed_question",
+    layer: "PRINTED",
+    confidence: 0.95,
+    value: "Solve x + 1 = 2",
+    alternatives: [],
+    status: "read",
+    ...overrides
   };
 }
 
-describe("independent-reader reconciliation", () => {
-  it("exposes two independent reads and consensus text only on agreement", () => {
-    const result = reconcileReaders([{ id: "gemini", output: output("Solve x + 1 = 2") }, { id: "moondream", output: output("Solve x + 1 = 2", 0.11) }], quality, pixels);
-    expect(result.regions).toHaveLength(1);
-    expect(result.regions[0]?.text).toBe("Solve x + 1 = 2");
-    expect(result.reads[0]?.reads.map((read) => read.readerIds[0])).toEqual(["gemini", "moondream"]);
+function reconcile(read: TargetedRegionRead, layout: ReaderRegion = region) {
+  return reconcileTargetedRegion({
+    region: layout,
+    targeted: read,
+    layoutReaderId: "layout",
+    targetedReaderId: "targeted",
+    image: pixels,
+    id: "r-0001"
+  });
+}
+
+describe("targeted-region reconciliation", () => {
+  it("retains agreed text and exposes two independent reads", () => {
+    const result = reconcile(targeted());
+    expect(result.region.text).toBe("Solve x + 1 = 2");
+    expect(result.region.confidence).toBe(0.95);
+    expect(result.reads.reads.map((read) => read.readerIds[0])).toEqual(["layout", "targeted"]);
   });
 
   it("does not collapse conflicting readings into a trusted value", () => {
-    const result = reconcileReaders([{ id: "gemini", output: output("12") }, { id: "moondream", output: output("17") }], quality, pixels);
-    expect(result.regions[0]?.text).toBeUndefined();
-    expect(result.reads[0]?.reads.map((read) => read.value)).toEqual(["12", "17"]);
+    const result = reconcile(targeted({ value: "Solve x + 7 = 2", alternatives: ["Solve x + 1 = 2"] }));
+    expect(result.region.text).toBeUndefined();
+    expect(result.region.confidence).toBeLessThanOrEqual(0.79);
+    expect(result.reads.reads.map((read) => read.value)).toEqual(["Solve x + 1 = 2", "Solve x + 7 = 2"]);
   });
 
-  it("caps unmatched regions below automatic-trust confidence", () => {
-    const secondary = output("Q2", 0.8);
-    const result = reconcileReaders([{ id: "gemini", output: output("Q1") }, { id: "moondream", output: { ...secondary, regions: [{ ...secondary.regions[0], class: "header" }] } }], quality, pixels);
-    expect(result.regions.every((region) => region.confidence <= 0.49)).toBe(true);
+  it("never trusts a value attached to an unreadable targeted result", () => {
+    const result = reconcile(targeted({ status: "unreadable" }));
+    expect(result.region.text).toBeUndefined();
+    expect(result.region.confidence).toBeLessThanOrEqual(0.49);
+    expect(result.reads.reads[1]?.value).toBeNull();
+  });
+
+  it("downgrades class and layer disagreement and withholds ink signals", () => {
+    const result = reconcile(targeted({ class: "student_answer", layer: "STUDENT" }));
+    expect(result.region.confidence).toBeLessThanOrEqual(0.49);
+    expect(result.region.inkSignals).toBeUndefined();
   });
 });
