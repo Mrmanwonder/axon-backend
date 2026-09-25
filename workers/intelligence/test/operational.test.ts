@@ -272,5 +272,21 @@ describe("operational pipeline", () => {
     expect(promoted.status).toBe(400);
     const item = await env.DB.prepare("SELECT status, reviewer FROM active_learning_queue WHERE id = ?").bind(activeLearningId).first<{ status: string; reviewer: string }>();
     expect(item).toEqual({ status: "LABELLED", reviewer: "reviewer-1" });
+    const labelledTargets = await env.DB.prepare("SELECT DISTINCT status FROM active_learning_target WHERE correction_id IN (SELECT correction_id FROM active_learning_queue WHERE id = ?)").bind(activeLearningId).all<{ status: string }>();
+    expect(labelledTargets.results).toEqual([{ status: "LABELLED" }]);
+
+    const suiteId = `suite-${crypto.randomUUID()}`;
+    const runId = `run-${crypto.randomUUID()}`;
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO eval_suite (id, name, version, category, created_at) VALUES (?, 'review gate', '1', 'correction', ?)").bind(suiteId, new Date().toISOString()),
+      env.DB.prepare("INSERT INTO eval_run (id, suite_id, candidate_config, deployment_sha, started_at, completed_at, passed) VALUES (?, ?, 'candidate', 'test', ?, ?, 1)").bind(runId, suiteId, new Date().toISOString(), new Date().toISOString())
+    ]);
+    const acceptedPromotion = await exports.default.fetch(new Request(`https://axon.test/v1/admin/active-learning/${activeLearningId}`, {
+      method: "POST", headers: { authorization: "Bearer test-admin-token", "content-type": "application/json" },
+      body: JSON.stringify({ status: "PROMOTED", reviewer: "reviewer-1", evidenceUri: "urn:axon:review:evidence", evalRunId: runId })
+    }));
+    expect(acceptedPromotion.status).toBe(200);
+    const readyTargets = await env.DB.prepare("SELECT DISTINCT status FROM active_learning_target WHERE correction_id IN (SELECT correction_id FROM active_learning_queue WHERE id = ?)").bind(activeLearningId).all<{ status: string }>();
+    expect(readyTargets.results).toEqual([{ status: "READY" }]);
   });
 });

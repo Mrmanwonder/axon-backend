@@ -22,6 +22,36 @@ describe("Worker", () => {
     expect(row).toEqual({ predicted_json: "2", corrected_json: "3", accepted_json: "3" });
     const learning = await env.DB.prepare("SELECT priority, status FROM active_learning_queue WHERE correction_id IN (SELECT id FROM student_correction WHERE artifact_id = ?)").bind("paper:q1").first<{ priority: number; status: string }>();
     expect(learning).toEqual({ priority: 0.65, status: "QUEUED" });
+    const targets = await env.DB.prepare("SELECT target FROM active_learning_target WHERE correction_id IN (SELECT id FROM student_correction WHERE artifact_id = ?) ORDER BY target").bind("paper:q1").all<{ target: string }>();
+    expect(targets.results.map((item) => item.target)).toEqual(["BENCHMARK_EXPANSION", "ERROR_CLUSTERING", "HTR_DATASET", "LAYOUT_TRAINING", "PROMPT_REGRESSION"]);
+    const cluster = await env.DB.prepare("SELECT field, correction_count, high_confidence_count FROM correction_error_cluster").first<{ field: string; correction_count: number; high_confidence_count: number }>();
+    expect(cluster).toEqual({ field: "mark", correction_count: 1, high_confidence_count: 0 });
+  });
+
+  it("routes correction evidence into calibration and private learning ledgers without copying values", async () => {
+    const artifactId = `paper:${crypto.randomUUID()}`;
+    const correction = {
+      field: "recognized_text", predicted: "x = 7", corrected: "x = 1", acceptedValue: "x = 1",
+      artifactId, pipelineVersion: "3.0.0", model: "vision", promptHash: "prompt-hash",
+      contextMetadata: { confidence: 0.92, layer: "STUDENT", regionClass: "student_answer", stage: "document_reading" }
+    };
+    const response = await exports.default.fetch(new Request("https://axon.test/v1/corrections", {
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer test-token" }, body: JSON.stringify(correction)
+    }));
+    expect(response.status).toBe(201);
+    const targetResponse = await exports.default.fetch(new Request("https://axon.test/v1/admin/learning/targets?status=QUEUED", { headers: { authorization: "Bearer test-admin-token" } }));
+    const targetPayload = await targetResponse.json<{ items: Array<Record<string, unknown>> }>();
+    const relevantTargets = targetPayload.items.filter((item) => item["artifact_id"] === artifactId).map((item) => item["target"]).sort();
+    expect(relevantTargets).toEqual(["BENCHMARK_EXPANSION", "CONFIDENCE_RECALIBRATION", "ERROR_CLUSTERING", "HTR_DATASET", "PROMPT_REGRESSION"]);
+    expect(JSON.stringify(targetPayload)).not.toContain("x = 7");
+    expect(JSON.stringify(targetPayload)).not.toContain("x = 1");
+    const calibration = await exports.default.fetch(new Request("https://axon.test/v1/admin/learning/calibration", { headers: { authorization: "Bearer test-admin-token" } }));
+    await expect(calibration.json()).resolves.toMatchObject({ buckets: [{ confidence_bucket: 9, observations: 1, mean_confidence: 0.92, empirical_accuracy: 0 }] });
+    const clusters = await exports.default.fetch(new Request("https://axon.test/v1/admin/learning/error-clusters", { headers: { authorization: "Bearer test-admin-token" } }));
+    const clusterPayload = await clusters.json<{ clusters: Array<Record<string, unknown>> }>();
+    expect(clusterPayload.clusters.find((item) => item["field"] === "recognized_text")).toMatchObject({ field: "recognized_text", correction_count: 1, high_confidence_count: 1 });
+    expect(JSON.stringify(clusterPayload)).not.toContain("x = 7");
+    expect(JSON.stringify(clusterPayload)).not.toContain("x = 1");
   });
   it("replays correction results idempotently", async () => {
     const correction = {

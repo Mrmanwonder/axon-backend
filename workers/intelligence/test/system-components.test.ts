@@ -9,6 +9,7 @@ import { recognitionPath, reconcileReads } from "../src/document/recognition";
 import { transitionPaper, type PaperState } from "../src/document/pipeline";
 import { nextRolloutStage, rollback } from "../src/deployment/rollout";
 import { configuredModelRates, estimateModelCost } from "../src/intelligence/telemetry/cost";
+import { planCorrectionLearning, predictionMatchesAccepted, prioritizeCorrection } from "../src/intelligence/corrections/active-learning";
 
 describe("AxonConfidence", () => {
   it("derives confidence from evidence features, not model self-report", () => {
@@ -83,5 +84,36 @@ describe("cache and deployment controls", () => {
     if (!rates) throw new Error("Expected configured rates");
     expect(estimateModelCost(1_000_000, 500_000, rates)).toBeCloseTo(1);
     expect(configuredModelRates(undefined, "1.5")).toBeUndefined();
+  });
+});
+
+describe("correction learning", () => {
+  const event = {
+    field: "recognized_text", predicted: { answer: "x", confidence: 0.9 }, corrected: { answer: "x" },
+    acceptedValue: { confidence: 0.9, answer: "x" }, artifactId: "paper:r1", pipelineVersion: "3",
+    model: "vision", promptHash: "prompt", contextMetadata: { confidence: 0.9, layer: "STUDENT" }
+  };
+
+  it("recognizes an accepted prediction despite object key order", () => {
+    expect(predictionMatchesAccepted(event)).toBe(true);
+    expect(prioritizeCorrection(event)).toMatchObject({ priority: 0.1, reasons: ["prediction_confirmed"] });
+  });
+
+  it("routes actual high-confidence errors to calibration, HTR, prompt regression, and clustering", async () => {
+    const erroneous = { ...event, acceptedValue: { answer: "y", confidence: 0.9 } };
+    const candidate = prioritizeCorrection(erroneous);
+    const plan = await planCorrectionLearning(erroneous, candidate.reasons);
+    expect(candidate.reasons).toContain("high_confidence_error");
+    expect(plan.targets).toEqual(expect.arrayContaining(["BENCHMARK_EXPANSION", "CONFIDENCE_RECALIBRATION", "HTR_DATASET", "PROMPT_REGRESSION", "ERROR_CLUSTERING"]));
+    expect(plan.calibration).toEqual({ confidence: 0.9, bucket: 9, predictionCorrect: false });
+    expect(plan.errorCluster?.signature).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("never copies a caller-supplied field value into an error-cluster aggregate", async () => {
+    const sensitiveField = { ...event, field: "student_email_alice_example_com", acceptedValue: { answer: "y" } };
+    const candidate = prioritizeCorrection(sensitiveField);
+    const plan = await planCorrectionLearning(sensitiveField, candidate.reasons);
+    expect(plan.errorCluster?.field).toBe("other");
+    expect(JSON.stringify(plan.errorCluster)).not.toContain("alice");
   });
 });
