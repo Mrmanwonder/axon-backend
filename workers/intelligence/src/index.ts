@@ -6,7 +6,7 @@ import { ingestPaperPage, processPaperBatch, type PaperJob } from "./document/in
 import { providerIsAvailable, recordConceptTaxonomy, recordDeploymentProvenance, recordProviderObservation, recordRuntimeArtifacts, writeTutorAudit } from "./intelligence/telemetry/repository";
 import { readBoundedJsonBody } from "./shared/bounded-json";
 import { authenticateInternalRequest } from "./intelligence/security/auth";
-import { prioritizeCorrection } from "./intelligence/corrections/active-learning";
+import { planCorrectionLearning, prioritizeCorrection } from "./intelligence/corrections/active-learning";
 import { ConceptTaxonomy } from "./academic/concepts/taxonomy";
 import { promptRegistry } from "./prompts";
 import { commitReviewedPaperPage, getPaperPage, reviewPaperPage } from "./document/repository";
@@ -19,7 +19,10 @@ import { readInsightPatterns, recordInsightObservation } from "./academic/insigh
 import { configuredModelRates, estimateModelCost } from "./intelligence/telemetry/cost";
 import { persistEvalSuite } from "./evaluation/repository";
 import { GOLDEN_CASES } from "./evaluation/golden";
-import { listActiveLearning, reviewActiveLearning } from "./intelligence/corrections/repository";
+import {
+  calibrationSummary, correctionLearningStatements, listActiveLearning, listErrorClusters,
+  listLearningTargets, reviewActiveLearning
+} from "./intelligence/corrections/repository";
 import { recordStableKnowledge, resolveStableKnowledge, resolveStableKnowledgeFromDb } from "./academic/stable-knowledge";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
@@ -119,13 +122,15 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     if (idempotency.cached) return json(idempotency.cached.payload, idempotency.cached.status);
     const id = crypto.randomUUID();
     const learning = prioritizeCorrection(correction);
+    const learningPlan = await planCorrectionLearning(correction, learning.reasons);
     const createdAt = new Date().toISOString();
     const learningId = crypto.randomUUID();
     await env.DB.batch([
       env.DB.prepare("INSERT INTO student_correction (id, field, predicted_json, corrected_json, accepted_json, artifact_id, pipeline_version, model, prompt_hash, context_metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(id, correction.field, JSON.stringify(correction.predicted), JSON.stringify(correction.corrected), JSON.stringify(correction.acceptedValue), correction.artifactId, correction.pipelineVersion, correction.model, correction.promptHash, JSON.stringify(correction.contextMetadata), createdAt),
       env.DB.prepare("INSERT INTO active_learning_queue (id, correction_id, priority, reasons_json, status, created_at) VALUES (?, ?, ?, ?, 'QUEUED', ?)")
-        .bind(learningId, id, learning.priority, JSON.stringify(learning.reasons), createdAt)
+        .bind(learningId, id, learning.priority, JSON.stringify(learning.reasons), createdAt),
+      ...correctionLearningStatements(env.DB, id, learningPlan, createdAt)
     ]);
     const result = { id, accepted: true, activeLearningId: learningId };
     await storeIdempotentResult(env.DB, url.pathname, idempotency, { status: 201, payload: result });
@@ -164,6 +169,15 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
   }
   if (request.method === "GET" && url.pathname === "/v1/admin/active-learning") {
     return json({ items: await listActiveLearning(env.DB, url.searchParams.get("status") ?? "QUEUED", Number(url.searchParams.get("limit") ?? "50")) });
+  }
+  if (request.method === "GET" && url.pathname === "/v1/admin/learning/targets") {
+    return json({ items: await listLearningTargets(env.DB, url.searchParams.get("target"), url.searchParams.get("status") ?? "QUEUED", Number(url.searchParams.get("limit") ?? "100")) });
+  }
+  if (request.method === "GET" && url.pathname === "/v1/admin/learning/error-clusters") {
+    return json({ clusters: await listErrorClusters(env.DB, Number(url.searchParams.get("limit") ?? "100")) });
+  }
+  if (request.method === "GET" && url.pathname === "/v1/admin/learning/calibration") {
+    return json({ buckets: await calibrationSummary(env.DB) });
   }
   const activeLearningMatch = url.pathname.match(/^\/v1\/admin\/active-learning\/([^/]+)$/);
   if (request.method === "POST" && activeLearningMatch?.[1]) {
