@@ -154,10 +154,11 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
       deploymentSha: env.AXON_DEPLOYMENT_SHA,
       configRevision: env.AXON_CONFIG_REVISION
     });
+    const provenance = { deploymentSha: env.AXON_DEPLOYMENT_SHA, configRevision: env.AXON_CONFIG_REVISION };
     await Promise.all([
-      persistCapabilityProbe(env.DB, provider.id, RUNTIME_CONFIG_V3.primaryModel, result.tutor),
-      persistCapabilityProbe(env.DB, "tavily", "search-extract", [result.tavily]),
-      persistCapabilityProbe(env.DB, "axon-document-vision", "private-v1", [result.vision])
+      persistCapabilityProbe(env.DB, provider.id, result.artifact.model, result.tutor, provenance),
+      persistCapabilityProbe(env.DB, "tavily", "search-extract", [result.tavily], provenance),
+      persistCapabilityProbe(env.DB, "axon-document-vision", "private-v1", [result.vision], provenance)
     ]);
     return json({ ...result.artifact, details: { tutor: result.tutor, tavily: result.tavily, vision: result.vision } });
   }
@@ -177,10 +178,10 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     const [promptCount, openProviders, structuredProbe, thinkingProbe, retrievalProbe, visionProbe, visionServiceReady] = await Promise.all([
       env.DB.prepare("SELECT COUNT(*) AS count FROM prompt_artifact").first<{ count: number }>(),
       env.DB.prepare("SELECT COUNT(*) AS count FROM provider_health WHERE state = 'OPEN'").first<{ count: number }>(),
-      env.DB.prepare("SELECT passed FROM capability_probe WHERE model = ? AND capability = 'structured_output' ORDER BY probed_at DESC LIMIT 1").bind(RUNTIME_CONFIG_V3.primaryModel).first<{ passed: number }>(),
-      env.DB.prepare("SELECT passed FROM capability_probe WHERE model = ? AND capability = 'thinking' ORDER BY probed_at DESC LIMIT 1").bind(RUNTIME_CONFIG_V3.primaryModel).first<{ passed: number }>(),
-      env.DB.prepare("SELECT passed FROM capability_probe WHERE provider = 'tavily' AND capability = 'native_search' ORDER BY probed_at DESC LIMIT 1").first<{ passed: number }>(),
-      env.DB.prepare("SELECT passed FROM capability_probe WHERE provider = 'axon-document-vision' AND capability = 'image_input' ORDER BY probed_at DESC LIMIT 1").first<{ passed: number }>(),
+      env.DB.prepare("SELECT model, passed FROM capability_probe WHERE provider = 'gemini-zdr' AND capability = 'structured_output' AND deployment_sha = ? AND config_revision = ? ORDER BY probed_at DESC LIMIT 1").bind(env.AXON_DEPLOYMENT_SHA, env.AXON_CONFIG_REVISION).first<{ model: string; passed: number }>(),
+      env.DB.prepare("SELECT model, passed FROM capability_probe WHERE provider = 'gemini-zdr' AND capability = 'thinking' AND deployment_sha = ? AND config_revision = ? ORDER BY probed_at DESC LIMIT 1").bind(env.AXON_DEPLOYMENT_SHA, env.AXON_CONFIG_REVISION).first<{ model: string; passed: number }>(),
+      env.DB.prepare("SELECT passed FROM capability_probe WHERE provider = 'tavily' AND capability = 'native_search' AND deployment_sha = ? AND config_revision = ? ORDER BY probed_at DESC LIMIT 1").bind(env.AXON_DEPLOYMENT_SHA, env.AXON_CONFIG_REVISION).first<{ passed: number }>(),
+      env.DB.prepare("SELECT passed FROM capability_probe WHERE provider = 'axon-document-vision' AND capability = 'image_input' AND deployment_sha = ? AND config_revision = ? ORDER BY probed_at DESC LIMIT 1").bind(env.AXON_DEPLOYMENT_SHA, env.AXON_CONFIG_REVISION).first<{ passed: number }>(),
       String(env.AXON_VISION_PRIVACY_MODE) === "zdr"
         ? env.DOCUMENT_VISION.fetch("https://axon-document-vision/health").then((response) => response.ok).catch(() => false)
         : Promise.resolve(false)
@@ -195,8 +196,8 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
       pseudonymizationConfigured: Boolean(env.AXON_PSEUDONYM_KEY),
       promptArtifactsPersisted: (promptCount?.count ?? 0) > 0,
       providerCircuitsClosed: (openProviders?.count ?? 0) === 0,
-      structuredOutputProbePassed: structuredProbe?.passed === 1,
-      thinkingProbePassed: thinkingProbe?.passed === 1,
+      structuredOutputProbePassed: structuredProbe?.model === RUNTIME_CONFIG_V3.primaryModel && structuredProbe.passed === 1,
+      thinkingProbePassed: thinkingProbe?.model === RUNTIME_CONFIG_V3.primaryModel && thinkingProbe.passed === 1,
       costRatesConfigured: Boolean(rates),
       releaseCertified: String(env.AXON_RELEASE_CERTIFIED) === "true"
     };

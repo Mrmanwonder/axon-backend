@@ -47,10 +47,12 @@ describe("operational pipeline", () => {
     await exports.default.fetch(new Request("https://axon.test/health"));
     const prompts = await env.DB.prepare("SELECT COUNT(*) AS count FROM prompt_artifact").first<{ count: number }>();
     const routes = await env.DB.prepare("SELECT COUNT(*) AS count FROM ai_route WHERE config_revision = 'v3.default'").first<{ count: number }>();
+    const models = await env.DB.prepare("SELECT DISTINCT model FROM ai_route WHERE config_revision = 'v3.default'").all<{ model: string }>();
     const evalCases = await env.DB.prepare("SELECT COUNT(*) AS count FROM eval_case WHERE suite_id = 'axon-golden-v3'").first<{ count: number }>();
     const stableFacts = await env.DB.prepare("SELECT COUNT(*) AS count FROM stable_knowledge WHERE active = 1").first<{ count: number }>();
     expect(prompts?.count).toBeGreaterThanOrEqual(5);
     expect(routes?.count).toBe(5);
+    expect(models.results).toEqual([{ model: "gemini-3.5-flash-lite" }]);
     expect(evalCases?.count).toBeGreaterThanOrEqual(17);
     expect(stableFacts?.count).toBeGreaterThanOrEqual(3);
   });
@@ -113,6 +115,8 @@ describe("operational pipeline", () => {
       { provider: "axon-document-vision", capability: "image_input", passed: 0 },
       { provider: "tavily", capability: "native_search", passed: 0 }
     ]));
+    const provenance = await env.DB.prepare("SELECT DISTINCT deployment_sha, config_revision FROM capability_probe").all<{ deployment_sha: string; config_revision: string }>();
+    expect(provenance.results).toEqual([{ deployment_sha: "development", config_revision: "v3.default" }]);
   });
 
   it("produces a certification-shaped artifact only when Gemini, Tavily, and vision all pass live contracts", async () => {
@@ -152,6 +156,43 @@ describe("operational pipeline", () => {
       configRevision: "v3.test",
       observedAt: "2026-09-25T00:00:00.000Z"
     });
+  });
+
+  it("fails certification when the live route requests or serves a different model", async () => {
+    const provider: AIProvider = {
+      id: "gemini-zdr",
+      generate: () => Promise.resolve({
+        requestedModel: "gemini-unapproved",
+        servedModel: "gemini-unapproved",
+        latencyMs: 1,
+        usage: {},
+        output: { probe: "ok" }
+      })
+    };
+    const result = await probeReleaseCapabilities({
+      provider,
+      model: "gemini-3.5-flash-lite",
+      retrieval: {
+        retrieve: () => Promise.resolve([{
+          id: "probe-source",
+          informationClass: "VERIFIED_EXTERNAL",
+          source: "official_source",
+          authority: "primary",
+          value: { title: "Official assessment objectives" },
+          provenance: { url: "https://www.aqa.org.uk/subjects", retrievedAt: "2026-09-25T00:00:00.000Z" },
+          verification: "verified"
+        }])
+      },
+      visionService: {
+        fetch: () => Promise.resolve(new Response(JSON.stringify({ status: "passed", contractVersion: "axon-document-vision.v1" }), { headers: { "content-type": "application/json" } }))
+      },
+      visionPrivacyAttested: true,
+      deploymentSha: "abc123",
+      configRevision: "v3.test"
+    });
+    expect(result.artifact.model).toBe("gemini-unapproved");
+    expect(result.artifact.geminiPassed).toBe(false);
+    expect(result.tutor.find((item) => item.capability === "structured_output")).toMatchObject({ passed: false });
   });
 
   it("runs shadow output invisibly and stores only metrics plus a hash", async () => {

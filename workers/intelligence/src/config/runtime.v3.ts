@@ -3,7 +3,10 @@ import type { Capability, Difficulty, RiskLevel, ThinkingLevel } from "../intell
 export const RUNTIME_CONFIG_V3 = Object.freeze({
   revisionId: "v3.default",
   pipelineVersion: "3.0.0",
-  primaryModel: "supabase:model_route:tutor",
+  // The release contract names the requested model explicitly. Supabase still
+  // owns the live route used by callModel(), but this expected value lets the
+  // capability probe and circuit breaker fail closed if that route drifts.
+  primaryModel: "gemini-3.5-flash-lite",
   thinking: {
     classification: "minimal", simple: "low", standard: "medium", complex: "high",
     verification: "medium", adjudication: "high"

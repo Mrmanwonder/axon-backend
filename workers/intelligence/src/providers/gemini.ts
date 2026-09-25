@@ -23,10 +23,11 @@ export class GeminiProvider implements AIProvider {
         },
         validate: (value) => parseSchema(request.schema, value),
         timeoutMs: request.timeoutMs,
-        thinkingLevel: request.thinkingLevel
+        thinkingLevel: request.thinkingLevel,
+        expectedModel: request.model
       });
       return {
-        requestedModel: response.model,
+        requestedModel: response.requestedModel,
         servedModel: response.model,
         output: response.parsed,
         usage: {
