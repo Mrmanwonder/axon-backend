@@ -27,7 +27,13 @@ export interface ReleaseCapabilityProbeResult {
 
 const ProbeSchema = Type.Object({ probe: Type.Literal("ok") }, { additionalProperties: false });
 
-export async function probeTutorProvider(provider: AIProvider, model: string): Promise<CapabilityProbeResult[]> {
+interface TutorProviderProbe {
+  results: CapabilityProbeResult[];
+  requestedModel?: string;
+  servedModel?: string;
+}
+
+export async function probeTutorProvider(provider: AIProvider, model: string): Promise<TutorProviderProbe> {
   const results: CapabilityProbeResult[] = [
     { capability: "zero_data_retention", passed: provider.id === "gemini-zdr", details: { providerId: provider.id, attestation: "configuration" } },
     { capability: "timeout_enforcement", passed: true, details: { mechanism: "AbortSignal.timeout via shared model client" } },
@@ -42,7 +48,7 @@ export async function probeTutorProvider(provider: AIProvider, model: string): P
       { capability: "structured_output", passed: false, details: { reason: "Live probe blocked until ZDR is attested." } },
       { capability: "thinking", passed: false, details: { reason: "Live probe blocked until ZDR is attested." } }
     );
-    return results;
+    return { results };
   }
   try {
     const response = await provider.generate({
@@ -50,24 +56,34 @@ export async function probeTutorProvider(provider: AIProvider, model: string): P
       schema: ProbeSchema, thinkingLevel: "minimal", evidence: [], timeoutMs: 5_000
     });
     parseSchema(ProbeSchema, response.output);
-    results.push(
-      { capability: "structured_output", passed: true, details: { servedModel: response.servedModel } },
-      { capability: "thinking", passed: true, details: { requestedLevel: "minimal", servedModel: response.servedModel } }
-    );
+    const modelMatches = response.requestedModel === model && response.servedModel === model;
+    const modelDetails = { expectedModel: model, requestedModel: response.requestedModel, servedModel: response.servedModel };
+    if (modelMatches) {
+      results.push(
+        { capability: "structured_output", passed: true, details: modelDetails },
+        { capability: "thinking", passed: true, details: { ...modelDetails, requestedLevel: "minimal" } }
+      );
+    } else {
+      results.push(
+        { capability: "structured_output", passed: false, details: { ...modelDetails, reason: "Requested or served model did not match the certified model." } },
+        { capability: "thinking", passed: false, details: { ...modelDetails, requestedLevel: "minimal", reason: "Thinking was exercised on a non-certified model." } }
+      );
+    }
+    return { results, requestedModel: response.requestedModel, servedModel: response.servedModel };
   } catch (error) {
     const reason = error instanceof Error ? error.message : "Unknown probe failure";
     results.push(
       { capability: "structured_output", passed: false, details: { reason } },
       { capability: "thinking", passed: false, details: { reason } }
     );
+    return { results };
   }
-  return results;
 }
 
-export async function persistCapabilityProbe(db: D1Database, provider: string, model: string, results: readonly CapabilityProbeResult[]): Promise<void> {
+export async function persistCapabilityProbe(db: D1Database, provider: string, model: string, results: readonly CapabilityProbeResult[], provenance: { deploymentSha: string; configRevision: string }): Promise<void> {
   const probedAt = new Date().toISOString();
-  await db.batch(results.map((result) => db.prepare("INSERT INTO capability_probe (id, provider, model, capability, passed, details_json, probed_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .bind(crypto.randomUUID(), provider, model, result.capability, result.passed ? 1 : 0, JSON.stringify(result.details), probedAt)));
+  await db.batch(results.map((result) => db.prepare("INSERT INTO capability_probe (id, provider, model, capability, passed, details_json, probed_at, deployment_sha, config_revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .bind(crypto.randomUUID(), provider, model, result.capability, result.passed ? 1 : 0, JSON.stringify(result.details), probedAt, provenance.deploymentSha, provenance.configRevision)));
 }
 
 async function probeTavily(retrieval?: RetrievalService): Promise<CapabilityProbeResult> {
@@ -121,17 +137,18 @@ export async function probeReleaseCapabilities(input: {
   configRevision: string;
   now?: () => Date;
 }): Promise<ReleaseCapabilityProbeResult> {
-  const [tutor, tavily, vision] = await Promise.all([
+  const [tutorProbe, tavily, vision] = await Promise.all([
     probeTutorProvider(input.provider, input.model),
     probeTavily(input.retrieval),
     probeVision(input.visionService, input.visionPrivacyAttested)
   ]);
+  const tutor = tutorProbe.results;
   const requiredTutorCapabilities = new Set<ProviderCapability>(["zero_data_retention", "timeout_enforcement", "structured_output", "thinking"]);
   const geminiPassed = [...requiredTutorCapabilities].every((capability) => tutor.some((result) => result.capability === capability && result.passed));
   return {
     artifact: {
       formatVersion: "axon-capability-probe.v1",
-      model: input.model,
+      model: tutorProbe.servedModel ?? tutorProbe.requestedModel ?? input.model,
       geminiPassed,
       tavilyPassed: tavily.passed,
       visionPassed: vision.passed,

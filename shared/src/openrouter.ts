@@ -124,6 +124,8 @@ export interface CallModelOptions<T> {
   routeOverride?: RouteOverride | null;
   timeoutMs?: number;
   thinkingLevel?: "minimal" | "low" | "medium" | "high";
+  /** Fail closed unless both the configured route and provider response use this exact model. */
+  expectedModel?: string;
   /** Canonical tutor intent when this is a tutor call; scanner stages omit it. */
   intent?: string;
   /**
@@ -135,6 +137,7 @@ export interface CallModelOptions<T> {
 
 export interface CallModelResult<T> {
   parsed: T;
+  requestedModel: string;
   model: string;
   promptVersion: string;
   inputTokens: number | null;
@@ -209,6 +212,12 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
 
   const add = (current: number | null, value: number | undefined): number | null =>
     typeof value === "number" && Number.isFinite(value) ? (current ?? 0) + value : current;
+
+  if (opts.expectedModel && route.primary_model !== opts.expectedModel) {
+    const err = new ModelError("route_model_mismatch", `Configured route requested ${route.primary_model}; expected ${opts.expectedModel}.`, 0, false);
+    await log({ model_id: route.primary_model, ok: false, error_code: err.code, verification_status: "failed", verification_failures: [{ code: err.code }], answer_status: "controlled_failure" });
+    throw err;
+  }
 
   const request = async (body: Record<string, unknown>): Promise<any> => {
     let res: Response | undefined;
@@ -294,6 +303,11 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
     inputTokens = add(inputTokens, data.usage?.prompt_tokens);
     outputTokens = add(outputTokens, data.usage?.completion_tokens);
     costUsd = add(costUsd, data.usage?.cost);
+    if (opts.expectedModel && served !== opts.expectedModel) {
+      const err = new ModelError("served_model_mismatch", `Provider served ${served}; expected ${opts.expectedModel}.`, 200, false);
+      await log({ model_id: served, ok: false, error_code: err.code, verification_status: "failed", verification_failures: [{ code: err.code }], answer_status: "controlled_failure", input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd });
+      throw err;
+    }
 
     const message = data.choices?.[0]?.message;
     if (data.error || !message) {
@@ -417,6 +431,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
 
     return {
       parsed,
+      requestedModel: route.primary_model,
       model: served,
       promptVersion: route.prompt_version,
       inputTokens,
