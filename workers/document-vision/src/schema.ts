@@ -14,8 +14,8 @@ export const REGION_CLASSES = [
   "working_area", "header", "footer", "page_number", "crossed_out_work", "continuation_region"
 ] as const;
 
-const RegionClassSchema = Type.Union(REGION_CLASSES.map((value) => Type.Literal(value)));
-const InkLayerSchema = Type.Union(["PRINTED", "STUDENT", "TEACHER", "UNKNOWN"].map((value) => Type.Literal(value)));
+export const RegionClassSchema = Type.Union(REGION_CLASSES.map((value) => Type.Literal(value)));
+export const InkLayerSchema = Type.Union(["PRINTED", "STUDENT", "TEACHER", "UNKNOWN"].map((value) => Type.Literal(value)));
 
 export const ReaderOutputSchema = Type.Object({
   orientationDegrees: Type.Union([0, 90, 180, 270].map((value) => Type.Literal(value))),
@@ -28,6 +28,15 @@ export const ReaderOutputSchema = Type.Object({
     text: Type.Union([Type.String({ maxLength: 10_000 }), Type.Null()]),
     layer: InkLayerSchema
   }, { additionalProperties: false }), { maxItems: 300 })
+}, { additionalProperties: false });
+
+export const TargetedRegionReadSchema = Type.Object({
+  class: RegionClassSchema,
+  layer: InkLayerSchema,
+  confidence: Type.Number({ minimum: 0, maximum: 1 }),
+  value: Type.Union([Type.String({ maxLength: 10_000 }), Type.Null()]),
+  alternatives: Type.Array(Type.String({ maxLength: 10_000 }), { maxItems: 10 }),
+  status: Type.Union([Type.Literal("read"), Type.Literal("ambiguous"), Type.Literal("unreadable")])
 }, { additionalProperties: false });
 
 export const RequestSchema = Type.Object({
@@ -86,6 +95,7 @@ export const VisionAnalysisSchema = Type.Object({
 export type Box = Static<typeof BoxSchema>;
 export type ReaderOutput = Static<typeof ReaderOutputSchema>;
 export type ReaderRegion = ReaderOutput["regions"][number];
+export type TargetedRegionRead = Static<typeof TargetedRegionReadSchema>;
 export type VisionRequest = Static<typeof RequestSchema>;
 export type VisionAnalysis = Static<typeof VisionAnalysisSchema>;
 export type InkLayer = ReaderRegion["layer"];
