@@ -7,6 +7,7 @@ import {
   questionLabelAncestors,
   questionTerms,
   selectScopedCanonicalQuestion,
+  resolveAssessmentIdentity,
   resolveSchemeEvidence,
   type AssessmentCandidate,
 } from "../assessment.js";
@@ -381,6 +382,328 @@ test("scheme retrieval rejects revoked, superseded, or policy-disabled evidence"
     }],
   });
   assert.equal(await resolveSchemeEvidence(inactivePolicy as any, {
+    paperId: "paper-a", questionLabel: "12", marksAvailable: 2,
+  }), null);
+});
+
+
+class AssessmentQuery {
+  table: string;
+  db: AssessmentDb;
+  filters: ((row: any) => boolean)[] = [];
+  patch: Record<string, unknown> | null = null;
+
+  constructor(db: AssessmentDb, table: string) {
+    this.db = db;
+    this.table = table;
+  }
+
+  select() { return this; }
+  eq(column: string, value: unknown) {
+    this.filters.push(row => row[column] === value);
+    return this;
+  }
+  not(column: string, operator: string, value: unknown) {
+    if (operator === "is" && value === null) {
+      this.filters.push(row => row[column] !== null && row[column] !== undefined);
+      return this;
+    }
+    throw new Error("unsupported fake not() operation");
+  }
+  in(column: string, values: unknown[]) {
+    this.filters.push(row => values.includes(row[column]));
+    return this;
+  }
+  update(patch: Record<string, unknown>) {
+    this.patch = patch;
+    return this;
+  }
+
+  rows() {
+    return (this.db.tables[this.table] ?? []).filter(row =>
+      this.filters.every(filter => filter(row))
+    );
+  }
+
+  result() {
+    const rows = this.rows();
+    if (this.patch) {
+      for (const row of rows) Object.assign(row, this.patch);
+    }
+    return rows;
+  }
+
+  async maybeSingle() {
+    const rows = this.result();
+    if (rows.length > 1) return { data: null, error: new Error("multiple rows") };
+    return { data: rows[0] ?? null, error: null };
+  }
+
+  then(resolve: (value: any) => unknown, reject: (reason: unknown) => unknown) {
+    return Promise.resolve({ data: this.result(), error: null }).then(resolve, reject);
+  }
+}
+
+class AssessmentDb {
+  tables: Record<string, any[]>;
+  constructor(tables: Record<string, any[]>) {
+    this.tables = tables;
+  }
+  from(table: string) {
+    return new AssessmentQuery(this, table);
+  }
+}
+
+function assessmentDb(args: {
+  programmeId?: string;
+  offeringCode: string;
+  selectedLevel?: "SL" | "HL" | null;
+  identities: any[];
+}) {
+  const programmeId = args.programmeId ?? "programme";
+  return new AssessmentDb({
+    student: [{ id: "student", programme_id: programmeId }],
+    student_subject: [{
+      student_id: "student",
+      subject_offering_id: "offering",
+      selected_level: args.selectedLevel ?? null,
+    }],
+    subject_offering: [{
+      id: "offering",
+      programme_id: programmeId,
+      external_code: args.offeringCode,
+    }],
+    assessment_identity: args.identities.map(identity => ({
+      programme_id: programmeId,
+      subject_offering_id: "offering",
+      title: "fixture",
+      official_source_url: "https://example.invalid/metadata",
+      ...identity,
+    })),
+    paper: [{ id: "paper", student_id: "student", assessment_identity_id: null }],
+  });
+}
+
+test("Cambridge resolver requires the exact year/session/component/variant identity", async () => {
+  const db = assessmentDb({
+    offeringCode: "9702",
+    identities: [{
+      id: "cambridge-42",
+      level: null,
+      exam_year: 2025,
+      session: "May/June",
+      paper_code: "42",
+      component_code: "9702/42",
+      variant: "2",
+      zone: null,
+      assessment_route: null,
+    }],
+  });
+  const resolved = await resolveAssessmentIdentity(db as any, {
+    studentId: "student",
+    paperId: "paper",
+    candidate,
+  });
+  assert.equal(resolved?.id, "cambridge-42");
+  assert.equal(db.tables.paper[0].assessment_identity_id, "cambridge-42");
+
+  const wrongYear = await resolveAssessmentIdentity(assessmentDb({
+    offeringCode: "9702",
+    identities: [{
+      id: "cambridge-2025",
+      level: null,
+      exam_year: 2025,
+      session: "May/June",
+      paper_code: "42",
+      component_code: "9702/42",
+      variant: "2",
+      zone: null,
+      assessment_route: null,
+    }],
+  }) as any, {
+    studentId: "student",
+    paperId: "paper",
+    candidate: { ...candidate, exam_year: 2024 },
+  });
+  assert.equal(wrongYear, null);
+
+  const wrongSession = await resolveAssessmentIdentity(assessmentDb({
+    offeringCode: "9702",
+    identities: [{
+      id: "cambridge-oct",
+      level: null,
+      exam_year: 2025,
+      session: "Oct/Nov",
+      paper_code: "42",
+      component_code: "9702/42",
+      variant: "2",
+      zone: null,
+      assessment_route: null,
+    }],
+  }) as any, {
+    studentId: "student",
+    paperId: "paper",
+    candidate,
+  });
+  assert.equal(wrongSession, null);
+});
+
+test("CBSE resolver uses subject code plus explicit assessment route", async () => {
+  const cbseCandidate: AssessmentCandidate = {
+    subject_code: "042",
+    level: null,
+    exam_year: 2027,
+    session: null,
+    paper_code: null,
+    component_code: null,
+    variant: null,
+    zone: null,
+    assessment_route: "sample_paper",
+    confidence: "high",
+  };
+  const db = assessmentDb({
+    programmeId: "cbse-senior",
+    offeringCode: "042",
+    identities: [{
+      id: "cbse-physics-sqp",
+      level: null,
+      exam_year: 2027,
+      session: null,
+      paper_code: null,
+      component_code: null,
+      variant: null,
+      zone: null,
+      assessment_route: "sample_paper",
+    }],
+  });
+  assert.equal((await resolveAssessmentIdentity(db as any, {
+    studentId: "student", paperId: "paper", candidate: cbseCandidate,
+  }))?.id, "cbse-physics-sqp");
+
+  const wrongSubject = assessmentDb({
+    programmeId: "cbse-senior",
+    offeringCode: "041",
+    identities: [{
+      id: "cbse-maths-sqp",
+      level: null,
+      exam_year: 2027,
+      session: null,
+      paper_code: null,
+      component_code: null,
+      variant: null,
+      zone: null,
+      assessment_route: "sample_paper",
+    }],
+  });
+  assert.equal(await resolveAssessmentIdentity(wrongSubject as any, {
+    studentId: "student", paperId: "paper", candidate: cbseCandidate,
+  }), null);
+});
+
+test("IB resolver uses the selected SL/HL level and never upgrades the wrong level", async () => {
+  const ibCandidate: AssessmentCandidate = {
+    subject_code: "100452",
+    level: null,
+    exam_year: 2026,
+    session: "May",
+    paper_code: "P1",
+    component_code: null,
+    variant: null,
+    zone: null,
+    assessment_route: null,
+    confidence: "high",
+  };
+  const hl = assessmentDb({
+    programmeId: "ibdp",
+    offeringCode: "100452",
+    selectedLevel: "HL",
+    identities: [{
+      id: "ib-physics-hl-p1",
+      level: "HL",
+      exam_year: 2026,
+      session: "May",
+      paper_code: "P1",
+      component_code: null,
+      variant: null,
+      zone: null,
+      assessment_route: null,
+    }],
+  });
+  assert.equal((await resolveAssessmentIdentity(hl as any, {
+    studentId: "student", paperId: "paper", candidate: ibCandidate,
+  }))?.id, "ib-physics-hl-p1");
+
+  const slSelection = assessmentDb({
+    programmeId: "ibdp",
+    offeringCode: "100452",
+    selectedLevel: "SL",
+    identities: [{
+      id: "ib-physics-hl-p1",
+      level: "HL",
+      exam_year: 2026,
+      session: "May",
+      paper_code: "P1",
+      component_code: null,
+      variant: null,
+      zone: null,
+      assessment_route: null,
+    }],
+  });
+  assert.equal(await resolveAssessmentIdentity(slSelection as any, {
+    studentId: "student", paperId: "paper", candidate: ibCandidate,
+  }), null);
+});
+
+test("ambiguous exact assessment rows remain unbound", async () => {
+  const duplicate = {
+    level: null,
+    exam_year: 2025,
+    session: "May/June",
+    paper_code: "42",
+    component_code: "9702/42",
+    variant: "2",
+    zone: null,
+    assessment_route: null,
+  };
+  const db = assessmentDb({
+    offeringCode: "9702",
+    identities: [
+      { id: "duplicate-a", ...duplicate },
+      { id: "duplicate-b", ...duplicate },
+    ],
+  });
+  assert.equal(await resolveAssessmentIdentity(db as any, {
+    studentId: "student", paperId: "paper", candidate,
+  }), null);
+  assert.equal(db.tables.paper[0].assessment_identity_id, null);
+});
+
+test("scheme retrieval rejects missing and restricted documents", async () => {
+  const missing = schemeDb({ documents: [] });
+  assert.equal(await resolveSchemeEvidence(missing as any, {
+    paperId: "paper-a", questionLabel: "12", marksAvailable: 2,
+  }), null);
+
+  const restricted = schemeDb({
+    documents: [{
+      id: "doc-a",
+      assessment_identity_id: "assessment-a",
+      source_url: "https://ibo.org/restricted-markscheme.pdf",
+      copyright_access_class: "metadata_only",
+      extraction_status: "ready",
+      policy_id: "policy-ib",
+      revoked_at: null,
+      superseded_by_id: null,
+    }],
+    policies: [{
+      id: "policy-ib",
+      hostname: "ibo.org",
+      copyright_access_class: "metadata_only",
+      reproduction_permitted: false,
+      active: true,
+    }],
+  });
+  assert.equal(await resolveSchemeEvidence(restricted as any, {
     paperId: "paper-a", questionLabel: "12", marksAvailable: 2,
   }), null);
 });
