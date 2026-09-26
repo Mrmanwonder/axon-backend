@@ -33,6 +33,7 @@ import { consumeQueue } from "@mastery/shared/worker.js";
 import { objectKey } from "@mastery/shared/r2.js";
 import { pageDimensions } from "@mastery/shared/page.js";
 import { bandForRegion, cutRegion, imageDimensions, type Box, type PageSpan, type RgbaImage } from "@mastery/shared/crop.js";
+import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
 import { decodeImage, encodeWebp } from "./codecs.js";
 import type { Env } from "@mastery/shared/env.js";
 
@@ -79,7 +80,11 @@ async function finish(env: Env, sb: any, runId: string, pageId: string, status: 
   if (advance?.advanced) {
     const regionIds: string[] = advance.enqueue_content ?? [];
     if (env.CONTENT_QUEUE && regionIds.length) {
-      await env.CONTENT_QUEUE.sendBatch(regionIds.map((regionId) => ({ body: { run_id: runId, region_id: regionId } })));
+      await chunkedSendBatch(
+        env.CONTENT_QUEUE,
+        regionIds,
+        (regionId) => ({ body: { run_id: runId, region_id: regionId } })
+      );
     }
     if (advance.enqueue_reconcile && env.RECONCILE_QUEUE) {
       await env.RECONCILE_QUEUE.send({ run_id: runId });
