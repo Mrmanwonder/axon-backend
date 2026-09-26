@@ -153,7 +153,15 @@ const handler = consumeQueue<TriageMessage>(
     await sb.from("paper_page").update({ structure_status: "pending", crop_status: "pending" }).eq("paper_id", run.paper_id);
     const { data: allPages } = await sb.from("paper_page").select("id").eq("paper_id", run.paper_id).not("r2_key", "is", null);
     if (env.STRUCTURE_QUEUE && allPages?.length) {
-      await env.STRUCTURE_QUEUE.sendBatch(allPages.map((page: { id: string }) => ({ body: { run_id: runId, page_id: page.id } })));
+      // ⚡ Bolt: Chunk queue dispatch to avoid 100-message runtime limits on large papers
+      const promises = [];
+      for (let i = 0; i < allPages.length; i += 100) {
+        const chunk = allPages.slice(i, i + 100);
+        promises.push(
+          env.STRUCTURE_QUEUE.sendBatch(chunk.map((page: { id: string }) => ({ body: { run_id: runId, page_id: page.id } })))
+        );
+      }
+      await Promise.all(promises);
     }
 
     // Recorded so §7.7's "triage latency drops to single-digit seconds" can be

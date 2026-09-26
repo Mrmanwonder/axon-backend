@@ -62,9 +62,25 @@ async function enqueueFromAdvance(env: Env, runId: string, advance: AdvanceResul
         "or deploy a structure worker that binds crop-queue."
       );
     }
-    await env.CROP_QUEUE.sendBatch(pageIds.map((pageId) => ({ body: { run_id: runId, page_id: pageId } })));
+    // ⚡ Bolt: Chunk queue dispatch to avoid 100-message runtime limits on large payloads
+    const promises = [];
+    for (let i = 0; i < pageIds.length; i += 100) {
+      const chunk = pageIds.slice(i, i + 100);
+      promises.push(
+        env.CROP_QUEUE.sendBatch(chunk.map((pageId) => ({ body: { run_id: runId, page_id: pageId } })))
+      );
+    }
+    await Promise.all(promises);
   } else if (regionIds.length && env.CONTENT_QUEUE) {
-    await env.CONTENT_QUEUE.sendBatch(regionIds.map((regionId) => ({ body: { run_id: runId, region_id: regionId } })));
+    // ⚡ Bolt: Chunk queue dispatch to avoid 100-message runtime limits on large payloads
+    const promises = [];
+    for (let i = 0; i < regionIds.length; i += 100) {
+      const chunk = regionIds.slice(i, i + 100);
+      promises.push(
+        env.CONTENT_QUEUE.sendBatch(chunk.map((regionId) => ({ body: { run_id: runId, region_id: regionId } })))
+      );
+    }
+    await Promise.all(promises);
   }
 
   if (advance.enqueue_reconcile && env.RECONCILE_QUEUE) {
