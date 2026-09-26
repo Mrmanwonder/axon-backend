@@ -207,7 +207,7 @@ async function resolveIdentity(sb, context, offering, pair, sqpUrl, sqpHash, wri
   return result.data;
 }
 
-async function resolveDocument(sb, context, identity, pair, msUrl, msHash, write) {
+export async function resolveDocument(sb, context, identity, pair, msUrl, msHash, write) {
   const version = pair.header.session + ":" + msHash.slice(0, 16);
   if (!write) return { id: "dry-run-document", source_url: msUrl, source_version: version };
 
@@ -220,6 +220,12 @@ async function resolveDocument(sb, context, identity, pair, msUrl, msHash, write
   if (existing.error) throw existing.error;
   if (existing.data && existing.data.assessment_identity_id !== identity.id) {
     throw new Error("Official scheme hash is already bound to another assessment identity");
+  }
+  if (existing.data?.revoked_at || existing.data?.extraction_status === "revoked") {
+    throw new Error("Official scheme version is revoked and cannot be reactivated by ingestion");
+  }
+  if (existing.data?.superseded_by_id || existing.data?.extraction_status === "superseded") {
+    throw new Error("Official scheme version is superseded and cannot be reactivated by ingestion");
   }
 
   const payload = {
@@ -234,8 +240,6 @@ async function resolveDocument(sb, context, identity, pair, msUrl, msHash, write
     copyright_access_class: context.policy.copyright_access_class,
     extraction_status: "pending",
     parser_version: CBSE_PARSER_VERSION,
-    revoked_at: null,
-    revocation_reason: null,
     metadata: {
       subject_code: pair.header.subjectCode,
       class_level: pair.header.classLevel,
@@ -249,22 +253,42 @@ async function resolveDocument(sb, context, identity, pair, msUrl, msHash, write
 
   let document;
   if (existing.data) {
+    // An unchanged source is the same immutable version. Refresh provenance
+    // metadata without downgrading a document that already completed parsing.
+    const stableStatus = ["ready", "complete", "extracted"].includes(existing.data.extraction_status)
+      ? existing.data.extraction_status
+      : "pending";
     const result = await sb.from("scheme_document")
-      .update(payload).eq("id", existing.data.id).select("*").single();
+      .update({ ...payload, extraction_status: stableStatus })
+      .eq("id", existing.data.id)
+      .select("*")
+      .single();
     if (result.error) throw result.error;
     document = result.data;
   } else {
-    const result = await sb.from("scheme_document").insert(payload).select("*").single();
+    const result = await sb.from("scheme_document")
+      .insert({
+        ...payload,
+        revoked_at: null,
+        revocation_reason: null,
+        superseded_by_id: null,
+      })
+      .select("*")
+      .single();
     if (result.error) throw result.error;
     document = result.data;
   }
 
+  // Preserve the immutable version chain: only the currently active predecessor
+  // may point to this new version. Older already-superseded rows keep the link
+  // that was written when their direct successor was created.
   const older = await sb.from("scheme_document")
     .select("id")
     .eq("assessment_identity_id", identity.id)
     .eq("source_kind", RIGHTS_KIND)
     .neq("id", document.id)
-    .is("revoked_at", null);
+    .is("revoked_at", null)
+    .is("superseded_by_id", null);
   if (older.error) throw older.error;
   for (const prior of older.data ?? []) {
     const result = await sb.from("scheme_document")
