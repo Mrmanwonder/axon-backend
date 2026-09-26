@@ -32,14 +32,6 @@ jobs:
 
       - run: npm ci
 
-      - name: Require production admin credential
-        shell: bash
-        run: |
-          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
-            echo "::error title=Missing repository secret::SUPABASE_SERVICE_ROLE_KEY is not configured for axon-backend; no production write was attempted."
-            exit 1
-          fi
-
       - name: Install PDF text extractor
         run: |
           sudo apt-get update
@@ -47,6 +39,14 @@ jobs:
 
       - name: Verify exact current official source pair without database writes
         run: npm run schemes:cbse -- verify --class=12 --subject=Physics
+
+      - name: Require production admin credential
+        shell: bash
+        run: |
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::error title=Missing repository secret::Official source verification passed, but SUPABASE_SERVICE_ROLE_KEY is not configured for axon-backend; no production write was attempted."
+            exit 1
+          fi
 
       - name: Seed reviewed Physics identity, source document and canonical questions
         run: npm run schemes:cbse -- ingest --class=12 --subject=Physics --write
