@@ -5,6 +5,8 @@ import {
   identityMatchesCandidate,
   normaliseQuestionLabel,
   questionLabelAncestors,
+  questionTerms,
+  selectScopedCanonicalQuestion,
   type AssessmentCandidate,
 } from "../assessment.js";
 
@@ -89,4 +91,103 @@ test("question-label ancestry is deterministic and only strips trailing parts", 
   assert.deepEqual(questionLabelAncestors("29 (b) (ii)"), ["29(B)(II)", "29(B)", "29"]);
   assert.deepEqual(questionLabelAncestors("29"), ["29"]);
   assert.deepEqual(questionLabelAncestors(null), []);
+});
+
+
+test("question text terms drop exam scaffolding but preserve subject content", () => {
+  assert.deepEqual(
+    [...questionTerms("Explain why the magnetic field changes when current increases.")].sort(),
+    ["change", "current", "field", "increas", "magnetic", "why"].filter(term => term !== "why").sort(),
+  );
+});
+
+test("exact and ancestor labels win before any text fallback", () => {
+  const rows = [
+    { id: "q29", question_label: "29", question_text: "Describe magnetic flux density in the coil", max_marks: 3 },
+    { id: "q30", question_label: "30", question_text: "Describe magnetic flux density in the coil", max_marks: 3 },
+  ];
+  const exact = selectScopedCanonicalQuestion(rows, {
+    questionLabel: "30",
+    questionText: "completely unrelated OCR text",
+    marksAvailable: 3,
+  });
+  assert.equal(exact?.question.id, "q30");
+  assert.equal(exact?.mode, "exact_label");
+
+  const ancestor = selectScopedCanonicalQuestion(rows, {
+    questionLabel: "29(a)(ii)",
+    questionText: null,
+    marksAvailable: 3,
+  });
+  assert.equal(ancestor?.question.id, "q29");
+  assert.equal(ancestor?.mode, "ancestor_label");
+});
+
+test("scoped text fallback returns one strong in-assessment match", () => {
+  const rows = [
+    {
+      id: "electric",
+      question_label: "12",
+      question_text: "Calculate the resistance of the lamp using the current and potential difference.",
+      max_marks: 2,
+    },
+    {
+      id: "waves",
+      question_label: "13",
+      question_text: "Determine the wavelength of the sound wave from its frequency and speed.",
+      max_marks: 2,
+    },
+  ];
+  const selected = selectScopedCanonicalQuestion(rows, {
+    questionLabel: "Q?",
+    questionText: "The potential difference and current of the lamp are shown. Calculate its resistance.",
+    marksAvailable: 2,
+  });
+  assert.equal(selected?.question.id, "electric");
+  assert.equal(selected?.mode, "scoped_text");
+});
+
+test("scoped text fallback fails closed on mark mismatch or ambiguity", () => {
+  const markMismatch = selectScopedCanonicalQuestion([
+    {
+      id: "q1",
+      question_label: "1",
+      question_text: "Calculate resistance from current and potential difference for the lamp.",
+      max_marks: 3,
+    },
+  ], {
+    questionLabel: null,
+    questionText: "Calculate the lamp resistance using current and potential difference.",
+    marksAvailable: 2,
+  });
+  assert.equal(markMismatch, null);
+
+  const ambiguous = selectScopedCanonicalQuestion([
+    {
+      id: "a",
+      question_label: "1",
+      question_text: "Explain how current changes when resistance of the circuit increases.",
+      max_marks: 2,
+    },
+    {
+      id: "b",
+      question_label: "2",
+      question_text: "Explain how current changes when resistance in the circuit decreases.",
+      max_marks: 2,
+    },
+  ], {
+    questionLabel: null,
+    questionText: "Explain how current changes when resistance in the circuit changes.",
+    marksAvailable: 2,
+  });
+  assert.equal(ambiguous, null);
+
+  const tooShort = selectScopedCanonicalQuestion([
+    { id: "c", question_label: "3", question_text: "Define momentum", max_marks: 1 },
+  ], {
+    questionLabel: null,
+    questionText: "Define momentum",
+    marksAvailable: 1,
+  });
+  assert.equal(tooShort, null);
 });
