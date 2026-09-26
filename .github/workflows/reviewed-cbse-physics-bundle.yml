@@ -1,0 +1,86 @@
+name: One-time reviewed CBSE Physics bundle
+
+on:
+  pull_request:
+    paths:
+      - "scripts/cbse-scheme-registry.mjs"
+      - ".github/workflows/reviewed-cbse-physics-bundle.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  reviewed-bundle:
+    name: Verify and encrypt reviewed CBSE Physics bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install PDF text extractor
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends poppler-utils
+      - name: Verify exact official source and build local reviewed bundle
+        run: |
+          npm run schemes:cbse -- verify --class=12 --subject=Physics \
+            --bundle="$RUNNER_TEMP/cbse-physics-reviewed.json"
+      - name: Encrypt reviewed bundle for operator handoff
+        env:
+          AXON_REVIEW_PUBLIC_KEY: |
+            -----BEGIN PUBLIC KEY-----
+            MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA5ADZJYuRO0qEM3IrSvyv
+            O/UriNcD5gvWxyJruitRzB+YCU7DyA7ShQdP3e38VT3lHOi+ftsVFrSuaLoztWNC
+            kO4qdAgWEl/pT9ONuKO9OHbnqSRWXWy5eWLUa4SWSthThAyS+cDmnyoLk724pQnJ
+            sGAyCqQmCyyN8F6S7noDKafu1POCV5j/SahiCTs33kwR5uE/6KkcvFMR8DXBbIwe
+            U3eLmlEyWdz5YQyZN2I8kIYnyPHKb6Lh6HOAyIe/x65qcOQt4P2KLO0rfD5w4xKf
+            Zb89c8/FCE6WYjOTqJkavV6qQiH9hg8L405uBgyBjmX38x2sEJvQc430jeHPctIy
+            pIHh8KNFnumMlU1teLSy9UVaxpHL2V8+Hu7UhKsNE2/6mFEhMpKfHKc4xxkRcP6l
+            FQqm/TvEAD4LX+xhFthYLjAGG/BZpR9cKPPb/GE0kxN2LfkmaRg7JjYBGtNhwn2k
+            ROigRYhZNCkXRiGabLoK0nPfnUnHau2CCOflNvsmrhI7AgMBAAE=
+            -----END PUBLIC KEY-----
+        run: |
+          node --input-type=module <<'NODE'
+          import {
+            constants,
+            createCipheriv,
+            publicEncrypt,
+            randomBytes,
+          } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const source = readFileSync(process.env.RUNNER_TEMP + "/cbse-physics-reviewed.json");
+          const key = randomBytes(32);
+          const iv = randomBytes(12);
+          const cipher = createCipheriv("aes-256-gcm", key, iv);
+          const ciphertext = Buffer.concat([cipher.update(source), cipher.final()]);
+          const tag = cipher.getAuthTag();
+          const encryptedKey = publicEncrypt({
+            key: process.env.AXON_REVIEW_PUBLIC_KEY,
+            padding: constants.RSA_PKCS1_OAEP_PADDING,
+            oaepHash: "sha256",
+          }, key);
+
+          writeFileSync(
+            process.env.RUNNER_TEMP + "/cbse-physics-reviewed.encrypted.json",
+            JSON.stringify({
+              version: 1,
+              algorithm: "RSA-OAEP-SHA256+AES-256-GCM",
+              iv: iv.toString("base64"),
+              tag: tag.toString("base64"),
+              encryptedKey: encryptedKey.toString("base64"),
+              ciphertext: ciphertext.toString("base64"),
+            }),
+          );
+          NODE
+      - name: Upload encrypted reviewed bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: cbse-physics-reviewed-encrypted
+          path: ${{ runner.temp }}/cbse-physics-reviewed.encrypted.json
+          if-no-files-found: error
+          retention-days: 1
