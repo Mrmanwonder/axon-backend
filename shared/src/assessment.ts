@@ -36,14 +36,29 @@ export type ResolvedAssessment = {
   official_source_url: string | null;
 };
 
+export type SchemeRetrievalMode = "exact_label" | "ancestor_label" | "scoped_text";
+
 export type SchemeEvidence = {
   canonicalQuestionId: string;
+  questionLabel: string | null;
+  retrievalMode: SchemeRetrievalMode;
   markingScheme: string;
   source: string;
   version: string;
   sourceUrl: string;
   schemeDocumentId: string;
   assessmentIdentityId: string;
+};
+
+export type ScopedCanonicalQuestion = {
+  id: string;
+  question_label: string | null;
+  question_text: string | null;
+  max_marks: number | string | null;
+  marking_scheme?: string | null;
+  scheme_source?: string | null;
+  scheme_version?: string | null;
+  scheme_document_id?: string | null;
 };
 
 function compact(value: unknown): string | null {
@@ -73,6 +88,97 @@ export function questionLabelAncestors(value: unknown): string[] {
     if (current && !out.includes(current)) out.push(current);
   }
   return out;
+}
+
+const QUESTION_STOP_WORDS = new Set([
+  "the", "and", "for", "with", "from", "that", "this", "these", "those",
+  "what", "which", "when", "where", "why", "into", "using", "use", "used", "given",
+  "state", "give", "write", "show", "find", "calculate", "determine", "explain",
+  "describe", "identify", "suggest", "justify", "question", "answer", "marks",
+]);
+
+export function questionTerms(value: unknown): Set<string> {
+  const text = compact(value)?.toLowerCase() ?? "";
+  const out = new Set<string>();
+  for (const raw of text.split(/[^a-z0-9]+/)) {
+    if (!raw) continue;
+    if (/^\d+$/.test(raw)) {
+      out.add(raw);
+      continue;
+    }
+    if (raw.length < 3 || QUESTION_STOP_WORDS.has(raw)) continue;
+    out.add(raw);
+  }
+  return out;
+}
+
+function markMatches(candidate: ScopedCanonicalQuestion, marksAvailable: number | null | undefined): boolean {
+  if (marksAvailable === null || marksAvailable === undefined || !Number.isFinite(Number(marksAvailable))) return true;
+  if (candidate.max_marks === null || candidate.max_marks === undefined) return true;
+  const stored = Number(candidate.max_marks);
+  return Number.isFinite(stored) && Math.abs(stored - Number(marksAvailable)) < 0.001;
+}
+
+function overlapSize(a: Set<string>, b: Set<string>): number {
+  let n = 0;
+  for (const term of a) if (b.has(term)) n++;
+  return n;
+}
+
+export function selectScopedCanonicalQuestion(
+  rows: ScopedCanonicalQuestion[],
+  args: {
+    questionLabel: string | null;
+    questionText?: string | null;
+    marksAvailable?: number | null;
+  },
+): { question: ScopedCanonicalQuestion; mode: SchemeRetrievalMode } | null {
+  const normalisedLabel = normaliseQuestionLabel(args.questionLabel);
+  if (normalisedLabel) {
+    const ancestors = questionLabelAncestors(normalisedLabel);
+    for (let i = 0; i < ancestors.length; i++) {
+      const candidateLabel = ancestors[i];
+      const matches = rows.filter(
+        row => normaliseQuestionLabel(row.question_label) === candidateLabel,
+      );
+      if (matches.length > 1) return null;
+      if (matches.length === 1) {
+        if (!markMatches(matches[0], args.marksAvailable)) return null;
+        return {
+          question: matches[0],
+          mode: i === 0 ? "exact_label" : "ancestor_label",
+        };
+      }
+    }
+  }
+
+  // Text retrieval is deliberately a fallback after exact assessment binding
+  // and exact/ancestor label lookup. It never searches another assessment and
+  // refuses short or ambiguous text rather than guessing.
+  const queryTerms = questionTerms(args.questionText);
+  if (queryTerms.size < 4) return null;
+
+  const ranked = rows
+    .filter(row => markMatches(row, args.marksAvailable))
+    .map(row => {
+      const candidateTerms = questionTerms(row.question_text);
+      if (candidateTerms.size < 3) return null;
+      const overlap = overlapSize(queryTerms, candidateTerms);
+      const union = new Set([...queryTerms, ...candidateTerms]).size;
+      const queryCoverage = overlap / queryTerms.size;
+      const candidateCoverage = overlap / candidateTerms.size;
+      const jaccard = union ? overlap / union : 0;
+      const score = 0.55 * queryCoverage + 0.25 * candidateCoverage + 0.20 * jaccard;
+      return { row, overlap, queryCoverage, score };
+    })
+    .filter((item): item is { row: ScopedCanonicalQuestion; overlap: number; queryCoverage: number; score: number } =>
+      !!item && item.overlap >= 3 && item.queryCoverage >= 0.55 && item.score >= 0.5
+    )
+    .sort((a, b) => b.score - a.score);
+
+  if (!ranked.length) return null;
+  if (ranked.length > 1 && ranked[0].score - ranked[1].score < 0.12) return null;
+  return { question: ranked[0].row, mode: "scoped_text" };
 }
 
 export function candidateIsResolvable(candidate: AssessmentCandidate): boolean {
@@ -167,11 +273,13 @@ export async function resolveAssessmentIdentity(
 
 export async function resolveSchemeEvidence(
   sb: any,
-  args: { paperId: string; questionLabel: string | null },
+  args: {
+    paperId: string;
+    questionLabel: string | null;
+    questionText?: string | null;
+    marksAvailable?: number | null;
+  },
 ): Promise<SchemeEvidence | null> {
-  const label = normaliseQuestionLabel(args.questionLabel);
-  if (!label) return null;
-
   const { data: paper, error: paperError } = await sb.from("paper")
     .select("assessment_identity_id")
     .eq("id", args.paperId)
@@ -179,32 +287,30 @@ export async function resolveSchemeEvidence(
   if (paperError) throw paperError;
   if (!paper?.assessment_identity_id) return null;
 
+  // This is the hard scope boundary. Any fallback ranking below sees only rows
+  // belonging to the exact assessment identity already bound to this paper.
   const { data: rows, error: questionError } = await sb.from("canonical_question")
-    .select("id,assessment_identity_id,question_label,marking_scheme,scheme_source,scheme_version,scheme_document_id")
+    .select("id,assessment_identity_id,question_label,question_text,max_marks,marking_scheme,scheme_source,scheme_version,scheme_document_id")
     .eq("assessment_identity_id", paper.assessment_identity_id);
   if (questionError) throw questionError;
 
-  let question: any = null;
-  for (const candidateLabel of questionLabelAncestors(label)) {
-    const matches = (rows ?? []).filter(
-      (row: any) => normaliseQuestionLabel(row.question_label) === candidateLabel,
-    );
-    if (matches.length > 1) return null;
-    if (matches.length === 1) {
-      question = matches[0];
-      break;
-    }
-  }
-  if (!question) return null;
+  const selected = selectScopedCanonicalQuestion((rows ?? []) as ScopedCanonicalQuestion[], {
+    questionLabel: args.questionLabel,
+    questionText: args.questionText,
+    marksAvailable: args.marksAvailable,
+  });
+  if (!selected) return null;
+
+  const question: any = selected.question;
   if (!question.marking_scheme || !question.scheme_source || !question.scheme_version || !question.scheme_document_id) return null;
 
   const { data: document, error: documentError } = await sb.from("scheme_document")
-    .select("id,source_url,copyright_access_class,extraction_status,policy_id,revoked_at")
+    .select("id,source_url,copyright_access_class,extraction_status,policy_id,revoked_at,superseded_by_id")
     .eq("id", question.scheme_document_id)
     .eq("assessment_identity_id", paper.assessment_identity_id)
     .maybeSingle();
   if (documentError) throw documentError;
-  if (!document || document.revoked_at || !document.policy_id) return null;
+  if (!document || document.revoked_at || document.superseded_by_id || !document.policy_id) return null;
   if (!["public_official", "licensed_official"].includes(document.copyright_access_class)) return null;
   if (!["ready", "complete", "extracted"].includes(document.extraction_status)) return null;
   if (!document.source_url) return null;
@@ -226,6 +332,8 @@ export async function resolveSchemeEvidence(
 
   return {
     canonicalQuestionId: question.id,
+    questionLabel: question.question_label ?? null,
+    retrievalMode: selected.mode,
     markingScheme: question.marking_scheme,
     source: question.scheme_source,
     version: question.scheme_version,
