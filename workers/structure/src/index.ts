@@ -8,6 +8,7 @@ import { mustData, mustOk, mustRpc, mustMaybe } from "@mastery/shared/db.js";
 import { SYSTEM, instruction, SCHEMA, validate } from "@mastery/shared/prompts/structure.v1.js";
 import { loadStructurePage } from "@mastery/shared/structure-page.js";
 import { ConfigurationError } from "@mastery/shared/errors.js";
+import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
 import type { Env } from "@mastery/shared/env.js";
 
 interface StructureMessage {
@@ -62,25 +63,17 @@ async function enqueueFromAdvance(env: Env, runId: string, advance: AdvanceResul
         "or deploy a structure worker that binds crop-queue."
       );
     }
-    // ⚡ Bolt: Chunk queue dispatch to avoid 100-message runtime limits on large payloads
-    const promises = [];
-    for (let i = 0; i < pageIds.length; i += 100) {
-      const chunk = pageIds.slice(i, i + 100);
-      promises.push(
-        env.CROP_QUEUE.sendBatch(chunk.map((pageId) => ({ body: { run_id: runId, page_id: pageId } })))
-      );
-    }
-    await Promise.all(promises);
+    await chunkedSendBatch(
+      env.CROP_QUEUE,
+      pageIds,
+      (pageId) => ({ body: { run_id: runId, page_id: pageId } })
+    );
   } else if (regionIds.length && env.CONTENT_QUEUE) {
-    // ⚡ Bolt: Chunk queue dispatch to avoid 100-message runtime limits on large payloads
-    const promises = [];
-    for (let i = 0; i < regionIds.length; i += 100) {
-      const chunk = regionIds.slice(i, i + 100);
-      promises.push(
-        env.CONTENT_QUEUE.sendBatch(chunk.map((regionId) => ({ body: { run_id: runId, region_id: regionId } })))
-      );
-    }
-    await Promise.all(promises);
+    await chunkedSendBatch(
+      env.CONTENT_QUEUE,
+      regionIds,
+      (regionId) => ({ body: { run_id: runId, region_id: regionId } })
+    );
   }
 
   if (advance.enqueue_reconcile && env.RECONCILE_QUEUE) {

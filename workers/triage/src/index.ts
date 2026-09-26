@@ -4,6 +4,7 @@ import { imageRef } from "@mastery/shared/r2.js";
 import { SYSTEM, instruction, SCHEMA, validate, REJECTION_REASON, qualityFailureMessage, type QualitySignals } from "@mastery/shared/prompts/triage.v1.js";
 import { CAPTURE } from "@mastery/shared/contract.js";
 import { resolveAssessmentIdentity } from "@mastery/shared/assessment.js";
+import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
 import type { Env } from "@mastery/shared/env.js";
 
 const PAGES_TO_LOOK_AT = 6;
@@ -153,15 +154,11 @@ const handler = consumeQueue<TriageMessage>(
     await sb.from("paper_page").update({ structure_status: "pending", crop_status: "pending" }).eq("paper_id", run.paper_id);
     const { data: allPages } = await sb.from("paper_page").select("id").eq("paper_id", run.paper_id).not("r2_key", "is", null);
     if (env.STRUCTURE_QUEUE && allPages?.length) {
-      // ⚡ Bolt: Chunk queue dispatch to avoid 100-message runtime limits on large papers
-      const promises = [];
-      for (let i = 0; i < allPages.length; i += 100) {
-        const chunk = allPages.slice(i, i + 100);
-        promises.push(
-          env.STRUCTURE_QUEUE.sendBatch(chunk.map((page: { id: string }) => ({ body: { run_id: runId, page_id: page.id } })))
-        );
-      }
-      await Promise.all(promises);
+      await chunkedSendBatch(
+        env.STRUCTURE_QUEUE,
+        allPages,
+        (page: { id: string }) => ({ body: { run_id: runId, page_id: page.id } })
+      );
     }
 
     // Recorded so §7.7's "triage latency drops to single-digit seconds" can be
