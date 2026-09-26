@@ -7,6 +7,7 @@ import {
   questionLabelAncestors,
   questionTerms,
   selectScopedCanonicalQuestion,
+  resolveSchemeEvidence,
   type AssessmentCandidate,
 } from "../assessment.js";
 
@@ -190,4 +191,196 @@ test("scoped text fallback fails closed on mark mismatch or ambiguity", () => {
     marksAvailable: 1,
   });
   assert.equal(tooShort, null);
+});
+
+
+class SchemeQuery {
+  table: string;
+  db: SchemeDb;
+  filters: [string, unknown][] = [];
+
+  constructor(db: SchemeDb, table: string) {
+    this.db = db;
+    this.table = table;
+  }
+
+  select() { return this; }
+  eq(column: string, value: unknown) {
+    this.filters.push([column, value]);
+    this.db.calls.push({ table: this.table, column, value });
+    return this;
+  }
+
+  rows() {
+    return (this.db.tables[this.table] ?? []).filter(row =>
+      this.filters.every(([column, value]) => row[column] === value)
+    );
+  }
+
+  async maybeSingle() {
+    const rows = this.rows();
+    if (rows.length > 1) return { data: null, error: new Error("multiple rows") };
+    return { data: rows[0] ?? null, error: null };
+  }
+
+  then(resolve: (value: any) => unknown, reject: (reason: unknown) => unknown) {
+    return Promise.resolve({ data: this.rows(), error: null }).then(resolve, reject);
+  }
+}
+
+class SchemeDb {
+  tables: Record<string, any[]>;
+  calls: { table: string; column: string; value: unknown }[] = [];
+
+  constructor(tables: Record<string, any[]>) {
+    this.tables = tables;
+  }
+
+  from(table: string) {
+    return new SchemeQuery(this, table);
+  }
+}
+
+function schemeDb(overrides: {
+  questions?: any[];
+  documents?: any[];
+  policies?: any[];
+} = {}) {
+  return new SchemeDb({
+    paper: [{ id: "paper-a", assessment_identity_id: "assessment-a" }],
+    canonical_question: overrides.questions ?? [{
+      id: "q-a",
+      assessment_identity_id: "assessment-a",
+      question_label: "12",
+      question_text: "Calculate resistance from the lamp current and potential difference.",
+      max_marks: 2,
+      marking_scheme: "Use R = V / I.",
+      scheme_source: "https://cbseacademic.nic.in/Physics-MS.pdf",
+      scheme_version: "2026-27:test",
+      scheme_document_id: "doc-a",
+    }],
+    scheme_document: overrides.documents ?? [{
+      id: "doc-a",
+      assessment_identity_id: "assessment-a",
+      source_url: "https://cbseacademic.nic.in/Physics-MS.pdf",
+      copyright_access_class: "public_official",
+      extraction_status: "ready",
+      policy_id: "policy-cbse",
+      revoked_at: null,
+      superseded_by_id: null,
+    }],
+    scheme_source_policy: overrides.policies ?? [{
+      id: "policy-cbse",
+      hostname: "cbseacademic.nic.in",
+      copyright_access_class: "public_official",
+      reproduction_permitted: true,
+      active: true,
+    }],
+  });
+}
+
+test("scheme retrieval never crosses the exact assessment scope", async () => {
+  const db = schemeDb({
+    questions: [
+      {
+        id: "q-other",
+        assessment_identity_id: "assessment-b",
+        question_label: "99",
+        question_text: "Calculate resistance from the lamp current and potential difference.",
+        max_marks: 2,
+        marking_scheme: "other assessment",
+        scheme_source: "https://cbseacademic.nic.in/Other-MS.pdf",
+        scheme_version: "other",
+        scheme_document_id: "doc-other",
+      },
+      {
+        id: "q-a",
+        assessment_identity_id: "assessment-a",
+        question_label: "12",
+        question_text: "Determine the wavelength of a sound wave from frequency and speed.",
+        max_marks: 2,
+        marking_scheme: "assessment A",
+        scheme_source: "https://cbseacademic.nic.in/Physics-MS.pdf",
+        scheme_version: "2026-27:test",
+        scheme_document_id: "doc-a",
+      },
+    ],
+  });
+
+  const result = await resolveSchemeEvidence(db as any, {
+    paperId: "paper-a",
+    questionLabel: null,
+    questionText: "Calculate resistance from the lamp current and potential difference.",
+    marksAvailable: 2,
+  });
+
+  assert.equal(result, null);
+  assert.ok(db.calls.some(call =>
+    call.table === "canonical_question"
+      && call.column === "assessment_identity_id"
+      && call.value === "assessment-a"
+  ));
+});
+
+test("scheme retrieval returns structured immutable evidence for one scoped match", async () => {
+  const db = schemeDb();
+  const result = await resolveSchemeEvidence(db as any, {
+    paperId: "paper-a",
+    questionLabel: null,
+    questionText: "The lamp current and potential difference are given. Calculate its resistance.",
+    marksAvailable: 2,
+  });
+
+  assert.equal(result?.canonicalQuestionId, "q-a");
+  assert.equal(result?.schemeDocumentId, "doc-a");
+  assert.equal(result?.assessmentIdentityId, "assessment-a");
+  assert.equal(result?.retrievalMode, "scoped_text");
+  assert.equal(result?.sourceUrl, "https://cbseacademic.nic.in/Physics-MS.pdf");
+});
+
+test("scheme retrieval rejects revoked, superseded, or policy-disabled evidence", async () => {
+  const revoked = schemeDb({
+    documents: [{
+      id: "doc-a",
+      assessment_identity_id: "assessment-a",
+      source_url: "https://cbseacademic.nic.in/Physics-MS.pdf",
+      copyright_access_class: "public_official",
+      extraction_status: "ready",
+      policy_id: "policy-cbse",
+      revoked_at: "2026-09-26T00:00:00Z",
+      superseded_by_id: null,
+    }],
+  });
+  assert.equal(await resolveSchemeEvidence(revoked as any, {
+    paperId: "paper-a", questionLabel: "12", marksAvailable: 2,
+  }), null);
+
+  const superseded = schemeDb({
+    documents: [{
+      id: "doc-a",
+      assessment_identity_id: "assessment-a",
+      source_url: "https://cbseacademic.nic.in/Physics-MS.pdf",
+      copyright_access_class: "public_official",
+      extraction_status: "ready",
+      policy_id: "policy-cbse",
+      revoked_at: null,
+      superseded_by_id: "doc-new",
+    }],
+  });
+  assert.equal(await resolveSchemeEvidence(superseded as any, {
+    paperId: "paper-a", questionLabel: "12", marksAvailable: 2,
+  }), null);
+
+  const inactivePolicy = schemeDb({
+    policies: [{
+      id: "policy-cbse",
+      hostname: "cbseacademic.nic.in",
+      copyright_access_class: "public_official",
+      reproduction_permitted: true,
+      active: false,
+    }],
+  });
+  assert.equal(await resolveSchemeEvidence(inactivePolicy as any, {
+    paperId: "paper-a", questionLabel: "12", marksAvailable: 2,
+  }), null);
 });
