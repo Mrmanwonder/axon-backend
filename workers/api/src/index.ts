@@ -17,6 +17,8 @@ export default {
       switch (path) {
         case "/paper-submit":
           return await paperSubmit(req, env);
+        case "/paper-retry":
+          return await paperRetry(req, env);
         case "/upload-intent":
           return await uploadIntent(req, env);
         case "/upload-complete":
@@ -169,6 +171,115 @@ async function paperSubmit(req: Request, env: Env): Promise<Response> {
     }
   }
   return json({ ...data, queued: true }, 202);
+}
+
+
+async function paperRetry(req: Request, env: Env): Promise<Response> {
+  const user = clientFor(req, env);
+  if (!user) return failure("Sign in first.", 401);
+  const body = await readJson<any>(req);
+  if (!body?.paper_id) return failure("Which paper?", 400);
+
+  const { data: paper, error: paperError } = await user
+    .from("paper")
+    .select("id,student_id,type,tier,date_taken,subject,reported_total,stated_maximum")
+    .eq("id", body.paper_id)
+    .maybeSingle();
+  if (paperError) return failure("We could not check that paper.", 500, paperError.message);
+  if (!paper) return failure("That paper is not yours.", 403);
+
+  const { data: latest, error: runError } = await user
+    .from("extraction_run")
+    .select("id,status,started_at")
+    .eq("paper_id", paper.id)
+    .order("started_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (runError) return failure("We could not check that paper's reading status.", 500, runError.message);
+  if (!latest) return json({ retry: "not_retryable", reason: "no_failed_run" }, 409);
+  if (latest.status === "rejected") {
+    return json({ retry: "not_retryable", reason: "rejected" }, 409);
+  }
+  if (latest.status !== "failed") {
+    if (latest.status === "queued" && env.TRIAGE_QUEUE) {
+      try { await env.TRIAGE_QUEUE.send({ run_id: latest.id }); } catch { /* durable queued row remains recoverable */ }
+    }
+    const active = !["committed", "rejected", "failed"].includes(latest.status);
+    return json({
+      retry: active ? "already_in_progress" : "not_retryable",
+      reason: latest.status,
+      run_id: latest.id,
+      status: latest.status,
+    }, active ? 202 : 409);
+  }
+
+  const { data: pages, error: pageError } = await user
+    .from("paper_page")
+    .select("page_number,source_kind,r2_bucket,r2_key,mask_key,original_key,thumb_key,bytes,sha256,etag,preprocess_version,quality_verdict,quality_signals,conditioning_meta,layer_fallback,teacher_marks")
+    .eq("paper_id", paper.id)
+    .eq("student_id", paper.student_id)
+    .order("page_number", { ascending: true });
+  if (pageError) return failure("We could not load the stored pages for that paper.", 500, pageError.message);
+
+  const storedPages = (pages ?? []).filter((page: any) => page.r2_key);
+  if (!storedPages.length) {
+    return json({ retry: "not_retryable", reason: "stored_pages_unavailable" }, 409);
+  }
+
+  // A retry must use the exact already-stored paper, never client-supplied object
+  // keys. Verify every page still exists before starting a fresh run.
+  for (const page of storedPages as any[]) {
+    const bucket: BucketKind = page.r2_bucket === "originals" ? "originals" : "derived";
+    if (!page.r2_key.startsWith(`${paper.student_id}/${paper.id}/`)) {
+      return json({ retry: "not_retryable", reason: "stored_pages_unavailable" }, 409);
+    }
+    let head: Awaited<ReturnType<typeof headObject>>;
+    try {
+      head = await headObject(env, bucket, page.r2_key);
+    } catch {
+      return json({ retry: "temporarily_unavailable", reason: "storage_check_failed" }, 503);
+    }
+    if (!head) return json({ retry: "not_retryable", reason: "stored_pages_unavailable" }, 409);
+  }
+
+  const { data, error } = await user.rpc("submit_paper", {
+    p_student_id: paper.student_id,
+    p_type: paper.type,
+    p_tier: paper.tier ?? "tier_1",
+    p_date_taken: paper.date_taken ?? null,
+    p_subject: paper.subject ?? null,
+    p_pages: storedPages,
+    // p_paper_id is the identity. This key only satisfies the shared submit
+    // contract and is never trusted to choose another paper.
+    p_idempotency_key: crypto.randomUUID(),
+    p_reported_total: paper.reported_total ?? null,
+    p_stated_maximum: paper.stated_maximum ?? null,
+    p_pipeline_version: PIPELINE_VERSION,
+    p_paper_id: paper.id,
+  });
+  if (error) return failure("We could not restart that paper. Nothing was lost — try again.", 500, error.message);
+
+  const runId = data.run_id;
+  const admin = serviceClient(env);
+  const { data: run } = await admin.from("extraction_run").select("status").eq("id", runId).single();
+  let queued = false;
+  if (run?.status === "queued" && env.TRIAGE_QUEUE) {
+    try {
+      await env.TRIAGE_QUEUE.send({ run_id: runId });
+      await admin.rpc("run_advance", { p_run_id: runId, p_to: "queued" });
+      queued = true;
+    } catch {
+      queued = false;
+    }
+  }
+
+  return json({
+    paper_id: paper.id,
+    run_id: runId,
+    retry: data.run_created ? "started" : "already_in_progress",
+    queued,
+    ...(queued ? {} : { reason: "Reading is queued and can be resumed safely." }),
+  }, 202);
 }
 
 async function uploadIntent(req: Request, env: Env): Promise<Response> {
