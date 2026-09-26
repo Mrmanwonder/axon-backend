@@ -110,6 +110,8 @@ const handler = consumeQueue<ExplainMessage>(
       ? await resolveSchemeEvidence(sb, {
           paperId: region.paper_id,
           questionLabel: region.question_label,
+          questionText: region.question_text,
+          marksAvailable: available,
         })
       : null;
 
@@ -299,6 +301,10 @@ const handler = consumeQueue<ExplainMessage>(
       loss_reasons: lossReasons,
       scheme_source: schemeEvidence?.sourceUrl ?? null,
       scheme_version: schemeEvidence?.version ?? null,
+      assessment_identity_id: schemeEvidence?.assessmentIdentityId ?? null,
+      scheme_document_id: schemeEvidence?.schemeDocumentId ?? null,
+      canonical_question_id: schemeEvidence?.canonicalQuestionId ?? null,
+      scheme_retrieval_mode: schemeEvidence?.retrievalMode ?? null,
       model_version: model,
       prompt_version: promptVersion,
     }, { onConflict: "region_id" }), "region_explanation upsert");
@@ -317,6 +323,8 @@ const handler = consumeQueue<ExplainMessage>(
         web_sources: webSources,
         assessment_identity: schemeEvidence?.assessmentIdentityId ?? null,
         scheme_document: schemeEvidence?.schemeDocumentId ?? null,
+        canonical_question: schemeEvidence?.canonicalQuestionId ?? null,
+        scheme_retrieval_mode: schemeEvidence?.retrievalMode ?? null,
         explanation_tier: schemeEvidence ? "tier_2" : "tier_1",
       },
     };
