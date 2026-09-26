@@ -91,3 +91,62 @@ A document is not runtime-eligible unless all of these are true:
 Parser ambiguity, mismatched SQP/MS identity, mismatched mark totals, or less than
 75% verified top-level question coverage causes ingestion to fail rather than
 inventing missing scheme content.
+
+
+## Production review and approval runbook
+
+Treat source discovery, source review, approval, ingestion, and runtime eligibility as separate gates.
+
+### Roles and evidence
+
+- **Discoverer/operator** runs `discover` and `verify`; this step must not need database-write credentials.
+- **Reviewer/approver** confirms the first-party hostname, active source policy, subject/class/session identity, parser version, SHA-256 hashes, parsed question counts, coverage, and any parser diagnostics before a write is authorized.
+- **Production operator** performs the write only from the exact reviewed source bytes or a cryptographically bound reviewed bundle. A production credential must never be printed, committed, or placed in an artifact.
+- The production record must preserve the source URLs, source version, exact scheme SHA-256, parser version, verified coverage/counts, and the verification run or review reference in `scheme_document.metadata`.
+
+A reviewed bundle is valid only while all of those immutable identifiers still match the target `scheme_document`. If the source bytes or policy changed after review, stop and review the new version instead of updating the old row in place.
+
+### Approval sequence
+
+1. Run `discover` against the current first-party index.
+2. Run `verify` against the exact SQP/MS pair.
+3. Review identity, hashes, parser version, coverage, and question count.
+4. Confirm the active `scheme_source_policy` still permits ingestion/reproduction for that exact source class.
+5. Ingest into a `pending` scheme document and canonical questions.
+6. Assert every canonical question points to the same assessment identity, scheme document, source URL, and source version.
+7. Only after the corpus is complete, move the document to `ready`.
+8. Re-run the same source once to prove idempotence. An unchanged hash must not create another version or downgrade a ready document.
+
+Never make a partially ingested document runtime-eligible.
+
+### Reparse and source changes
+
+- Same bytes + same hash: reuse the immutable document version; reparsing may refresh derived rows only after review.
+- Changed bytes/hash: create a new `scheme_document` version and link the previous active version through `superseded_by_id`.
+- Never reactivate a superseded or revoked hash through ingestion.
+- Parser-version changes require a review of the new parsed output even when the source hash is unchanged.
+- Retain historical rows required to explain already-generated provenance.
+
+### Emergency disable / rights withdrawal
+
+If source validity, rights, or parser integrity becomes uncertain, fail closed immediately:
+
+1. disable the relevant `scheme_source_policy` or set reproduction permission false to stop new runtime use at the policy gate;
+2. revoke the affected document with `schemes:cbse -- revoke ... --write` and record the reason;
+3. confirm Tier 2 no longer returns evidence from that document;
+4. investigate/review before any replacement document becomes `ready`.
+
+Do not delete the historical document or canonical rows merely to disable runtime retrieval; revocation preserves auditability.
+
+### Release evidence
+
+For each production corpus promotion, retain:
+
+- verification workflow/run reference;
+- source URLs and source-policy version;
+- SQP and MS SHA-256 hashes;
+- parser version;
+- parsed block counts, expected-question count, verified coverage, and canonical-question count;
+- final production document ID and assessment identity ID;
+- an idempotence check;
+- a runtime proof showing Tier 2 persisted the exact assessment/document/canonical-question provenance, or an explicit note that no matching production paper exists yet.

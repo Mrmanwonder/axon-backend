@@ -326,7 +326,6 @@ async function storeQuestions(sb, identity, document, offering, pair, write) {
       series: null,
       paper_number: null,
       variant: null,
-      component_code: null,
       canonical_id: canonicalId,
       assessment_identity_id: identity.id,
       question_label: question.label,
