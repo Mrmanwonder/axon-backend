@@ -1,0 +1,149 @@
+name: Seed reviewed CBSE Physics scheme
+
+on:
+  push:
+    branches:
+      - ops/seed-cbse-physics-2026-27
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cbse-physics-2026-27-production-seed
+  cancel-in-progress: false
+
+jobs:
+  verify-and-seed:
+    name: Verify and seed CBSE Physics 2026-27
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_URL: https://dlgcqieyevoebefhcggi.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Require production admin credential
+        shell: bash
+        run: |
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::error title=Missing repository secret::SUPABASE_SERVICE_ROLE_KEY is not configured for axon-backend; no production write was attempted."
+            exit 1
+          fi
+
+      - name: Install PDF text extractor
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends poppler-utils
+
+      - name: Verify exact current official source pair without database writes
+        run: npm run schemes:cbse -- verify --class=12 --subject=Physics
+
+      - name: Seed reviewed Physics identity, source document and canonical questions
+        run: npm run schemes:cbse -- ingest --class=12 --subject=Physics --write
+
+      - name: Re-run unchanged source to prove idempotence
+        run: npm run schemes:cbse -- ingest --class=12 --subject=Physics --write
+
+      - name: Audit production registry without printing scheme content
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { createClient } from "@supabase/supabase-js";
+
+          const sb = createClient(
+            process.env.SUPABASE_URL,
+            process.env.SUPABASE_SERVICE_ROLE_KEY,
+            { auth: { persistSession: false, autoRefreshToken: false } },
+          );
+
+          const one = async (query, label) => {
+            const { data, error } = await query;
+            if (error) throw new Error(label + ": " + error.message);
+            if (!data) throw new Error(label + ": not found");
+            return data;
+          };
+
+          const stage = await one(
+            sb.from("curriculum_stage")
+              .select("id,programme_id,key")
+              .eq("key", "cbse_12")
+              .maybeSingle(),
+            "CBSE Class XII stage",
+          );
+
+          const { data: offerings, error: offeringError } = await sb
+            .from("subject_offering")
+            .select("id,display_name,external_code,external_code_kind")
+            .eq("programme_id", stage.programme_id)
+            .eq("stage_id", stage.id)
+            .eq("availability", "active");
+          if (offeringError) throw offeringError;
+
+          const physics = (offerings ?? []).filter((row) =>
+            row.external_code === "042"
+            || String(row.display_name).trim().toLowerCase() === "physics"
+          );
+          if (physics.length !== 1) {
+            throw new Error("Expected exactly one active CBSE XII Physics offering, found " + physics.length);
+          }
+
+          const { data: identities, error: identityError } = await sb
+            .from("assessment_identity")
+            .select("id,exam_year,session,assessment_route,title,official_source_url,source_document_version")
+            .eq("programme_id", stage.programme_id)
+            .eq("subject_offering_id", physics[0].id)
+            .eq("exam_year", 2027)
+            .eq("session", "2026-27")
+            .eq("assessment_route", "sample_paper");
+          if (identityError) throw identityError;
+          if ((identities ?? []).length !== 1) {
+            throw new Error("Expected exactly one Physics 2026-27 assessment identity, found " + (identities ?? []).length);
+          }
+
+          const identity = identities[0];
+
+          const { data: documents, error: documentError } = await sb
+            .from("scheme_document")
+            .select("id,source_url,source_version,sha256,retrieved_at,copyright_access_class,extraction_status,parser_version,policy_id,revoked_at,superseded_by_id")
+            .eq("assessment_identity_id", identity.id)
+            .eq("source_kind", "marking_scheme");
+          if (documentError) throw documentError;
+
+          const ready = (documents ?? []).filter((row) =>
+            row.extraction_status === "ready"
+            && row.revoked_at === null
+            && row.superseded_by_id === null
+          );
+          if (ready.length !== 1) {
+            throw new Error("Expected exactly one active ready scheme document, found " + ready.length);
+          }
+
+          const { count: questionCount, error: questionError } = await sb
+            .from("canonical_question")
+            .select("id", { count: "exact", head: true })
+            .eq("assessment_identity_id", identity.id)
+            .eq("scheme_document_id", ready[0].id);
+          if (questionError) throw questionError;
+          if (!questionCount || questionCount < 1) {
+            throw new Error("Expected canonical questions for the seeded scheme");
+          }
+
+          const audit = {
+            subjectOffering: physics[0],
+            assessmentIdentity: identity,
+            schemeDocument: ready[0],
+            schemeDocumentVersionsForIdentity: (documents ?? []).length,
+            canonicalQuestionCount: questionCount,
+          };
+          console.log(JSON.stringify(audit, null, 2));
+          NODE
