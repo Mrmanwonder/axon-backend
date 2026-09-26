@@ -92,7 +92,7 @@ export function questionLabelAncestors(value: unknown): string[] {
 
 const QUESTION_STOP_WORDS = new Set([
   "the", "and", "for", "with", "from", "that", "this", "these", "those",
-  "what", "which", "when", "where", "into", "using", "use", "used", "given",
+  "what", "which", "when", "where", "why", "into", "using", "use", "used", "given",
   "state", "give", "write", "show", "find", "calculate", "determine", "explain",
   "describe", "identify", "suggest", "justify", "question", "answer", "marks",
 ]);
@@ -107,8 +107,7 @@ export function questionTerms(value: unknown): Set<string> {
       continue;
     }
     if (raw.length < 3 || QUESTION_STOP_WORDS.has(raw)) continue;
-    const stem = raw.replace(/(?:ing|ed|es|s)$/, "");
-    if (stem.length >= 3 && !QUESTION_STOP_WORDS.has(stem)) out.add(stem);
+    out.add(raw);
   }
   return out;
 }
