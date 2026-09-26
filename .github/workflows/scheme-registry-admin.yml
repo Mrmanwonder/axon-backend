@@ -1,0 +1,177 @@
+name: Scheme registry production admin
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Operation to perform
+        required: true
+        type: choice
+        options:
+          - verify
+          - ingest
+          - revoke
+      class_level:
+        description: CBSE class for verify/ingest
+        required: false
+        default: "12"
+        type: string
+      subject:
+        description: CBSE subject for verify/ingest
+        required: false
+        default: Physics
+        type: string
+      document_id:
+        description: scheme_document UUID for revoke
+        required: false
+        type: string
+      reason:
+        description: Revocation reason
+        required: false
+        type: string
+      confirmation:
+        description: Type PRODUCTION for ingest/revoke
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheme-registry-production-admin
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: ${{ inputs.action == 'verify' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install PDF text extractor
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends poppler-utils
+
+      - name: Verify official CBSE source pair
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run schemes:cbse -- verify \
+            --class="${{ inputs.class_level }}" \
+            --subject="${{ inputs.subject }}" \
+            2>&1 | tee scheme-registry-operation.log
+
+      - name: Upload verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: scheme-registry-verify-${{ github.run_id }}
+          path: scheme-registry-operation.log
+          retention-days: 30
+
+  mutate:
+    if: ${{ inputs.action == 'ingest' || inputs.action == 'revoke' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production-scheme-registry
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Validate production gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirmation }}" = "PRODUCTION" || {
+            echo "::error::Production mutation requires confirmation=PRODUCTION"
+            exit 1
+          }
+          test -n "${SUPABASE_URL:-}" || {
+            echo "::error::production-scheme-registry is missing SUPABASE_URL"
+            exit 1
+          }
+          test -n "${SUPABASE_SERVICE_ROLE_KEY:-}" || {
+            echo "::error::production-scheme-registry is missing SUPABASE_SERVICE_ROLE_KEY"
+            exit 1
+          }
+
+      - name: Install PDF text extractor
+        if: ${{ inputs.action == 'ingest' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends poppler-utils
+
+      - name: Dry-run exact source ingestion
+        if: ${{ inputs.action == 'ingest' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run schemes:cbse -- ingest \
+            --class="${{ inputs.class_level }}" \
+            --subject="${{ inputs.subject }}" \
+            2>&1 | tee scheme-registry-dry-run.log
+
+      - name: Write reviewed corpus
+        if: ${{ inputs.action == 'ingest' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run schemes:cbse -- ingest \
+            --class="${{ inputs.class_level }}" \
+            --subject="${{ inputs.subject }}" \
+            --write \
+            2>&1 | tee scheme-registry-write.log
+
+      - name: Validate revoke inputs
+        if: ${{ inputs.action == 'revoke' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${{ inputs.document_id }}" || {
+            echo "::error::revoke requires document_id"
+            exit 1
+          }
+          test -n "${{ inputs.reason }}" || {
+            echo "::error::revoke requires reason"
+            exit 1
+          }
+
+      - name: Revoke exact scheme document
+        if: ${{ inputs.action == 'revoke' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run schemes:cbse -- revoke \
+            --document="${{ inputs.document_id }}" \
+            --reason="${{ inputs.reason }}" \
+            --write \
+            2>&1 | tee scheme-registry-revoke.log
+
+      - name: Upload production operation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scheme-registry-production-${{ github.run_id }}
+          path: |
+            scheme-registry-dry-run.log
+            scheme-registry-write.log
+            scheme-registry-revoke.log
+          if-no-files-found: ignore
+          retention-days: 90
