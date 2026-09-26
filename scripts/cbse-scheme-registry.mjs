@@ -26,6 +26,7 @@ function parseArgs(argv) {
     write: false,
     documentId: null,
     reason: null,
+    bundlePath: null,
   };
   for (const arg of argv) {
     if (["discover", "verify", "ingest", "revoke"].includes(arg)) out.command = arg;
@@ -34,6 +35,7 @@ function parseArgs(argv) {
     else if (arg.startsWith("--subject=")) out.subject = arg.slice(10);
     else if (arg.startsWith("--document=")) out.documentId = arg.slice(11);
     else if (arg.startsWith("--reason=")) out.reason = arg.slice(9);
+    else if (arg.startsWith("--bundle=")) out.bundlePath = arg.slice(9);
     else throw new Error("Unknown argument: " + arg);
   }
   if (![10, 12].includes(out.classLevel)) throw new Error("--class must be 10 or 12");
@@ -339,7 +341,7 @@ async function storeQuestions(sb, identity, document, offering, pair, write) {
   return count;
 }
 
-async function verifyOne(entry) {
+async function verifyOne(entry, includeBundle = false) {
   const [sqpBytes, msBytes] = await Promise.all([
     fetchOfficial(entry.sqpUrl),
     fetchOfficial(entry.msUrl),
@@ -354,7 +356,7 @@ async function verifyOne(entry) {
       && !normalizedSubjectName(pair.header.subject).includes(normalizedSubjectName(entry.subject))) {
     throw new Error("Index/PDF subject mismatch for " + entry.subject + " vs " + pair.header.subject);
   }
-  return {
+  const summary = {
     subject: entry.subject,
     code: pair.header.subjectCode,
     classLevel: pair.header.classLevel,
@@ -365,6 +367,24 @@ async function verifyOne(entry) {
     parsed: pair.parsed,
     sqpSha256: sqpHash,
     msSha256: msHash,
+  };
+  if (!includeBundle) return { summary, bundle: null };
+  return {
+    summary,
+    bundle: {
+      schemaVersion: 1,
+      provider: "cbse",
+      parserVersion: CBSE_PARSER_VERSION,
+      subject: entry.subject,
+      sqpUrl: entry.sqpUrl,
+      msUrl: entry.msUrl,
+      sqpSha256: sqpHash,
+      msSha256: msHash,
+      header: pair.header,
+      coverage: pair.coverage,
+      parsed: pair.parsed,
+      questions: pair.questions,
+    },
   };
 }
 
@@ -456,10 +476,13 @@ async function main() {
     const rows = await indexRows(args.classLevel, args.subject);
     if (!rows.length) throw new Error("No matching CBSE SQP/MS rows discovered");
     const results = [];
+    const bundles = [];
     const failures = [];
     for (const row of rows) {
       try {
-        results.push(await verifyOne(row));
+        const verified = await verifyOne(row, Boolean(args.bundlePath));
+        results.push(verified.summary);
+        if (verified.bundle) bundles.push(verified.bundle);
       } catch (error) {
         failures.push({
           subject: row.subject,
@@ -467,7 +490,19 @@ async function main() {
         });
       }
     }
-    console.log(JSON.stringify({ results, failures }, null, 2));
+    if (args.bundlePath && bundles.length) {
+      writeFileSync(args.bundlePath, JSON.stringify({
+        schemaVersion: 1,
+        generatedAt: new Date().toISOString(),
+        parserVersion: CBSE_PARSER_VERSION,
+        bundles,
+      }, null, 2));
+    }
+    console.log(JSON.stringify({
+      results,
+      failures,
+      bundleWritten: args.bundlePath ? bundles.length > 0 : false,
+    }, null, 2));
     if (failures.length) process.exitCode = 2;
     return;
   }
