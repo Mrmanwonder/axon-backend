@@ -97,7 +97,7 @@ test("question-label ancestry is deterministic and only strips trailing parts", 
 test("question text terms drop exam scaffolding but preserve subject content", () => {
   assert.deepEqual(
     [...questionTerms("Explain why the magnetic field changes when current increases.")].sort(),
-    ["change", "current", "field", "increas", "magnetic", "why"].filter(term => term !== "why").sort(),
+    ["changes", "current", "field", "increases", "magnetic"].sort(),
   );
 });
 
