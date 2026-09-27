@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { signAssetUrl } from "../r2.js";
 
 test("asset signing reuses one imported HMAC key until the secret rotates", async () => {
-  const subtle = globalThis.crypto.subtle as any;
+  const subtle = (globalThis as any).crypto.subtle as any;
   const original = subtle.importKey.bind(subtle);
   let imports = 0;
   subtle.importKey = (...args: any[]) => {
