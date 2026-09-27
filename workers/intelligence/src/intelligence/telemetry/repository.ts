@@ -120,7 +120,9 @@ function privacySafeTutorTrace(trace: TraceRecord): TraceRecord {
 }
 
 async function opaqueGraphId(traceId: string, kind: "e" | "c", sourceId: string): Promise<string> {
-  return `${traceId}:${kind}:${await oneWayHash(sourceId)}`;
+  // Scope the digest to this trace so repeated internal IDs are not linkable
+  // across Tutor runs from the audit database alone.
+  return `${traceId}:${kind}:${await oneWayHash(`${traceId}\u001f${kind}\u001f${sourceId}`)}`;
 }
 
 export async function writeEvidenceGraph(db: D1Database, traceId: string, evidence: readonly Evidence[], claims: readonly Claim[]): Promise<void> {
