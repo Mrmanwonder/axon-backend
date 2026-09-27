@@ -8,7 +8,7 @@ import { NoCompliantProviderError } from "../routing/privacy";
 import { parseSchema, ReasoningResultSchema, VerificationResultSchema, type Claim, type Evidence, type ReasoningResult, type TutorRequest, type TutorResponse } from "../../schemas";
 import { promptRegistry } from "../../prompts";
 import { ProviderError, type AIProvider, type ModelResponse } from "../../providers/types";
-import { minimizePublicRetrievalQuery } from "../security/privacy";
+import { buildPublicRetrievalQuery } from "../security/privacy";
 import type { RetrievalService } from "../retrieval/types";
 import { decideTools, detectIntent, promptIdFor, resolveTutorDepth } from "./routing";
 
@@ -56,7 +56,11 @@ export class TutorOrchestrator {
         return this.failure(traceId, "Current information requires retrieval, but no compliant retrieval service is configured.");
       }
       try {
-        const retrieved = await this.dependencies.retrieval.retrieve({ query: minimizePublicRetrievalQuery(request.message), purpose: intent === "source_question" ? "official_rule" : "current_fact", maxSources: 5 });
+        const retrieved = await this.dependencies.retrieval.retrieve({
+          query: buildPublicRetrievalQuery(request.retrievalContext, request.message, intent),
+          purpose: intent === "source_question" ? "official_rule" : "current_fact",
+          maxSources: 5,
+        });
         for (const item of retrieved) retrievedEvidenceIds.add(item.id);
         evidence.push(...retrieved);
       } catch (error) {
