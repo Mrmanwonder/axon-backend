@@ -10,8 +10,11 @@ describe("Tavily public retrieval privacy boundary", () => {
     const rejected = [
       "http://example.com/plain-http",
       "https://localhost/private",
+      "https://localhost./private",
       "https://service.internal/path",
+      "https://service.internal./path",
       "https://metadata.google.internal/computeMetadata/v1/",
+      "https://metadata.google.internal./computeMetadata/v1/",
       "https://10.0.0.1/private",
       "https://127.0.0.1/private",
       "https://169.254.169.254/latest/meta-data",
