@@ -108,14 +108,18 @@ function privacySafeTutorTrace(trace: TraceRecord): TraceRecord {
   const failures = [...new Set((trace.verificationFailures ?? [])
     .map((failure) => privacySafeDiagnostic(failure))
     .filter((failure): failure is string => Boolean(failure)))];
+  const safeError = privacySafeDiagnostic(trace.error);
+  const {
+    paperId: _paperId,
+    questionId: _questionId,
+    verificationFailures: _verificationFailures,
+    error: _error,
+    ...safeTrace
+  } = trace;
   return {
-    ...trace,
-    // Raw resource IDs are not needed in the Tutor audit ledger. Input artifact
-    // hashes already provide non-content correlation where available.
-    paperId: undefined,
-    questionId: undefined,
+    ...safeTrace,
     verificationFailures: failures,
-    error: privacySafeDiagnostic(trace.error) ?? undefined,
+    ...(safeError ? { error: safeError } : {}),
   };
 }
 
