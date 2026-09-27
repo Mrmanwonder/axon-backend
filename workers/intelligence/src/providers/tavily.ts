@@ -55,7 +55,7 @@ export function publicRetrievalUrl(raw: unknown): string | null {
     const url = new URL(raw);
     if (url.protocol !== "https:" || url.username || url.password) return null;
 
-    const host = url.hostname.toLowerCase();
+    const host = url.hostname.toLowerCase().replace(/\.$/, "");
     if (
       !host ||
       host === "localhost" ||
@@ -66,6 +66,7 @@ export function publicRetrievalUrl(raw: unknown): string | null {
       privateOrReservedIpv4(host)
     ) return null;
 
+    url.hostname = host;
     for (const key of url.searchParams.keys()) {
       if (SIGNED_QUERY_KEYS.has(key.toLowerCase())) return null;
     }
