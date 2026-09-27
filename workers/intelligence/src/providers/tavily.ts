@@ -25,7 +25,8 @@ function privateOrReservedIpv4(host: string): boolean {
   if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return false;
   const octets = host.split(".").map(Number);
   if (octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) return true;
-  const [a, b] = octets;
+  const a = octets[0] ?? 999;
+  const b = octets[1] ?? 999;
   return (
     a === 0 ||
     a === 10 ||
