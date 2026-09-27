@@ -89,7 +89,7 @@ describe("operational pipeline", () => {
     });
   });
 
-  it("never persists raw student-derived Tutor claim or tool text", async () => {
+  it("never persists raw student-derived Tutor audit content", async () => {
     const traceId = crypto.randomUUID();
     const studentCanary = "CANARY_STUDENT_ANSWER_7f90";
     const teacherCanary = "CANARY_TEACHER_REMARK_31ab";
@@ -110,7 +110,8 @@ describe("operational pipeline", () => {
       ],
       error: "CANARY_PRIVATE_ERROR_FREEFORM",
       repairAttempted: false,
-      answerStatus: "controlled_failure", inputArtifactHashes: []
+      answerStatus: "controlled_failure",
+      inputArtifactHashes: []
     }, [
       {
         id: "student-e-CANARY_PRIVATE_EVIDENCE_ID", informationClass: "OBSERVED", source: "student", authority: "primary",
@@ -134,8 +135,12 @@ describe("operational pipeline", () => {
         verification: "verified", confidence: 1
       }
     ], [{
-      id: "claim-private-CANARY_PRIVATE_CLAIM_ID", text: `${claimCanary}: ${studentCanary}`, type: "observed",
-      evidenceIds: ["student-e-CANARY_PRIVATE_EVIDENCE_ID", "teacher-e", "tool-e", "public-e"], risk: "high", verificationStatus: "verified"
+      id: "claim-private-CANARY_PRIVATE_CLAIM_ID",
+      text: claimCanary + ": " + studentCanary,
+      type: "observed",
+      evidenceIds: ["student-e-CANARY_PRIVATE_EVIDENCE_ID", "teacher-e", "tool-e", "public-e"],
+      risk: "high",
+      verificationStatus: "verified"
     }]);
 
     const evidence = await env.DB.prepare(
@@ -144,16 +149,13 @@ describe("operational pipeline", () => {
     const claims = await env.DB.prepare(
       "SELECT id, text, type, risk, verification_status FROM claim WHERE trace_id = ?"
     ).bind(traceId).all<{ id: string; text: string; type: string; risk: string; verification_status: string }>();
-    const links = await env.DB.prepare(`
-      SELECT COUNT(*) AS count
-      FROM claim_evidence ce
-      JOIN claim c ON c.id = ce.claim_id
-      WHERE c.trace_id = ?
-    `).bind(traceId).first<{ count: number }>();
-
+    const links = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM claim_evidence ce JOIN claim c ON c.id = ce.claim_id WHERE c.trace_id = ?"
+    ).bind(traceId).first<{ count: number }>();
     const trace = await env.DB.prepare(
       "SELECT paper_id, question_id, verification_failures, error FROM ai_trace WHERE trace_id = ?"
     ).bind(traceId).first<{ paper_id: string | null; question_id: string | null; verification_failures: string; error: string | null }>();
+
     expect(trace).toEqual({
       paper_id: null,
       question_id: null,
@@ -181,273 +183,9 @@ describe("operational pipeline", () => {
       risk: "high",
       verification_status: "verified"
     });
-    expect(claims.results[0]?.id).toMatch(new RegExp(`^${traceId}:c:[0-9a-f]{64}import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { env, exports } from "cloudflare:workers";
-import { processPaperPage } from "../src/document/orchestrator";
-import type { DocumentVisionProvider, VisionAnalysis } from "../src/document/vision/provider";
-import { providerIsAvailable, recordProviderObservation, writeTutorAudit } from "../src/intelligence/telemetry/repository";
-import { runShadowTutor } from "../src/evaluation/shadow";
-import type { AIProvider } from "../src/providers/types";
-import { enforceRateLimit } from "../src/intelligence/security/rate-limit";
-import { pseudonymizeIdentifier } from "../src/intelligence/security/privacy";
-import { probeReleaseCapabilities } from "../src/providers/capabilities";
-import { mockSupabaseConsent, TEST_STUDENT_ID } from "./supabase-consent.mock";
-
-const printed = { printedProbability: 0.98, colourDistanceFromPrint: 0.02, strokeDifference: 0.02, marginTendency: 0.05, annotationOverlap: 0.05, handwritingDifference: 0.05 };
-const student = { printedProbability: 0.02, colourDistanceFromPrint: 0.1, strokeDifference: 0.9, marginTendency: 0.05, annotationOverlap: 0.05, handwritingDifference: 0.05 };
-const teacher = { printedProbability: 0.02, colourDistanceFromPrint: 0.9, strokeDifference: 0.9, marginTendency: 0.98, annotationOverlap: 0.98, handwritingDifference: 0.9 };
-const region = (id: string, kind: VisionAnalysis["regions"][number]["class"], x: number, y: number, text: string, inkSignals: typeof printed) => ({ id, class: kind, box: { x, y, width: 0.2, height: 0.05 }, confidence: 0.98, text, inkSignals });
-const read = (id: string, value: string, x: number, y: number) => ({ regionId: id, reads: ["reader-a", "reader-b"].map((readerId) => ({ value, alternatives: [], status: "read" as const, region: { x, y, width: 0.2, height: 0.05 }, readerIds: [readerId] })) });
-
-describe("operational pipeline", () => {
-  beforeEach(() => { mockSupabaseConsent(); });
-  afterEach(() => { vi.restoreAllMocks(); });
-
-  it("runs privacy-compliant document analysis through deterministic trusted commit", async () => {
-    const pageId = crypto.randomUUID();
-    const paperId = crypto.randomUUID();
-    const objectKey = `papers/${paperId}/original/${pageId}`;
-    const bytes = new TextEncoder().encode("synthetic page");
-    await env.PAPER_ARTIFACTS.put(objectKey, bytes);
-    await env.DB.prepare("INSERT INTO paper_page (paper_id, page_id, student_id, original_hash, source_type, object_key, processing_state, created_at) VALUES (?, ?, 'student', 'hash', 'image/png', ?, 'QUEUED', ?)")
-      .bind(paperId, pageId, objectKey, new Date().toISOString()).run();
-    const analysis: VisionAnalysis = {
-      qualityMetrics: { blur: 0.02, glareFraction: 0, perspectiveDegrees: 0, resolution: 1, compression: 0.01, cropCompleteness: 1, shadowFraction: 0 },
-      orientationDegrees: 0,
-      regions: [
-        region("q", "question_number", 0.1, 0.1, "1", printed),
-        region("qt", "printed_question", 0.15, 0.15, "2 + 2", printed),
-        region("a", "student_answer", 0.2, 0.25, "4", student),
-        region("m", "marginal_mark", 0.85, 0.25, "1", teacher)
-      ],
-      reads: [read("q", "1", 0.1, 0.1), read("qt", "2 + 2", 0.15, 0.15), read("a", "4", 0.2, 0.25), read("m", "1", 0.85, 0.25)]
-    };
-    const provider: DocumentVisionProvider = { id: "test-vision", privacyMode: "zdr", analyze: () => Promise.resolve({ analysis, latencyMs: 3 }) };
-    await processPaperPage(env, { paperId, pageId, studentId: "student", originalHash: "hash", sourceType: "image/png", timestamp: new Date().toISOString(), objectKey, pageIndex: 0 }, provider);
-    const page = await env.DB.prepare("SELECT processing_state, quality_class FROM paper_page WHERE page_id = ?").bind(pageId).first<{ processing_state: string; quality_class: string }>();
-    expect(page).toEqual({ processing_state: "TRUSTED_COMMIT", quality_class: "CLEAR" });
-    const fields = await env.DB.prepare("SELECT COUNT(*) AS count FROM trusted_field WHERE artifact_id LIKE ? AND trust_state = 'AUTO_VERIFIED'").bind(`${pageId}:%`).first<{ count: number }>();
-    expect(fields?.count).toBe(4);
-  });
-
-  it("persists immutable prompt and route artifacts", async () => {
-    await exports.default.fetch(new Request("https://axon.test/health"));
-    const prompts = await env.DB.prepare("SELECT COUNT(*) AS count FROM prompt_artifact").first<{ count: number }>();
-    const routes = await env.DB.prepare("SELECT COUNT(*) AS count FROM ai_route WHERE config_revision = 'v3.default'").first<{ count: number }>();
-    const models = await env.DB.prepare("SELECT DISTINCT model FROM ai_route WHERE config_revision = 'v3.default'").all<{ model: string }>();
-    const evalCases = await env.DB.prepare("SELECT COUNT(*) AS count FROM eval_case WHERE suite_id = 'axon-golden-v3'").first<{ count: number }>();
-    const stableFacts = await env.DB.prepare("SELECT COUNT(*) AS count FROM stable_knowledge WHERE active = 1").first<{ count: number }>();
-    expect(prompts?.count).toBeGreaterThanOrEqual(5);
-    expect(routes?.count).toBe(5);
-    expect(models.results).toEqual([{ model: "gemini-3.5-flash-lite" }]);
-    expect(evalCases?.count).toBeGreaterThanOrEqual(17);
-    expect(stableFacts?.count).toBeGreaterThanOrEqual(3);
-  });
-
-  it("opens the provider health gate after repeated failures", async () => {
-    const provider = `provider-${crypto.randomUUID()}`;
-    for (let index = 0; index < 5; index += 1) await recordProviderObservation(env.DB, provider, "model", { success: false, serverError: true, latencyMs: 100 });
-    await expect(providerIsAvailable(env.DB, provider, "model")).resolves.toBe(false);
-  });
-
-  it("persists semantic observability separately from transport success", async () => {
-    const traceId = crypto.randomUUID();
-    await writeTutorAudit(env.DB, {
-      traceId, stage: "tutor", capability: "current_information", intent: "current_information",
-      deploymentSha: "test-sha", configRevision: "test-config", pipelineVersion: "3.0.0",
-      toolCalls: ["tavily.search"], retrievalUsed: true, groundingUsed: true,
-      verificationStatus: "failed", verificationFailures: ["unsupported_claim c1"],
-      repairAttempted: true, answerStatus: "controlled_failure", transportSuccess: true,
-      schemaSuccess: true, semanticValidationSuccess: false, inputArtifactHashes: []
-    });
-    const stored = await env.DB.prepare(`SELECT intent, verification_failures, tool_calls, retrieval_used,
-      grounding_used, verification_status, repair_attempted, answer_status,
-      transport_success, schema_success, semantic_validation_success
-      FROM ai_trace WHERE trace_id = ?`).bind(traceId).first<Record<string, unknown>>();
-    expect(stored).toMatchObject({
-      intent: "current_information", verification_failures: '["UNSUPPORTED_CLAIM"]',
-      tool_calls: '["tavily.search"]', retrieval_used: 1, grounding_used: 1,
-      verification_status: "failed", repair_attempted: 1, answer_status: "controlled_failure",
-      transport_success: 1, schema_success: 1, semantic_validation_success: 0
-    });
-  });
-
-  it("never persists raw student-derived Tutor claim or tool text", async () => {
-    const traceId = crypto.randomUUID();
-    const studentCanary = "CANARY_STUDENT_ANSWER_7f90";
-    const teacherCanary = "CANARY_TEACHER_REMARK_31ab";
-    const toolCanary = "CANARY_TOOL_DERIVED_882c";
-    const claimCanary = "CANARY_MODEL_CLAIM_PRIVATE_d114";
-    const publicCanary = "PUBLIC_REFERENCE_CANARY_445e";
-
-    await writeTutorAudit(env.DB, {
-      traceId, stage: "tutor", capability: "work_check", intent: "work_check",
-      deploymentSha: "test-sha", configRevision: "test-config", pipelineVersion: "3.0.0",
-      toolCalls: ["axon.calculator.v1"], retrievalUsed: true, groundingUsed: true,
-      verificationStatus: "verified", verificationFailures: [], repairAttempted: false,
-      answerStatus: "supported", inputArtifactHashes: []
-    }, [
-      {
-        id: "student-e-CANARY_PRIVATE_EVIDENCE_ID", informationClass: "OBSERVED", source: "student", authority: "primary",
-        value: { answer: studentCanary },
-        provenance: { artifactHash: "student-artifact-hash", paperId: "CANARY_PRIVATE_PAPER_ID", pageId: "CANARY_PRIVATE_PAGE_ID" },
-        verification: "verified", confidence: 1
-      },
-      {
-        id: "teacher-e", informationClass: "OBSERVED", source: "teacher", authority: "primary",
-        value: { remark: teacherCanary }, provenance: { artifactHash: "teacher-artifact-hash" },
-        verification: "verified", confidence: 1
-      },
-      {
-        id: "tool-e", informationClass: "DERIVED", source: "tool", authority: "derived",
-        value: { expression: toolCanary, result: 42 }, provenance: { toolId: "axon.calculator.v1" },
-        verification: "verified", confidence: 1
-      },
-      {
-        id: "public-e", informationClass: "VERIFIED_EXTERNAL", source: "official_source", authority: "primary",
-        value: { title: "Official", content: publicCanary }, provenance: { url: "https://example.gov/reference" },
-        verification: "verified", confidence: 1
-      }
-    ], [{
-      id: "claim-private-CANARY_PRIVATE_CLAIM_ID", text: `${claimCanary}: ${studentCanary}`, type: "observed",
-      evidenceIds: ["student-e-CANARY_PRIVATE_EVIDENCE_ID", "teacher-e", "tool-e", "public-e"], risk: "high", verificationStatus: "verified"
-    }]);
-
-));
+    expect(claims.results[0]?.id).toMatch(new RegExp("^" + traceId + ":c:[0-9a-f]{64}$"));
     const toolRow = evidence.results.find((row) => row.source === "tool");
-    expect(toolRow?.id).toMatch(new RegExp(`^${traceId}:e:[0-9a-f]{64}import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { env, exports } from "cloudflare:workers";
-import { processPaperPage } from "../src/document/orchestrator";
-import type { DocumentVisionProvider, VisionAnalysis } from "../src/document/vision/provider";
-import { providerIsAvailable, recordProviderObservation, writeTutorAudit } from "../src/intelligence/telemetry/repository";
-import { runShadowTutor } from "../src/evaluation/shadow";
-import type { AIProvider } from "../src/providers/types";
-import { enforceRateLimit } from "../src/intelligence/security/rate-limit";
-import { pseudonymizeIdentifier } from "../src/intelligence/security/privacy";
-import { probeReleaseCapabilities } from "../src/providers/capabilities";
-import { mockSupabaseConsent, TEST_STUDENT_ID } from "./supabase-consent.mock";
-
-const printed = { printedProbability: 0.98, colourDistanceFromPrint: 0.02, strokeDifference: 0.02, marginTendency: 0.05, annotationOverlap: 0.05, handwritingDifference: 0.05 };
-const student = { printedProbability: 0.02, colourDistanceFromPrint: 0.1, strokeDifference: 0.9, marginTendency: 0.05, annotationOverlap: 0.05, handwritingDifference: 0.05 };
-const teacher = { printedProbability: 0.02, colourDistanceFromPrint: 0.9, strokeDifference: 0.9, marginTendency: 0.98, annotationOverlap: 0.98, handwritingDifference: 0.9 };
-const region = (id: string, kind: VisionAnalysis["regions"][number]["class"], x: number, y: number, text: string, inkSignals: typeof printed) => ({ id, class: kind, box: { x, y, width: 0.2, height: 0.05 }, confidence: 0.98, text, inkSignals });
-const read = (id: string, value: string, x: number, y: number) => ({ regionId: id, reads: ["reader-a", "reader-b"].map((readerId) => ({ value, alternatives: [], status: "read" as const, region: { x, y, width: 0.2, height: 0.05 }, readerIds: [readerId] })) });
-
-describe("operational pipeline", () => {
-  beforeEach(() => { mockSupabaseConsent(); });
-  afterEach(() => { vi.restoreAllMocks(); });
-
-  it("runs privacy-compliant document analysis through deterministic trusted commit", async () => {
-    const pageId = crypto.randomUUID();
-    const paperId = crypto.randomUUID();
-    const objectKey = `papers/${paperId}/original/${pageId}`;
-    const bytes = new TextEncoder().encode("synthetic page");
-    await env.PAPER_ARTIFACTS.put(objectKey, bytes);
-    await env.DB.prepare("INSERT INTO paper_page (paper_id, page_id, student_id, original_hash, source_type, object_key, processing_state, created_at) VALUES (?, ?, 'student', 'hash', 'image/png', ?, 'QUEUED', ?)")
-      .bind(paperId, pageId, objectKey, new Date().toISOString()).run();
-    const analysis: VisionAnalysis = {
-      qualityMetrics: { blur: 0.02, glareFraction: 0, perspectiveDegrees: 0, resolution: 1, compression: 0.01, cropCompleteness: 1, shadowFraction: 0 },
-      orientationDegrees: 0,
-      regions: [
-        region("q", "question_number", 0.1, 0.1, "1", printed),
-        region("qt", "printed_question", 0.15, 0.15, "2 + 2", printed),
-        region("a", "student_answer", 0.2, 0.25, "4", student),
-        region("m", "marginal_mark", 0.85, 0.25, "1", teacher)
-      ],
-      reads: [read("q", "1", 0.1, 0.1), read("qt", "2 + 2", 0.15, 0.15), read("a", "4", 0.2, 0.25), read("m", "1", 0.85, 0.25)]
-    };
-    const provider: DocumentVisionProvider = { id: "test-vision", privacyMode: "zdr", analyze: () => Promise.resolve({ analysis, latencyMs: 3 }) };
-    await processPaperPage(env, { paperId, pageId, studentId: "student", originalHash: "hash", sourceType: "image/png", timestamp: new Date().toISOString(), objectKey, pageIndex: 0 }, provider);
-    const page = await env.DB.prepare("SELECT processing_state, quality_class FROM paper_page WHERE page_id = ?").bind(pageId).first<{ processing_state: string; quality_class: string }>();
-    expect(page).toEqual({ processing_state: "TRUSTED_COMMIT", quality_class: "CLEAR" });
-    const fields = await env.DB.prepare("SELECT COUNT(*) AS count FROM trusted_field WHERE artifact_id LIKE ? AND trust_state = 'AUTO_VERIFIED'").bind(`${pageId}:%`).first<{ count: number }>();
-    expect(fields?.count).toBe(4);
-  });
-
-  it("persists immutable prompt and route artifacts", async () => {
-    await exports.default.fetch(new Request("https://axon.test/health"));
-    const prompts = await env.DB.prepare("SELECT COUNT(*) AS count FROM prompt_artifact").first<{ count: number }>();
-    const routes = await env.DB.prepare("SELECT COUNT(*) AS count FROM ai_route WHERE config_revision = 'v3.default'").first<{ count: number }>();
-    const models = await env.DB.prepare("SELECT DISTINCT model FROM ai_route WHERE config_revision = 'v3.default'").all<{ model: string }>();
-    const evalCases = await env.DB.prepare("SELECT COUNT(*) AS count FROM eval_case WHERE suite_id = 'axon-golden-v3'").first<{ count: number }>();
-    const stableFacts = await env.DB.prepare("SELECT COUNT(*) AS count FROM stable_knowledge WHERE active = 1").first<{ count: number }>();
-    expect(prompts?.count).toBeGreaterThanOrEqual(5);
-    expect(routes?.count).toBe(5);
-    expect(models.results).toEqual([{ model: "gemini-3.5-flash-lite" }]);
-    expect(evalCases?.count).toBeGreaterThanOrEqual(17);
-    expect(stableFacts?.count).toBeGreaterThanOrEqual(3);
-  });
-
-  it("opens the provider health gate after repeated failures", async () => {
-    const provider = `provider-${crypto.randomUUID()}`;
-    for (let index = 0; index < 5; index += 1) await recordProviderObservation(env.DB, provider, "model", { success: false, serverError: true, latencyMs: 100 });
-    await expect(providerIsAvailable(env.DB, provider, "model")).resolves.toBe(false);
-  });
-
-  it("persists semantic observability separately from transport success", async () => {
-    const traceId = crypto.randomUUID();
-    await writeTutorAudit(env.DB, {
-      traceId, stage: "tutor", capability: "current_information", intent: "current_information",
-      deploymentSha: "test-sha", configRevision: "test-config", pipelineVersion: "3.0.0",
-      toolCalls: ["tavily.search"], retrievalUsed: true, groundingUsed: true,
-      verificationStatus: "failed", verificationFailures: ["unsupported_claim c1"],
-      repairAttempted: true, answerStatus: "controlled_failure", transportSuccess: true,
-      schemaSuccess: true, semanticValidationSuccess: false, inputArtifactHashes: []
-    });
-    const stored = await env.DB.prepare(`SELECT intent, verification_failures, tool_calls, retrieval_used,
-      grounding_used, verification_status, repair_attempted, answer_status,
-      transport_success, schema_success, semantic_validation_success
-      FROM ai_trace WHERE trace_id = ?`).bind(traceId).first<Record<string, unknown>>();
-    expect(stored).toMatchObject({
-      intent: "current_information", verification_failures: '["UNSUPPORTED_CLAIM"]',
-      tool_calls: '["tavily.search"]', retrieval_used: 1, grounding_used: 1,
-      verification_status: "failed", repair_attempted: 1, answer_status: "controlled_failure",
-      transport_success: 1, schema_success: 1, semantic_validation_success: 0
-    });
-  });
-
-  it("never persists raw student-derived Tutor claim or tool text", async () => {
-    const traceId = crypto.randomUUID();
-    const studentCanary = "CANARY_STUDENT_ANSWER_7f90";
-    const teacherCanary = "CANARY_TEACHER_REMARK_31ab";
-    const toolCanary = "CANARY_TOOL_DERIVED_882c";
-    const claimCanary = "CANARY_MODEL_CLAIM_PRIVATE_d114";
-    const publicCanary = "PUBLIC_REFERENCE_CANARY_445e";
-
-    await writeTutorAudit(env.DB, {
-      traceId, stage: "tutor", capability: "work_check", intent: "work_check",
-      deploymentSha: "test-sha", configRevision: "test-config", pipelineVersion: "3.0.0",
-      toolCalls: ["axon.calculator.v1"], retrievalUsed: true, groundingUsed: true,
-      verificationStatus: "verified", verificationFailures: [], repairAttempted: false,
-      answerStatus: "supported", inputArtifactHashes: []
-    }, [
-      {
-        id: "student-e-CANARY_PRIVATE_EVIDENCE_ID", informationClass: "OBSERVED", source: "student", authority: "primary",
-        value: { answer: studentCanary },
-        provenance: { artifactHash: "student-artifact-hash", paperId: "CANARY_PRIVATE_PAPER_ID", pageId: "CANARY_PRIVATE_PAGE_ID" },
-        verification: "verified", confidence: 1
-      },
-      {
-        id: "teacher-e", informationClass: "OBSERVED", source: "teacher", authority: "primary",
-        value: { remark: teacherCanary }, provenance: { artifactHash: "teacher-artifact-hash" },
-        verification: "verified", confidence: 1
-      },
-      {
-        id: "tool-e", informationClass: "DERIVED", source: "tool", authority: "derived",
-        value: { expression: toolCanary, result: 42 }, provenance: { toolId: "axon.calculator.v1" },
-        verification: "verified", confidence: 1
-      },
-      {
-        id: "public-e", informationClass: "VERIFIED_EXTERNAL", source: "official_source", authority: "primary",
-        value: { title: "Official", content: publicCanary }, provenance: { url: "https://example.gov/reference" },
-        verification: "verified", confidence: 1
-      }
-    ], [{
-      id: "claim-private-CANARY_PRIVATE_CLAIM_ID", text: `${claimCanary}: ${studentCanary}`, type: "observed",
-      evidenceIds: ["student-e-CANARY_PRIVATE_EVIDENCE_ID", "teacher-e", "tool-e", "public-e"], risk: "high", verificationStatus: "verified"
-    }]);
-
-));
+    expect(toolRow?.id).toMatch(new RegExp("^" + traceId + ":e:[0-9a-f]{64}$"));
     expect(toolRow?.value_json).toContain('"redacted":true');
     expect(toolRow?.provenance_json).toBe('{"toolId":"axon.calculator.v1"}');
     expect(links?.count).toBe(4);
