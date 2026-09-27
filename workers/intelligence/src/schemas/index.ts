@@ -91,6 +91,11 @@ export const TutorRequestSchema = Type.Object({
   board: Type.Optional(Type.String({ maxLength: 100 })),
   subject: Type.Optional(Type.String({ maxLength: 100 })),
   topic: Type.Optional(Type.String({ maxLength: 200 })),
+  /**
+   * Internal-only, server-authored public academic context for web retrieval.
+   * The public gateway never copies arbitrary chat text into this field.
+   */
+  retrievalContext: Type.Optional(Type.String({ minLength: 1, maxLength: 400 })),
   paperId: Type.Optional(Type.String({ maxLength: 128 })),
   depth: Type.Optional(Type.Union([Type.Literal("BRIEF"), Type.Literal("NORMAL"), Type.Literal("DEEP")])),
   evidence: Type.Optional(Type.Array(EvidenceSchema, { maxItems: 100 }))

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeInboundEvidence, TutorOrchestrator } from "../src/intelligence/tutor/orchestrator";
 import type { AIProvider, ModelRequest, ModelResponse } from "../src/providers/types";
 import type { Evidence, ReasoningResult } from "../src/schemas";
-import type { RetrievalService } from "../src/intelligence/retrieval/types";
+import type { RetrievalRequest, RetrievalService } from "../src/intelligence/retrieval/types";
 
 class StubProvider implements AIProvider {
   readonly id = "gemini-zdr";
@@ -16,7 +16,9 @@ class StubProvider implements AIProvider {
 }
 
 class StubRetrieval implements RetrievalService {
-  retrieve(): Promise<Evidence[]> {
+  calls: RetrievalRequest[] = [];
+  retrieve(request: RetrievalRequest): Promise<Evidence[]> {
+    this.calls.push(structuredClone(request));
     return Promise.resolve([{ id: "official", informationClass: "VERIFIED_EXTERNAL", source: "official_source", authority: "primary", value: { title: "Official source", content: "The current rule is X." }, provenance: { url: "https://example.edu/rule", retrievedAt: new Date().toISOString() }, verification: "verified", confidence: 1 }]);
   }
 }
@@ -43,9 +45,61 @@ describe("TutorOrchestrator", () => {
       supported({ id: "current", text: "The current rule is X.", type: "retrieved", evidenceIds: ["official"], risk: "critical", verificationStatus: "pending" }),
       { passed: true, failures: [] }
     ]);
-    const result = await new TutorOrchestrator({ provider, retrieval: new StubRetrieval() }).respond({ studentId: "s", message: "What is the current exam rule?" });
+    const retrieval = new StubRetrieval();
+    const result = await new TutorOrchestrator({ provider, retrieval }).respond({
+      studentId: "s",
+      message: "What is the current exam rule?",
+      retrievalContext: "CBSE Senior Secondary Class XII Physics 042",
+    });
     expect(result.verification.passed).toBe(true);
     expect(result.citations).toEqual([{ title: "Official source", url: "https://example.edu/rule" }]);
+    expect(retrieval.calls[0]?.query).toBe("CBSE Senior Secondary Class XII Physics 042 official rules and regulations");
+  });
+
+  it("never copies private student prose into the public retrieval query", async () => {
+    const provider = new StubProvider([
+      supported({ id: "current", text: "The current rule is X.", type: "retrieved", evidenceIds: ["official"], risk: "critical", verificationStatus: "pending" }),
+      { passed: true, failures: [] }
+    ]);
+    const retrieval = new StubRetrieval();
+    const privateMessage = [
+      "What is the current 2026 syllabus?",
+      "My answer was 9.81 m/s2 and Teacher remark: show more working.",
+      "Alice Harkawat alice@example.com",
+      "550e8400-e29b-41d4-a716-446655440000",
+      "Authorization: Bearer super-secret-token",
+      "https://private.example/paper?sig=student-secret",
+    ].join(" ");
+
+    const result = await new TutorOrchestrator({ provider, retrieval }).respond({
+      studentId: "student-private-id",
+      message: privateMessage,
+      retrievalContext: "CBSE Senior Secondary Class XII Physics 042",
+    });
+
+    expect(result.verification.passed).toBe(true);
+    expect(retrieval.calls).toHaveLength(1);
+    expect(retrieval.calls[0]?.query).toBe("CBSE Senior Secondary Class XII Physics 042 official syllabus specification");
+    const serialized = JSON.stringify(retrieval.calls[0]);
+    for (const privateToken of [
+      "9.81", "show more working", "Alice", "alice@example.com",
+      "550e8400", "super-secret-token", "private.example", "student-private-id",
+    ]) expect(serialized).not.toContain(privateToken);
+  });
+
+  it("fails closed before Tavily when current information has no server-authored public context", async () => {
+    const provider = new StubProvider([]);
+    const retrieval = new StubRetrieval();
+
+    const result = await new TutorOrchestrator({ provider, retrieval }).respond({
+      studentId: "s",
+      message: "What is the current syllabus?",
+    });
+
+    expect(result.status).toBe("controlled_failure");
+    expect(retrieval.calls).toHaveLength(0);
+    expect(provider.calls).toBe(0);
+    expect(result.answer).toContain("won’t guess");
   });
   it("permits only one repair and then fails closed", async () => {
     const invalid = supported({ id: "c", text: "The teacher intended this.", type: "interpretation", evidenceIds: ["missing"], risk: "critical", verificationStatus: "pending" });
