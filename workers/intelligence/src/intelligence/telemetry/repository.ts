@@ -46,9 +46,25 @@ export async function recordDeploymentProvenance(db: D1Database, values: { deplo
 }
 
 function persistedEvidenceValue(evidence: Evidence): unknown {
-  if (evidence.source === "student" || evidence.source === "paper" || evidence.source === "teacher" || evidence.source === "axon_db") {
-    return { redacted: true, artifactHash: evidence.provenance.artifactHash ?? null };
+  // Tutor runs operate under STUDENT_CHAT_STRICT (rawLoggingAllowed=false).
+  // Anything that can originate from student schoolwork or request-derived
+  // deterministic tools is represented only by non-content metadata.
+  if (
+    evidence.source === "student" ||
+    evidence.source === "paper" ||
+    evidence.source === "teacher" ||
+    evidence.source === "axon_db" ||
+    evidence.source === "tool"
+  ) {
+    return {
+      redacted: true,
+      source: evidence.source,
+      artifactHash: evidence.provenance.artifactHash ?? null,
+      toolId: evidence.provenance.toolId ?? null,
+    };
   }
+  // Retrieval and stable-knowledge evidence is public/canonical reference
+  // material and may remain in the audit graph for reproducibility.
   return evidence.value;
 }
 
@@ -63,7 +79,10 @@ export async function writeEvidenceGraph(db: D1Database, traceId: string, eviden
   for (const claim of claims) {
     const storedClaimId = `${traceId}:${claim.id}`;
     statements.push(db.prepare("INSERT OR REPLACE INTO claim (id, trace_id, text, type, risk, verification_status) VALUES (?, ?, ?, ?, ?, ?)")
-      .bind(storedClaimId, traceId, claim.text, claim.type, claim.risk, claim.verificationStatus));
+      // Claim prose can repeat a student's answer or other private context even
+      // when the original evidence row is redacted. Keep graph structure and
+      // verification metadata, but never persist raw Tutor claim text.
+      .bind(storedClaimId, traceId, "[redacted:student-chat]", claim.type, claim.risk, claim.verificationStatus));
     for (const evidenceId of claim.evidenceIds.filter((id) => evidenceIds.has(id))) statements.push(db.prepare("INSERT OR IGNORE INTO claim_evidence (claim_id, evidence_id) VALUES (?, ?)").bind(storedClaimId, `${traceId}:${evidenceId}`));
   }
   if (statements.length > 0) await db.batch(statements);
