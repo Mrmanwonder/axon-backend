@@ -70,6 +70,37 @@ async function serveAsset(req: Request, env: Env, url: URL): Promise<Response> {
   });
 }
 
+function cleanPublicContextPart(value: unknown, max = 100): string | null {
+  if (typeof value !== "string") return null;
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  if (!cleaned) return null;
+  // Curriculum labels/codes are database-authored. URLs and obvious secrets are
+  // still excluded here so retrievalContext stays a plain public identifier set.
+  if (/https?:\/\//i.test(cleaned) || /\b(?:bearer|token|secret|api[_ -]?key)\b/i.test(cleaned)) return null;
+  return cleaned.slice(0, max);
+}
+
+function selectedSubject(rows: any[], requested: unknown, paper: any | null): { label: string; code: string | null } | null {
+  const paperLabel = cleanPublicContextPart(paper?.subject_display_snapshot ?? paper?.subject);
+  const paperCode = cleanPublicContextPart(paper?.subject_external_code_snapshot);
+  if (paperLabel) return { label: paperLabel, code: paperCode };
+
+  const canonical = rows.map((row) => ({
+    row,
+    label: cleanPublicContextPart(row?.display_name_snapshot ?? row?.subject),
+    code: cleanPublicContextPart(row?.external_code_snapshot ?? row?.syllabus_code),
+  })).filter((item) => item.label);
+
+  if (typeof requested === "string" && requested.trim()) {
+    const needle = requested.trim().toLocaleLowerCase();
+    const match = canonical.find(({ row, label, code }) =>
+      [row?.subject, row?.display_name_snapshot, row?.external_code_snapshot, row?.syllabus_code, label, code]
+        .some((value) => typeof value === "string" && value.trim().toLocaleLowerCase() === needle));
+    return match ? { label: match.label!, code: match.code } : null;
+  }
+  return canonical.length === 1 ? { label: canonical[0]!.label!, code: canonical[0]!.code } : null;
+}
+
 async function tutor(req: Request, env: Env): Promise<Response> {
   const user = clientFor(req, env);
   if (!user) return failure("Sign in first.", 401);
@@ -94,34 +125,75 @@ async function tutor(req: Request, env: Env): Promise<Response> {
 
   const { data: student, error } = await user
     .from("student")
-    .select("id")
+    .select("id,board,class_level,programme_id,stage_id")
     .eq("id", body.studentId)
     .maybeSingle();
   if (error || !student) return failure("That student profile is not yours.", 403);
+
+  let paper: any | null = null;
   if (body.paperId !== undefined) {
     if (typeof body.paperId !== "string" || !body.paperId) return failure("Choose a valid paper.");
-    const { data: paper, error: paperError } = await user
+    const paperResult = await user
       .from("paper")
-      .select("id")
+      .select("id,subject,subject_offering_id,subject_display_snapshot,subject_external_code_snapshot")
       .eq("id", body.paperId)
       .eq("student_id", student.id)
       .maybeSingle();
-    if (paperError || !paper) return failure("That paper is not available for this student.", 403);
+    if (paperResult.error || !paperResult.data) return failure("That paper is not available for this student.", 403);
+    paper = paperResult.data;
   }
   if (!env.INTELLIGENCE || !env.AXON_INTERNAL_TOKEN) {
     return failure("The tutor is not available yet.", 503);
   }
 
-  // The public gateway never accepts caller-authored evidence. Evidence used by
-  // the intelligence service must come from an authenticated server-side source.
+  // Build public research context exclusively from authenticated database
+  // records. Caller-authored board/grade/topic/subject values are never sent as
+  // retrieval authority. A requested subject may only select an exact stored
+  // subject row; its raw spelling is not forwarded.
+  const [subjectResult, programmeResult, stageResult] = await Promise.all([
+    user.from("student_subject")
+      .select("subject,syllabus_code,subject_offering_id,display_name_snapshot,external_code_snapshot")
+      .eq("student_id", student.id),
+    student.programme_id
+      ? user.from("curriculum_programme").select("id,provider_id,key,label").eq("id", student.programme_id).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    student.stage_id
+      ? user.from("curriculum_stage").select("id,key,label,school_year_label,legacy_class_level").eq("id", student.stage_id).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ]);
+  const programme = programmeResult.error ? null : programmeResult.data;
+  const stage = stageResult.error ? null : stageResult.data;
+  const providerResult = programme?.provider_id
+    ? await user.from("curriculum_provider").select("id,key,name").eq("id", programme.provider_id).maybeSingle()
+    : { data: null, error: null };
+  const provider = providerResult.error ? null : providerResult.data;
+  const subjects = subjectResult.error ? [] : (subjectResult.data ?? []);
+  const subject = selectedSubject(subjects, body.subject, paper);
+
+  const board = cleanPublicContextPart(provider?.name ?? provider?.key ?? student.board);
+  const programmeLabel = cleanPublicContextPart(programme?.label ?? programme?.key);
+  const stageLabel = cleanPublicContextPart(stage?.school_year_label ?? stage?.label ?? stage?.key);
+  const grade = Number.isInteger(stage?.legacy_class_level)
+    ? Number(stage.legacy_class_level)
+    : Number.isInteger(student.class_level) ? Number(student.class_level) : undefined;
+  const retrievalContext = [board, programmeLabel, stageLabel, subject?.label, subject?.code]
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 400);
+
+  // The public gateway never accepts caller-authored evidence or retrieval
+  // context. Evidence used by Intelligence must come from authenticated
+  // server-side sources.
   const tutorRequest = {
     studentId: student.id,
     message: body.message.trim(),
     ...(typeof body.requestId === "string" && body.requestId.length <= 128 ? { requestId: body.requestId } : {}),
-    ...(Number.isInteger(body.grade) && body.grade >= 1 && body.grade <= 16 ? { grade: body.grade } : {}),
-    ...(typeof body.board === "string" && body.board.length <= 100 ? { board: body.board } : {}),
-    ...(typeof body.subject === "string" && body.subject.length <= 100 ? { subject: body.subject } : {}),
-    ...(typeof body.topic === "string" && body.topic.length <= 200 ? { topic: body.topic } : {}),
+    ...(grade !== undefined ? { grade } : {}),
+    ...(board ? { board } : {}),
+    ...(subject ? { subject: subject.label } : {}),
+    ...(retrievalContext ? { retrievalContext } : {}),
     ...(typeof body.paperId === "string" ? { paperId: body.paperId } : {}),
     ...(["BRIEF", "NORMAL", "DEEP"].includes(body.depth) ? { depth: body.depth } : {}),
   };
