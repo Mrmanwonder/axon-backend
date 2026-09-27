@@ -5,6 +5,33 @@ import type { Env } from "@mastery/shared/env.js";
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const MAX_OBJECTS = 60;
+export const IO_CONCURRENCY = 8;
+const PAGE_PAIR_CONCURRENCY = Math.max(1, Math.floor(IO_CONCURRENCY / 2));
+
+/**
+ * Execute independent work with an explicit maximum number of in-flight
+ * operations. Results preserve input order, while failures reject the whole
+ * operation instead of being silently converted into success.
+ */
+export async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (!items.length) return [];
+  if (!Number.isInteger(limit) || limit < 1) throw new Error("Concurrency limit must be a positive integer.");
+  const out = new Array<R>(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      out[index] = await fn(items[index]!, index);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -378,13 +405,23 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
   const { data: paper } = await user.from("paper").select("id, student_id").eq("id", body.paper_id).eq("student_id", body.student_id).maybeSingle();
   if (!paper) return failure("That paper is not yours.", 403);
 
-  const admin = serviceClient(env);
-  const minted: any[] = [];
+  type PreparedUpload = {
+    object: any;
+    objectName: string;
+    extension: string;
+    bucket: BucketKind;
+    key: string;
+  };
+
+  // Validate every object before any database side effect or signed URL work.
+  // A bad object late in the request therefore cannot leave partial ledger rows.
+  const prepared: PreparedUpload[] = [];
   for (const object of body.objects) {
     const extension = CAPTURE.UPLOAD_EXTENSIONS[object.content_type as keyof typeof CAPTURE.UPLOAD_EXTENSIONS];
     if (!extension) return failure(`We cannot take a ${object.content_type} file.`);
     if (object.bytes && object.bytes > MAX_BYTES) return failure("One of those files is too large to upload.");
-    if (!BUCKET_FOR[object.kind as keyof typeof BUCKET_FOR]) return failure("Unknown file kind.");
+    const bucket = BUCKET_FOR[object.kind as keyof typeof BUCKET_FOR] as BucketKind | undefined;
+    if (!bucket) return failure("Unknown file kind.");
 
     // This value becomes one path segment in the signed R2 key. Reject separators,
     // dot-segments and every other path-like spelling before any URL is minted.
@@ -393,26 +430,61 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
       return failure("One of those files has an invalid upload name.");
     }
 
-    const bucket = BUCKET_FOR[object.kind as keyof typeof BUCKET_FOR];
-    const key = objectKey({ studentId: body.student_id, paperId: body.paper_id, kind: object.kind, name: objectName, extension });
-    const entry: any = { kind: object.kind, name: objectName, bucket, key, url: await presignPut(env, bucket, key, object.content_type) };
-    if (object.kind === "upload" || object.kind === "raw") {
-      const { data: row } = await admin
-        .from("upload")
-        .insert({
-          paper_id: body.paper_id,
-          student_id: body.student_id,
-          kind: object.content_type === "application/pdf" ? "pdf" : "image",
-          r2_bucket: bucket,
-          r2_key: key,
-          content_type: object.content_type,
-        })
-        .select("id")
-        .single();
-      entry.upload_id = row?.id;
-    }
-    minted.push(entry);
+    const key = objectKey({
+      studentId: body.student_id,
+      paperId: body.paper_id,
+      kind: object.kind,
+      name: objectName,
+      extension,
+    });
+    prepared.push({ object, objectName, extension, bucket, key });
   }
+
+  let signedUrls: string[];
+  try {
+    signedUrls = await mapLimit(prepared, IO_CONCURRENCY, ({ object, bucket, key }) =>
+      presignPut(env, bucket, key, object.content_type)
+    );
+  } catch (cause) {
+    return failure("We could not prepare those files for upload. Nothing was uploaded yet.", 503, String(cause));
+  }
+
+  const admin = serviceClient(env);
+  const ledgerRows = prepared
+    .filter(({ object }) => object.kind === "upload" || object.kind === "raw")
+    .map(({ object, bucket, key }) => ({
+      paper_id: body.paper_id,
+      student_id: body.student_id,
+      kind: object.content_type === "application/pdf" ? "pdf" : "image",
+      r2_bucket: bucket,
+      r2_key: key,
+      content_type: object.content_type,
+    }));
+
+  const ledgerByKey = new Map<string, string>();
+  if (ledgerRows.length) {
+    const { data: rows, error } = await admin
+      .from("upload")
+      .insert(ledgerRows)
+      .select("id,r2_key");
+    if (error || (rows?.length ?? 0) !== ledgerRows.length) {
+      return failure(
+        "We could not prepare those files for upload. Nothing was uploaded yet.",
+        500,
+        error?.message ?? "Upload ledger did not return every requested row.",
+      );
+    }
+    for (const row of rows ?? []) ledgerByKey.set(row.r2_key, row.id);
+  }
+
+  const minted = prepared.map(({ object, objectName, bucket, key }, index) => ({
+    kind: object.kind,
+    name: objectName,
+    bucket,
+    key,
+    url: signedUrls[index],
+    ...(ledgerByKey.has(key) ? { upload_id: ledgerByKey.get(key) } : {}),
+  }));
   return json({ objects: minted, expires_in: 900 });
 }
 
@@ -421,13 +493,13 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
   if (!user) return failure("Sign in first.", 401);
   const body = await readJson<any>(req);
   if (!body?.paper_id || !Array.isArray(body.uploads) || !body.uploads.length) return failure("Nothing to confirm.");
+  if (body.uploads.length > MAX_OBJECTS) return failure(`That is more than ${MAX_OBJECTS} files in one go.`);
 
   const { data: paper } = await user.from("paper").select("id, student_id").eq("id", body.paper_id).maybeSingle();
   if (!paper) return failure("That paper is not yours.", 403);
 
-  const admin = serviceClient(env);
-  const confirmed: string[] = [];
   const missing: Array<{ key: string; reason: string }> = [];
+  const validClaims: any[] = [];
   for (const claim of body.uploads) {
     // JSON is untyped at runtime. Do not let an arbitrary string choose a binding.
     if (claim.bucket !== "originals" && claim.bucket !== "derived") {
@@ -438,35 +510,56 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
       missing.push({ key: claim.key ?? "", reason: "that file does not belong to this paper" });
       continue;
     }
-    let head: Awaited<ReturnType<typeof headObject>>;
-    try {
-      head = await headObject(env, claim.bucket, claim.key);
-    } catch (cause) {
-      missing.push({ key: claim.key, reason: `we could not check that file (${cause})` });
-      continue;
-    }
-    if (!head) {
-      missing.push({ key: claim.key, reason: "that file did not arrive" });
-      continue;
-    }
-    if (claim.bytes && claim.bytes !== head.bytes) {
-      missing.push({ key: claim.key, reason: "that file arrived incomplete" });
-      continue;
-    }
-    await admin
-      .from("upload")
-      .update({
-        confirmed: true,
-        bytes: head.bytes,
-        etag: head.etag,
-        // This is retained only as client telemetry. The column name makes it
-        // explicit that no integrity decision may rely on it.
-        client_reported_sha256: typeof claim.sha256 === "string" ? claim.sha256 : null,
-      })
-      .eq("paper_id", body.paper_id)
-      .eq("r2_key", claim.key);
-    confirmed.push(claim.key);
+    validClaims.push(claim);
   }
+
+  type CheckedUpload = {
+    claim: any;
+    head: NonNullable<Awaited<ReturnType<typeof headObject>>> | null;
+    reason?: string;
+  };
+  const checked = await mapLimit<any, CheckedUpload>(validClaims, IO_CONCURRENCY, async (claim) => {
+    try {
+      const head = await headObject(env, claim.bucket, claim.key);
+      if (!head) return { claim, head: null, reason: "that file did not arrive" };
+      if (claim.bytes && claim.bytes !== head.bytes) {
+        return { claim, head, reason: "that file arrived incomplete" };
+      }
+      return { claim, head };
+    } catch (cause) {
+      return { claim, head: null, reason: `we could not check that file (${cause})` };
+    }
+  });
+
+  for (const item of checked) {
+    if (item.reason) missing.push({ key: item.claim.key, reason: item.reason });
+  }
+  const confirmedCandidates = checked.filter(
+    (item): item is CheckedUpload & { head: NonNullable<CheckedUpload["head"]> } => !item.reason && item.head !== null,
+  );
+
+  const admin = serviceClient(env);
+  try {
+    await mapLimit(confirmedCandidates, IO_CONCURRENCY, async ({ claim, head }) => {
+      const { error } = await admin
+        .from("upload")
+        .update({
+          confirmed: true,
+          bytes: head.bytes,
+          etag: head.etag,
+          // This is retained only as client telemetry. The column name makes it
+          // explicit that no integrity decision may rely on it.
+          client_reported_sha256: typeof claim.sha256 === "string" ? claim.sha256 : null,
+        })
+        .eq("paper_id", body.paper_id)
+        .eq("r2_key", claim.key);
+      if (error) throw new Error(error.message ?? "upload confirmation update failed");
+    });
+  } catch (cause) {
+    return failure("We could not confirm those uploaded files. Try again.", 500, String(cause));
+  }
+
+  const confirmed = confirmedCandidates.map(({ claim }) => claim.key);
   return json({ confirmed, missing }, missing.length ? 409 : 200);
 }
 
@@ -484,19 +577,21 @@ async function pageAssetUrls(req: Request, env: Env): Promise<Response> {
     .in("page_number", body.page_numbers);
   if (error) return failure("We could not look up those pages.", 500, error.message);
 
-  const urls: Record<number, { url: string | null; mask_url: string | null }> = {};
   // Sign back to the exact API origin the browser reached. This makes the asset
   // URL immune to a missing/stale MASTERY_ASSET_URL secret and guarantees that
   // /page-asset-urls cannot hand the frontend a URL for a different Worker.
   const assetOrigin = new URL(req.url).origin;
-  for (const page of pages ?? []) {
+  const signed = await mapLimit(pages ?? [], PAGE_PAIR_CONCURRENCY, async (page) => {
     const bucket = (page.r2_bucket as BucketKind) ?? "derived";
-    urls[page.page_number] = {
-      url: page.r2_key ? await signAssetUrl(env, bucket, page.r2_key, undefined, assetOrigin) : null,
-      mask_url: page.mask_key ? await signAssetUrl(env, bucket, page.mask_key, undefined, assetOrigin) : null,
-    };
-  }
-  return json({ urls });
+    // Each page's independent page/mask pair can be signed together, while the
+    // outer page concurrency is bounded so a large booklet cannot create a burst.
+    const [url, maskUrl] = await Promise.all([
+      page.r2_key ? signAssetUrl(env, bucket, page.r2_key, undefined, assetOrigin) : Promise.resolve(null),
+      page.mask_key ? signAssetUrl(env, bucket, page.mask_key, undefined, assetOrigin) : Promise.resolve(null),
+    ]);
+    return [page.page_number, { url, mask_url: maskUrl }] as const;
+  });
+  return json({ urls: Object.fromEntries(signed) });
 }
 
 // This is the ONLY place that starts explanations: it gates on every
