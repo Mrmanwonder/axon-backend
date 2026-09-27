@@ -101,8 +101,16 @@ describe("operational pipeline", () => {
       traceId, stage: "tutor", capability: "work_check", intent: "work_check",
       deploymentSha: "test-sha", configRevision: "test-config", pipelineVersion: "3.0.0",
       toolCalls: ["axon.calculator.v1"], retrievalUsed: true, groundingUsed: true,
-      verificationStatus: "verified", verificationFailures: [], repairAttempted: false,
-      answerStatus: "supported", inputArtifactHashes: []
+      paperId: "CANARY_PRIVATE_TRACE_PAPER_ID",
+      questionId: "CANARY_PRIVATE_TRACE_QUESTION_ID",
+      verificationStatus: "failed",
+      verificationFailures: [
+        "claim-private-CANARY_PRIVATE_CLAIM_ID: unsupported claim",
+        "CANARY_PRIVATE_DIAGNOSTIC_FREEFORM"
+      ],
+      error: "CANARY_PRIVATE_ERROR_FREEFORM",
+      repairAttempted: false,
+      answerStatus: "controlled_failure", inputArtifactHashes: []
     }, [
       {
         id: "student-e-CANARY_PRIVATE_EVIDENCE_ID", informationClass: "OBSERVED", source: "student", authority: "primary",
@@ -143,12 +151,27 @@ describe("operational pipeline", () => {
       WHERE c.trace_id = ?
     `).bind(traceId).first<{ count: number }>();
 
+    const trace = await env.DB.prepare(
+      "SELECT paper_id, question_id, verification_failures, error FROM ai_trace WHERE trace_id = ?"
+    ).bind(traceId).first<{ paper_id: string | null; question_id: string | null; verification_failures: string; error: string | null }>();
+    expect(trace).toEqual({
+      paper_id: null,
+      question_id: null,
+      verification_failures: '["UNSUPPORTED_CLAIM","REDACTED_DIAGNOSTIC"]',
+      error: "REDACTED_DIAGNOSTIC",
+    });
+
     const persisted = JSON.stringify({ evidence: evidence.results, claims: claims.results });
     for (const privateCanary of [
       studentCanary, teacherCanary, toolCanary, claimCanary,
       "CANARY_PRIVATE_EVIDENCE_ID", "CANARY_PRIVATE_CLAIM_ID",
       "CANARY_PRIVATE_PAPER_ID", "CANARY_PRIVATE_PAGE_ID",
-    ]) expect(persisted).not.toContain(privateCanary);
+      "CANARY_PRIVATE_TRACE_PAPER_ID", "CANARY_PRIVATE_TRACE_QUESTION_ID",
+      "CANARY_PRIVATE_DIAGNOSTIC_FREEFORM", "CANARY_PRIVATE_ERROR_FREEFORM",
+    ]) {
+      expect(persisted).not.toContain(privateCanary);
+      expect(JSON.stringify(trace)).not.toContain(privateCanary);
+    }
 
     expect(persisted).toContain(publicCanary);
     expect(claims.results).toHaveLength(1);
