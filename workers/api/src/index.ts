@@ -81,6 +81,17 @@ async function tutor(req: Request, env: Env): Promise<Response> {
   if (typeof body?.studentId !== "string" || !body.studentId || typeof body.message !== "string" || !body.message.trim() || body.message.length > 20_000) {
     return failure("Choose a student and write a question.");
   }
+
+  // The guardian-owned student table remains intentionally enumerable so a
+  // parent can choose a profile. It therefore cannot be the authority boundary
+  // for a daily Student Mode request. Bind Tutor to the one live student scope
+  // carried by this exact signed auth session before any sibling lookup occurs.
+  const { data: scope, error: scopeError } = await user.rpc("student_scope_state");
+  if (scopeError) return failure("We could not verify the active student.", 503);
+  if (!scope?.active || scope.student_id !== body.studentId) {
+    return failure("Switch to that student first.", 403);
+  }
+
   const { data: student, error } = await user
     .from("student")
     .select("id")
