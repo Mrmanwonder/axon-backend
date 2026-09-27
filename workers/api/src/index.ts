@@ -173,8 +173,9 @@ async function tutor(req: Request, env: Env): Promise<Response> {
   const board = cleanPublicContextPart(provider?.name ?? provider?.key ?? student.board);
   const programmeLabel = cleanPublicContextPart(programme?.label ?? programme?.key);
   const stageLabel = cleanPublicContextPart(stage?.school_year_label ?? stage?.label ?? stage?.key);
-  const grade = Number.isInteger(stage?.legacy_class_level)
-    ? Number(stage.legacy_class_level)
+  const stageClassLevel = stage?.legacy_class_level;
+  const grade = Number.isInteger(stageClassLevel)
+    ? Number(stageClassLevel)
     : Number.isInteger(student.class_level) ? Number(student.class_level) : undefined;
   const retrievalContext = [board, programmeLabel, stageLabel, subject?.label, subject?.code]
     .filter((value): value is string => Boolean(value))
