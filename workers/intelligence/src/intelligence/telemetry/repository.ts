@@ -3,6 +3,7 @@ import type { Concept } from "../../academic/concepts/taxonomy";
 import type { CompiledPrompt } from "../../prompts";
 import { RUNTIME_CONFIG_V3 } from "../../config/runtime.v3";
 import type { ProviderObservation } from "../routing/circuit-breaker";
+import { oneWayHash } from "../security/privacy";
 
 export interface TraceRecord {
   traceId: string; stage: string; capability: string; deploymentSha: string; configRevision: string; pipelineVersion: string;
@@ -45,32 +46,122 @@ export async function recordDeploymentProvenance(db: D1Database, values: { deplo
   ]);
 }
 
+const PUBLIC_AUDIT_EVIDENCE_SOURCES = new Set<Evidence["source"]>([
+  "retrieval", "official_source", "stable_knowledge"
+]);
+
 function persistedEvidenceValue(evidence: Evidence): unknown {
-  if (evidence.source === "student" || evidence.source === "paper" || evidence.source === "teacher" || evidence.source === "axon_db") {
-    return { redacted: true, artifactHash: evidence.provenance.artifactHash ?? null };
-  }
-  return evidence.value;
+  if (PUBLIC_AUDIT_EVIDENCE_SOURCES.has(evidence.source)) return evidence.value;
+  // Fail closed for current and future private/request-derived sources.
+  return {
+    redacted: true,
+    source: evidence.source,
+    artifactHash: evidence.provenance.artifactHash ?? null,
+    toolId: evidence.provenance.toolId ?? null,
+  };
+}
+
+function persistedEvidenceProvenance(evidence: Evidence): Evidence["provenance"] {
+  if (PUBLIC_AUDIT_EVIDENCE_SOURCES.has(evidence.source)) return structuredClone(evidence.provenance);
+  // Private provenance can itself contain paper/page identifiers, geometry or a
+  // capability URL. Keep only non-content audit references.
+  return {
+    ...(evidence.provenance.artifactHash ? { artifactHash: evidence.provenance.artifactHash } : {}),
+    ...(evidence.provenance.toolId ? { toolId: evidence.provenance.toolId } : {}),
+  };
+}
+
+const DIAGNOSTIC_CATEGORIES: Array<[RegExp, string]> = [
+  [/\bNO_COMPLIANT_PROVIDER\b/i, "NO_COMPLIANT_PROVIDER"],
+  [/\bMODEL_TIMEOUT\b/i, "MODEL_TIMEOUT"],
+  [/\bMODEL_RATE_LIMIT\b/i, "MODEL_RATE_LIMIT"],
+  [/\bMODEL_SERVER_ERROR\b/i, "MODEL_SERVER_ERROR"],
+  [/\bMODEL_FAILURE\b/i, "MODEL_FAILURE"],
+  [/\bINVALID_SCHEMA\b/i, "INVALID_SCHEMA"],
+  [/\bVERIFICATION_FAILED\b/i, "VERIFICATION_FAILED"],
+  [/\bRETRIEVAL_FAILURE\b/i, "RETRIEVAL_FAILURE"],
+  [/unsupported[_ ]claim/i, "UNSUPPORTED_CLAIM"],
+  [/missing evidence/i, "MISSING_EVIDENCE"],
+  [/restricted claim/i, "RESTRICTED_STABLE_CLAIM"],
+  [/canonical evidence does not support/i, "CANONICAL_SUPPORT_MISMATCH"],
+  [/calculation lacks verified tool/i, "MISSING_CALCULATION_EVIDENCE"],
+  [/retrieved claim lacks verified retrieval/i, "MISSING_RETRIEVAL_EVIDENCE"],
+  [/retrieval evidence does not support/i, "RETRIEVAL_SUPPORT_MISMATCH"],
+  [/contradicts recorded teacher mark/i, "CONTRADICTS_TEACHER_MARK"],
+  [/references absent evidence/i, "ABSENT_EVIDENCE_REFERENCE"],
+  [/invents teacher intent/i, "INVENTED_TEACHER_INTENT"],
+  [/conflicting evidence/i, "CONFLICTING_EVIDENCE"],
+  [/required retrieval evidence is absent/i, "MISSING_REQUIRED_RETRIEVAL"],
+  [/required calculation tool was bypassed/i, "MISSING_REQUIRED_CALCULATION_TOOL"],
+  [/required units tool was unavailable/i, "MISSING_REQUIRED_UNITS_TOOL"],
+  [/required chemistry tool was unavailable/i, "MISSING_REQUIRED_CHEMISTRY_TOOL"],
+  [/hint response used a full-answer/i, "HINT_POLICY_STRATEGY"],
+  [/hint response revealed a complete solution/i, "HINT_POLICY_FULL_SOLUTION"],
+];
+
+function privacySafeDiagnostic(value: string | undefined): string | null {
+  if (!value) return null;
+  return DIAGNOSTIC_CATEGORIES.find(([pattern]) => pattern.test(value))?.[1] ?? "REDACTED_DIAGNOSTIC";
+}
+
+function privacySafeTutorTrace(trace: TraceRecord): TraceRecord {
+  const failures = [...new Set((trace.verificationFailures ?? [])
+    .map((failure) => privacySafeDiagnostic(failure))
+    .filter((failure): failure is string => Boolean(failure)))];
+  const safeError = privacySafeDiagnostic(trace.error);
+  const {
+    paperId: _paperId,
+    questionId: _questionId,
+    verificationFailures: _verificationFailures,
+    error: _error,
+    ...safeTrace
+  } = trace;
+  return {
+    ...safeTrace,
+    verificationFailures: failures,
+    ...(safeError ? { error: safeError } : {}),
+  };
+}
+
+async function opaqueGraphId(traceId: string, kind: "e" | "c", sourceId: string): Promise<string> {
+  // Scope the digest to this trace so repeated internal IDs are not linkable
+  // across Tutor runs from the audit database alone.
+  return `${traceId}:${kind}:${await oneWayHash(`${traceId}\u001f${kind}\u001f${sourceId}`)}`;
 }
 
 export async function writeEvidenceGraph(db: D1Database, traceId: string, evidence: readonly Evidence[], claims: readonly Claim[]): Promise<void> {
   const statements: D1PreparedStatement[] = [];
-  const evidenceIds = new Set(evidence.map((item) => item.id));
+  const evidenceIdMap = new Map<string, string>();
+  for (const item of evidence) evidenceIdMap.set(item.id, await opaqueGraphId(traceId, "e", item.id));
+
   for (const item of evidence) {
-    const storedId = `${traceId}:${item.id}`;
+    const storedId = evidenceIdMap.get(item.id)!;
     statements.push(db.prepare("INSERT OR REPLACE INTO evidence (id, trace_id, information_class, source, authority, value_json, provenance_json, verification, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .bind(storedId, traceId, item.informationClass, item.source, item.authority, JSON.stringify(persistedEvidenceValue(item)), JSON.stringify(item.provenance), item.verification, item.confidence ?? null));
+      .bind(
+        storedId, traceId, item.informationClass, item.source, item.authority,
+        JSON.stringify(persistedEvidenceValue(item)),
+        JSON.stringify(persistedEvidenceProvenance(item)),
+        item.verification, item.confidence ?? null
+      ));
   }
+
   for (const claim of claims) {
-    const storedClaimId = `${traceId}:${claim.id}`;
+    const storedClaimId = await opaqueGraphId(traceId, "c", claim.id);
     statements.push(db.prepare("INSERT OR REPLACE INTO claim (id, trace_id, text, type, risk, verification_status) VALUES (?, ?, ?, ?, ?, ?)")
-      .bind(storedClaimId, traceId, claim.text, claim.type, claim.risk, claim.verificationStatus));
-    for (const evidenceId of claim.evidenceIds.filter((id) => evidenceIds.has(id))) statements.push(db.prepare("INSERT OR IGNORE INTO claim_evidence (claim_id, evidence_id) VALUES (?, ?)").bind(storedClaimId, `${traceId}:${evidenceId}`));
+      .bind(storedClaimId, traceId, "[redacted:student-chat]", claim.type, claim.risk, claim.verificationStatus));
+
+    for (const evidenceId of claim.evidenceIds) {
+      const storedEvidenceId = evidenceIdMap.get(evidenceId);
+      if (!storedEvidenceId) continue;
+      statements.push(db.prepare("INSERT OR IGNORE INTO claim_evidence (claim_id, evidence_id) VALUES (?, ?)")
+        .bind(storedClaimId, storedEvidenceId));
+    }
   }
   if (statements.length > 0) await db.batch(statements);
 }
 
 export async function writeTutorAudit(db: D1Database, trace: TraceRecord, evidence: readonly Evidence[] = [], claims: readonly Claim[] = []): Promise<void> {
-  await writeTrace(db, trace);
+  await writeTrace(db, privacySafeTutorTrace(trace));
   await writeEvidenceGraph(db, trace.traceId, evidence, claims);
 }
 

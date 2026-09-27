@@ -82,11 +82,113 @@ describe("operational pipeline", () => {
       transport_success, schema_success, semantic_validation_success
       FROM ai_trace WHERE trace_id = ?`).bind(traceId).first<Record<string, unknown>>();
     expect(stored).toMatchObject({
-      intent: "current_information", verification_failures: '["unsupported_claim c1"]',
+      intent: "current_information", verification_failures: '["UNSUPPORTED_CLAIM"]',
       tool_calls: '["tavily.search"]', retrieval_used: 1, grounding_used: 1,
       verification_status: "failed", repair_attempted: 1, answer_status: "controlled_failure",
       transport_success: 1, schema_success: 1, semantic_validation_success: 0
     });
+  });
+
+  it("never persists raw student-derived Tutor audit content", async () => {
+    const traceId = crypto.randomUUID();
+    const studentCanary = "CANARY_STUDENT_ANSWER_7f90";
+    const teacherCanary = "CANARY_TEACHER_REMARK_31ab";
+    const toolCanary = "CANARY_TOOL_DERIVED_882c";
+    const claimCanary = "CANARY_MODEL_CLAIM_PRIVATE_d114";
+    const publicCanary = "PUBLIC_REFERENCE_CANARY_445e";
+
+    await writeTutorAudit(env.DB, {
+      traceId, stage: "tutor", capability: "work_check", intent: "work_check",
+      deploymentSha: "test-sha", configRevision: "test-config", pipelineVersion: "3.0.0",
+      toolCalls: ["axon.calculator.v1"], retrievalUsed: true, groundingUsed: true,
+      paperId: "CANARY_PRIVATE_TRACE_PAPER_ID",
+      questionId: "CANARY_PRIVATE_TRACE_QUESTION_ID",
+      verificationStatus: "failed",
+      verificationFailures: [
+        "claim-private-CANARY_PRIVATE_CLAIM_ID: unsupported claim",
+        "CANARY_PRIVATE_DIAGNOSTIC_FREEFORM"
+      ],
+      error: "CANARY_PRIVATE_ERROR_FREEFORM",
+      repairAttempted: false,
+      answerStatus: "controlled_failure",
+      inputArtifactHashes: []
+    }, [
+      {
+        id: "student-e-CANARY_PRIVATE_EVIDENCE_ID", informationClass: "OBSERVED", source: "student", authority: "primary",
+        value: { answer: studentCanary },
+        provenance: { artifactHash: "student-artifact-hash", paperId: "CANARY_PRIVATE_PAPER_ID", pageId: "CANARY_PRIVATE_PAGE_ID" },
+        verification: "verified", confidence: 1
+      },
+      {
+        id: "teacher-e", informationClass: "OBSERVED", source: "teacher", authority: "primary",
+        value: { remark: teacherCanary }, provenance: { artifactHash: "teacher-artifact-hash" },
+        verification: "verified", confidence: 1
+      },
+      {
+        id: "tool-e", informationClass: "DERIVED", source: "tool", authority: "derived",
+        value: { expression: toolCanary, result: 42 }, provenance: { toolId: "axon.calculator.v1" },
+        verification: "verified", confidence: 1
+      },
+      {
+        id: "public-e", informationClass: "VERIFIED_EXTERNAL", source: "official_source", authority: "primary",
+        value: { title: "Official", content: publicCanary }, provenance: { url: "https://example.gov/reference" },
+        verification: "verified", confidence: 1
+      }
+    ], [{
+      id: "claim-private-CANARY_PRIVATE_CLAIM_ID",
+      text: claimCanary + ": " + studentCanary,
+      type: "observed",
+      evidenceIds: ["student-e-CANARY_PRIVATE_EVIDENCE_ID", "teacher-e", "tool-e", "public-e"],
+      risk: "high",
+      verificationStatus: "verified"
+    }]);
+
+    const evidence = await env.DB.prepare(
+      "SELECT id, source, value_json, provenance_json FROM evidence WHERE trace_id = ? ORDER BY source"
+    ).bind(traceId).all<{ id: string; source: string; value_json: string; provenance_json: string }>();
+    const claims = await env.DB.prepare(
+      "SELECT id, text, type, risk, verification_status FROM claim WHERE trace_id = ?"
+    ).bind(traceId).all<{ id: string; text: string; type: string; risk: string; verification_status: string }>();
+    const links = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM claim_evidence ce JOIN claim c ON c.id = ce.claim_id WHERE c.trace_id = ?"
+    ).bind(traceId).first<{ count: number }>();
+    const trace = await env.DB.prepare(
+      "SELECT paper_id, question_id, verification_failures, error FROM ai_trace WHERE trace_id = ?"
+    ).bind(traceId).first<{ paper_id: string | null; question_id: string | null; verification_failures: string; error: string | null }>();
+
+    expect(trace).toEqual({
+      paper_id: null,
+      question_id: null,
+      verification_failures: '["UNSUPPORTED_CLAIM","REDACTED_DIAGNOSTIC"]',
+      error: "REDACTED_DIAGNOSTIC",
+    });
+
+    const persisted = JSON.stringify({ evidence: evidence.results, claims: claims.results });
+    for (const privateCanary of [
+      studentCanary, teacherCanary, toolCanary, claimCanary,
+      "CANARY_PRIVATE_EVIDENCE_ID", "CANARY_PRIVATE_CLAIM_ID",
+      "CANARY_PRIVATE_PAPER_ID", "CANARY_PRIVATE_PAGE_ID",
+      "CANARY_PRIVATE_TRACE_PAPER_ID", "CANARY_PRIVATE_TRACE_QUESTION_ID",
+      "CANARY_PRIVATE_DIAGNOSTIC_FREEFORM", "CANARY_PRIVATE_ERROR_FREEFORM",
+    ]) {
+      expect(persisted).not.toContain(privateCanary);
+      expect(JSON.stringify(trace)).not.toContain(privateCanary);
+    }
+
+    expect(persisted).toContain(publicCanary);
+    expect(claims.results).toHaveLength(1);
+    expect(claims.results[0]).toMatchObject({
+      text: "[redacted:student-chat]",
+      type: "observed",
+      risk: "high",
+      verification_status: "verified"
+    });
+    expect(claims.results[0]?.id).toMatch(new RegExp("^" + traceId + ":c:[0-9a-f]{64}$"));
+    const toolRow = evidence.results.find((row) => row.source === "tool");
+    expect(toolRow?.id).toMatch(new RegExp("^" + traceId + ":e:[0-9a-f]{64}$"));
+    expect(toolRow?.value_json).toContain('"redacted":true');
+    expect(toolRow?.provenance_json).toBe('{"toolId":"axon.calculator.v1"}');
+    expect(links?.count).toBe(4);
   });
 
   it("enforces a durable per-route request window without storing raw identity", async () => {
