@@ -380,6 +380,9 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
 
   const admin = serviceClient(env);
   const minted: any[] = [];
+
+  // ⚡ Bolt: Synchronous validation pass preserves fail-fast behavior before concurrent tasks
+  const validObjects: any[] = [];
   for (const object of body.objects) {
     const extension = CAPTURE.UPLOAD_EXTENSIONS[object.content_type as keyof typeof CAPTURE.UPLOAD_EXTENSIONS];
     if (!extension) return failure(`We cannot take a ${object.content_type} file.`);
@@ -393,26 +396,42 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
       return failure("One of those files has an invalid upload name.");
     }
 
-    const bucket = BUCKET_FOR[object.kind as keyof typeof BUCKET_FOR];
-    const key = objectKey({ studentId: body.student_id, paperId: body.paper_id, kind: object.kind, name: objectName, extension });
-    const entry: any = { kind: object.kind, name: objectName, bucket, key, url: await presignPut(env, bucket, key, object.content_type) };
-    if (object.kind === "upload" || object.kind === "raw") {
-      const { data: row } = await admin
-        .from("upload")
-        .insert({
-          paper_id: body.paper_id,
-          student_id: body.student_id,
-          kind: object.content_type === "application/pdf" ? "pdf" : "image",
-          r2_bucket: bucket,
-          r2_key: key,
-          content_type: object.content_type,
-        })
-        .select("id")
-        .single();
-      entry.upload_id = row?.id;
-    }
-    minted.push(entry);
+    validObjects.push({ object, extension, objectName });
   }
+
+  try {
+    // ⚡ Bolt: Concurrent Promise.all() execution resolves N+1 DB/R2 queries bottleneck
+    // and maintains input order via mapping
+    const results = await Promise.all(validObjects.map(async ({ object, extension, objectName }) => {
+      const bucket = BUCKET_FOR[object.kind as keyof typeof BUCKET_FOR];
+      const key = objectKey({ studentId: body.student_id, paperId: body.paper_id, kind: object.kind, name: objectName, extension });
+      const entry: any = { kind: object.kind, name: objectName, bucket, key, url: await presignPut(env, bucket, key, object.content_type) };
+      if (object.kind === "upload" || object.kind === "raw") {
+        const { data: row, error } = await admin
+          .from("upload")
+          .insert({
+            paper_id: body.paper_id,
+            student_id: body.student_id,
+            kind: object.content_type === "application/pdf" ? "pdf" : "image",
+            r2_bucket: bucket,
+            r2_key: key,
+            content_type: object.content_type,
+          })
+          .select("id")
+          .single();
+        if (error) throw error;
+        entry.upload_id = row?.id;
+      }
+      return entry;
+    }));
+
+    for (const res of results) {
+      minted.push(res);
+    }
+  } catch (error) {
+    return failure("Failed to record upload intent.");
+  }
+
   return json({ objects: minted, expires_in: 900 });
 }
 
@@ -428,6 +447,9 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
   const admin = serviceClient(env);
   const confirmed: string[] = [];
   const missing: Array<{ key: string; reason: string }> = [];
+  const validClaims: any[] = [];
+
+  // ⚡ Bolt: Synchronous validation pass preserves fail-fast behavior before concurrent tasks
   for (const claim of body.uploads) {
     // JSON is untyped at runtime. Do not let an arbitrary string choose a binding.
     if (claim.bucket !== "originals" && claim.bucket !== "derived") {
@@ -438,20 +460,25 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
       missing.push({ key: claim.key ?? "", reason: "that file does not belong to this paper" });
       continue;
     }
+    validClaims.push(claim);
+  }
+
+  // ⚡ Bolt: Concurrent Promise.all() execution resolves N+1 DB/R2 queries bottleneck
+  await Promise.all(validClaims.map(async (claim) => {
     let head: Awaited<ReturnType<typeof headObject>>;
     try {
       head = await headObject(env, claim.bucket, claim.key);
     } catch (cause) {
       missing.push({ key: claim.key, reason: `we could not check that file (${cause})` });
-      continue;
+      return;
     }
     if (!head) {
       missing.push({ key: claim.key, reason: "that file did not arrive" });
-      continue;
+      return;
     }
     if (claim.bytes && claim.bytes !== head.bytes) {
       missing.push({ key: claim.key, reason: "that file arrived incomplete" });
-      continue;
+      return;
     }
     await admin
       .from("upload")
@@ -466,7 +493,8 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
       .eq("paper_id", body.paper_id)
       .eq("r2_key", claim.key);
     confirmed.push(claim.key);
-  }
+  }));
+
   return json({ confirmed, missing }, missing.length ? 409 : 200);
 }
 
@@ -489,13 +517,17 @@ async function pageAssetUrls(req: Request, env: Env): Promise<Response> {
   // URL immune to a missing/stale MASTERY_ASSET_URL secret and guarantees that
   // /page-asset-urls cannot hand the frontend a URL for a different Worker.
   const assetOrigin = new URL(req.url).origin;
-  for (const page of pages ?? []) {
+
+  // ⚡ Bolt: Optimize sequential cryptographic signing with Promise.all
+  await Promise.all((pages ?? []).map(async (page) => {
     const bucket = (page.r2_bucket as BucketKind) ?? "derived";
-    urls[page.page_number] = {
-      url: page.r2_key ? await signAssetUrl(env, bucket, page.r2_key, undefined, assetOrigin) : null,
-      mask_url: page.mask_key ? await signAssetUrl(env, bucket, page.mask_key, undefined, assetOrigin) : null,
-    };
-  }
+    const [url, mask_url] = await Promise.all([
+      page.r2_key ? signAssetUrl(env, bucket, page.r2_key, undefined, assetOrigin) : null,
+      page.mask_key ? signAssetUrl(env, bucket, page.mask_key, undefined, assetOrigin) : null,
+    ]);
+    urls[page.page_number] = { url, mask_url };
+  }));
+
   return json({ urls });
 }
 

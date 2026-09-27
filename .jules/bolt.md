@@ -1,0 +1,3 @@
+## 2026-09-27 - Fail-fast behavior inside Promise.all maps
+**Learning:** Returning a value early (like an HTTP error Response) from inside an `array.map(async () => {})` callback merely resolves that specific Promise with the error response; it does NOT short-circuit the outer loop or return from the main function. This silently swallows blocking errors, causing endpoints to return successful 200 OK statuses even when DB queries fail.
+**Action:** When refactoring sequential loops into `Promise.all` blocks, you must ensure errors properly bubble up. Either throw an Error inside the map and catch it outside, or inspect the resolved results array for failure signals before returning from the main function.
