@@ -2,6 +2,7 @@ import { CORS, json, failure, clientFor, readJson, serviceClient } from "@master
 import { presignPut, headObject, signAssetUrl, verifyAssetSignature, objectKey, BUCKET_FOR, type BucketKind } from "@mastery/shared/r2.js";
 import { CAPTURE, PIPELINE_VERSION, SAFE_OBJECT_NAME } from "@mastery/shared/contract.js";
 import type { Env } from "@mastery/shared/env.js";
+import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const MAX_OBJECTS = 60;
@@ -626,16 +627,11 @@ async function reviewComplete(req: Request, env: Env): Promise<Response> {
   const regionIds: string[] = begin?.region_ids ?? [];
   if (env.EXPLAIN_QUEUE) {
     // ⚡ Bolt: Optimize queue dispatch with batched messages to avoid N+1 latency bottleneck
-    const promises = [];
-    for (let i = 0; i < regionIds.length; i += 100) {
-      const chunk = regionIds.slice(i, i + 100);
-      promises.push(
-        env.EXPLAIN_QUEUE.sendBatch(
-          chunk.map((regionId) => ({ body: { run_id: body.run_id, region_id: regionId } }))
-        )
-      );
-    }
-    await Promise.all(promises);
+    await chunkedSendBatch(
+      env.EXPLAIN_QUEUE,
+      regionIds,
+      (regionId) => ({ body: { run_id: body.run_id, region_id: regionId } }),
+    );
   }
   return json({ run_id: body.run_id, explaining: begin?.queued ?? 0 });
 }

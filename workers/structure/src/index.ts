@@ -9,6 +9,7 @@ import { SYSTEM, instruction, SCHEMA, validate } from "@mastery/shared/prompts/s
 import { loadStructurePage } from "@mastery/shared/structure-page.js";
 import { ConfigurationError } from "@mastery/shared/errors.js";
 import type { Env } from "@mastery/shared/env.js";
+import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
 
 interface StructureMessage {
   run_id: string;
@@ -62,9 +63,17 @@ async function enqueueFromAdvance(env: Env, runId: string, advance: AdvanceResul
         "or deploy a structure worker that binds crop-queue."
       );
     }
-    await env.CROP_QUEUE.sendBatch(pageIds.map((pageId) => ({ body: { run_id: runId, page_id: pageId } })));
+    await chunkedSendBatch(
+      env.CROP_QUEUE,
+      pageIds,
+      (pageId) => ({ body: { run_id: runId, page_id: pageId } }),
+    );
   } else if (regionIds.length && env.CONTENT_QUEUE) {
-    await env.CONTENT_QUEUE.sendBatch(regionIds.map((regionId) => ({ body: { run_id: runId, region_id: regionId } })));
+    await chunkedSendBatch(
+      env.CONTENT_QUEUE,
+      regionIds,
+      (regionId) => ({ body: { run_id: runId, region_id: regionId } }),
+    );
   }
 
   if (advance.enqueue_reconcile && env.RECONCILE_QUEUE) {
