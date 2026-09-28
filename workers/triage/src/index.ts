@@ -5,6 +5,7 @@ import { SYSTEM, instruction, SCHEMA, validate, REJECTION_REASON, qualityFailure
 import { CAPTURE } from "@mastery/shared/contract.js";
 import { resolveAssessmentIdentity } from "@mastery/shared/assessment.js";
 import type { Env } from "@mastery/shared/env.js";
+import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
 
 const PAGES_TO_LOOK_AT = 6;
 
@@ -153,17 +154,11 @@ const handler = consumeQueue<TriageMessage>(
     await sb.from("paper_page").update({ structure_status: "pending", crop_status: "pending" }).eq("paper_id", run.paper_id);
     const { data: allPages } = await sb.from("paper_page").select("id").eq("paper_id", run.paper_id).not("r2_key", "is", null);
     if (env.STRUCTURE_QUEUE && allPages?.length) {
-      // ⚡ Bolt: Optimize queue dispatch with batched messages to avoid 100-message limit
-      const promises = [];
-      for (let i = 0; i < allPages.length; i += 100) {
-        const chunk = allPages.slice(i, i + 100);
-        promises.push(
-          env.STRUCTURE_QUEUE.sendBatch(
-            chunk.map((page: { id: string }) => ({ body: { run_id: runId, page_id: page.id } }))
-          )
-        );
-      }
-      await Promise.all(promises);
+      await chunkedSendBatch(
+        env.STRUCTURE_QUEUE,
+        allPages,
+        (page: { id: string }) => ({ body: { run_id: runId, page_id: page.id } }),
+      );
     }
 
     // Recorded so §7.7's "triage latency drops to single-digit seconds" can be
