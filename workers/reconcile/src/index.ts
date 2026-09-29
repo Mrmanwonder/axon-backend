@@ -126,11 +126,11 @@ const handler = consumeQueue<ReconcileMessage>(
     const { error: confidenceError } = await sb.rpc("apply_region_confidence", { p_rows: confidenceRows });
     if (confidenceError) throw new Error("apply_region_confidence failed: " + confidenceError.message);
 
-    await sb.from("extraction_run").update({ reconciled: result.reconciled, reconcile_delta: result.delta }).eq("id", runId);
-    await sb
-      .from("paper")
-      .update({ total_awarded: result.sum_awarded, total_available: result.sum_available || null, reconciled: result.reconciled })
-      .eq("id", run.paper_id);
+    // ⚡ Bolt: Optimize sequential database writes by running them concurrently to reduce latency
+    await Promise.all([
+      sb.from("extraction_run").update({ reconciled: result.reconciled, reconcile_delta: result.delta }).eq("id", runId),
+      sb.from("paper").update({ total_awarded: result.sum_awarded, total_available: result.sum_available || null, reconciled: result.reconciled }).eq("id", run.paper_id)
+    ]);
 
     if (!result.reconciled) {
       await sb.rpc("run_advance", { p_run_id: runId, p_to: "adjudicating" });
