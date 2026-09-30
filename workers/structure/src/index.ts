@@ -135,6 +135,7 @@ const handler = consumeQueue<StructureMessage>(
     if (!parsed.is_graded_exam_paper) {
       await mustOk(sb.from("page_unreadable").insert({
         paper_id: page.paper_id,
+        student_id: page.student_id,
         page_number: page.page_number,
         storage_path: page.r2_key,
         reason: parsed.not_a_paper_reason ?? "This page does not look like part of a marked exam paper.",
@@ -155,6 +156,7 @@ const handler = consumeQueue<StructureMessage>(
     if (!dims) {
       await mustOk(sb.from("page_unreadable").insert({
         paper_id: page.paper_id,
+        student_id: page.student_id,
         page_number: page.page_number,
         storage_path: page.r2_key,
         reason: UNPLACEABLE_PAGE_REASON,
@@ -289,10 +291,11 @@ const handler = consumeQueue<StructureMessage>(
       return;
     }
     const pageId = msg.page_id;
-    const page = await mustMaybe<{ paper_id: string; page_number: number; r2_key: string }>(sb.from("paper_page").select("paper_id, page_number, r2_key").eq("id", pageId).maybeSingle(), "structure failure page read");
+    const page = await mustMaybe<{ paper_id: string; student_id: string; page_number: number; r2_key: string }>(sb.from("paper_page").select("paper_id, student_id, page_number, r2_key").eq("id", pageId).maybeSingle(), "structure failure page read");
     if (page) {
       await mustOk(sb.from("page_unreadable").insert({
         paper_id: page.paper_id,
+        student_id: page.student_id,
         page_number: page.page_number,
         storage_path: page.r2_key,
         reason: "We could not read this page well enough to find the questions on it.",
