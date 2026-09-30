@@ -1,6 +1,6 @@
 import type { PixelBox } from "./contract.js";
 
-export type MarkShape = "glyph" | "crossing" | "enclosure" | "stroke" | "unknown";
+export type MarkShape = "glyph" | "crossing" | "enclosure" | "stroke" | "blob" | "unknown";
 export type MarkClass = "tick" | "cross" | "circle" | "underline" | "marginal_number" | "comment" | "unknown";
 
 export interface RawMark {
