@@ -1,4 +1,4 @@
-import { CORS, json, failure, clientFor, readJson, serviceClient } from "@mastery/shared/http.js";
+import { CORS, corsFor, withCors, json, failure, clientFor, readJson, serviceClient } from "@mastery/shared/http.js";
 import { presignPut, headObject, signAssetUrl, verifyAssetSignature, objectKey, BUCKET_FOR, type BucketKind } from "@mastery/shared/r2.js";
 import { CAPTURE, PIPELINE_VERSION, SAFE_OBJECT_NAME } from "@mastery/shared/contract.js";
 import type { Env } from "@mastery/shared/env.js";
@@ -36,33 +36,34 @@ export async function mapLimit<T, R>(
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
-    if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
+    if (req.method === "OPTIONS") return new Response("ok", { headers: corsFor(req) });
     const url = new URL(req.url);
     const path = url.pathname.replace(/\/+$/, "");
+    const respond = (response: Response) => withCors(req, response);
     try {
-      if (path === "/asset" || path.startsWith("/asset/")) return await serveAsset(req, env, url);
-      if (req.method !== "POST") return failure("not found", 404);
+      if (path === "/asset" || path.startsWith("/asset/")) return respond(await serveAsset(req, env, url));
+      if (req.method !== "POST") return respond(failure("not found", 404));
       switch (path) {
         case "/paper-submit":
-          return await paperSubmit(req, env);
+          return respond(await paperSubmit(req, env));
         case "/paper-retry":
-          return await paperRetry(req, env);
+          return respond(await paperRetry(req, env));
         case "/upload-intent":
-          return await uploadIntent(req, env);
+          return respond(await uploadIntent(req, env));
         case "/upload-complete":
-          return await uploadComplete(req, env);
+          return respond(await uploadComplete(req, env));
         case "/review-complete":
-          return await reviewComplete(req, env);
+          return respond(await reviewComplete(req, env));
         case "/tutor":
-          return await tutor(req, env);
+          return respond(await tutor(req, env));
         case "/page-asset-urls":
-          return await pageAssetUrls(req, env);
+          return respond(await pageAssetUrls(req, env));
         default:
-          return failure("not found", 404);
+          return respond(failure("not found", 404));
       }
     } catch (cause) {
       console.error("mastery-api unhandled error", String(cause));
-      return failure("Something went wrong on our end. Nothing was lost — try again.", 500);
+      return respond(failure("Something went wrong on our end. Nothing was lost — try again.", 500));
     }
   },
 } satisfies ExportedHandler<Env>;

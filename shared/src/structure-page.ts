@@ -21,9 +21,32 @@ export interface StructurePage {
   quality_signals: Record<string, unknown> | null;
 }
 
-export function loadStructurePage(sb: SupabaseClient, pageId: string) {
-  return mustMaybe<StructurePage>(
+type StoredRawMark = Omit<RawMark, 'page' | 'box'> & {
+  page?: number;
+  box: Omit<RawMark['box'], 'page'> & { page?: number };
+};
+type StoredStructurePage = Omit<StructurePage, 'teacher_marks'> & {
+  teacher_marks: StoredRawMark[] | null;
+};
+
+export async function loadStructurePage(sb: SupabaseClient, pageId: string): Promise<StructurePage | null> {
+  const page = await mustMaybe<StoredStructurePage>(
     sb.from('paper_page').select(STRUCTURE_PAGE_COLUMNS).eq('id', pageId).maybeSingle(),
     'structure page read',
   );
+  if (!page) return null;
+
+  // teacher_marks is stored on paper_page, so its page is implicit and older
+  // rows intentionally do not repeat page_number inside every mark. Attribution
+  // requires an explicit page, however. Hydrate it at the persistence boundary
+  // so every downstream caller receives a complete RawMark and can never write
+  // teacher_mark.page_number = null.
+  return {
+    ...page,
+    teacher_marks: page.teacher_marks?.map((mark) => ({
+      ...mark,
+      page: page.page_number,
+      box: { ...mark.box, page: page.page_number },
+    })) ?? null,
+  };
 }

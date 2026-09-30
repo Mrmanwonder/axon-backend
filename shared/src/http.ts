@@ -1,11 +1,43 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Env } from "./env.js";
 
+const PRODUCTION_ORIGINS = new Set([
+  "https://axonstudy.online",
+  "https://www.axonstudy.online",
+]);
+
 export const CORS = {
   "Access-Control-Allow-Origin": "https://axonstudy.online",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+  "Vary": "Origin",
 } as const;
+
+/**
+ * The public app is valid on both production hostnames. A single literal
+ * Access-Control-Allow-Origin makes the other hostname fail in the browser
+ * even when the Worker processed the request successfully.
+ */
+export function corsFor(req: Request): Record<string, string> {
+  const origin = req.headers.get("Origin");
+  return {
+    ...CORS,
+    ...(origin && PRODUCTION_ORIGINS.has(origin)
+      ? { "Access-Control-Allow-Origin": origin }
+      : {}),
+  };
+}
+
+/** Replace any static CORS header on a response with the caller-specific one. */
+export function withCors(req: Request, response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const [key, value] of Object.entries(corsFor(req))) headers.set(key, value);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
 
 export function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
