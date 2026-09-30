@@ -29,6 +29,8 @@ vi.mock("@mastery/shared/http.js", () => {
   });
   return {
     CORS,
+    corsFor: () => CORS,
+    withCors: (_req: Request, response: Response) => response,
     json,
     failure: (message: string, status = 400, detail?: unknown) =>
       json({ error: message, detail: detail ?? null }, status),
