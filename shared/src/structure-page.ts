@@ -21,7 +21,10 @@ export interface StructurePage {
   quality_signals: Record<string, unknown> | null;
 }
 
-type StoredRawMark = Omit<RawMark, 'page'> & { page?: number };
+type StoredRawMark = Omit<RawMark, 'page' | 'box'> & {
+  page?: number;
+  box: Omit<RawMark['box'], 'page'> & { page?: number };
+};
 type StoredStructurePage = Omit<StructurePage, 'teacher_marks'> & {
   teacher_marks: StoredRawMark[] | null;
 };
@@ -40,6 +43,10 @@ export async function loadStructurePage(sb: SupabaseClient, pageId: string): Pro
   // teacher_mark.page_number = null.
   return {
     ...page,
-    teacher_marks: page.teacher_marks?.map((mark) => ({ ...mark, page: page.page_number })) ?? null,
+    teacher_marks: page.teacher_marks?.map((mark) => ({
+      ...mark,
+      page: page.page_number,
+      box: { ...mark.box, page: page.page_number },
+    })) ?? null,
   };
 }
