@@ -25,8 +25,26 @@ function client(response: unknown, status = 200) {
 }
 
 test('persisted pending page loads without selecting device-only margin_band', async () => {
-  const page = { id: 'page-1', structure_status: 'pending', page_number: 1 };
+  const page = { id: 'page-1', structure_status: 'pending', page_number: 1, teacher_marks: null };
   assert.deepEqual(await loadStructurePage(client([page]), 'page-1'), page);
+});
+
+test('persisted teacher marks inherit their owning paper page number', async () => {
+  const page = {
+    id: 'page-3',
+    structure_status: 'pending',
+    page_number: 3,
+    teacher_marks: [{
+      box: { page: 3, x: 10, y: 20, w: 5, h: 7 },
+      shape: 'stroke',
+      metrics: { fill: 0.5 },
+    }],
+  };
+  // Simulate the production storage shape: page_number lives on paper_page,
+  // not redundantly inside every teacher_marks JSON entry.
+  delete (page.teacher_marks[0].box as any).page;
+  const loaded = await loadStructurePage(client([page]), 'page-3');
+  assert.equal(loaded?.teacher_marks?.[0].page, 3);
 });
 
 test('genuinely deleted page is distinguishable from a database error', async () => {
