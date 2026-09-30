@@ -45,6 +45,7 @@ test('persisted teacher marks inherit their owning paper page number', async () 
   delete (page.teacher_marks[0].box as any).page;
   const loaded = await loadStructurePage(client([page]), 'page-3');
   assert.equal(loaded?.teacher_marks?.[0].page, 3);
+  assert.equal(loaded?.teacher_marks?.[0].box.page, 3);
 });
 
 test('genuinely deleted page is distinguishable from a database error', async () => {
