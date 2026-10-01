@@ -1,4 +1,5 @@
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
+import { mustOk } from "@mastery/shared/db.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { reconcile, type QuestionMarks } from "@mastery/shared/reconcile.js";
 import { assess, numberingSoundness, downgradeRecognition, type Recognition } from "@mastery/shared/confidence.js";
@@ -127,11 +128,19 @@ const handler = consumeQueue<ReconcileMessage>(
     const { error: confidenceError } = await sb.rpc("apply_region_confidence", { p_rows: confidenceRows });
     if (confidenceError) throw new Error("apply_region_confidence failed: " + confidenceError.message);
 
-    await sb.from("extraction_run").update({ reconciled: result.reconciled, reconcile_delta: result.delta }).eq("id", runId);
-    await sb
-      .from("paper")
-      .update({ total_awarded: result.sum_awarded, total_available: result.sum_available || null, reconciled: result.reconciled })
-      .eq("id", run.paper_id);
+    // A failed write here used to be ignored: the run moved on with a stale or missing
+    // reconciliation. Throwing lets the queue retry the stage and the terminal handler classify it.
+    await mustOk(
+      sb.from("extraction_run").update({ reconciled: result.reconciled, reconcile_delta: result.delta }).eq("id", runId),
+      "reconcile: write run result",
+    );
+    await mustOk(
+      sb
+        .from("paper")
+        .update({ total_awarded: result.sum_awarded, total_available: result.sum_available || null, reconciled: result.reconciled })
+        .eq("id", run.paper_id),
+      "reconcile: write paper totals",
+    );
 
     if (!result.reconciled) {
       await sb.rpc("run_advance", { p_run_id: runId, p_to: "adjudicating" });
