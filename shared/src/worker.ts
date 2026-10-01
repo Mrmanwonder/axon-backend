@@ -18,10 +18,21 @@ export { isRetryable };
  *
  * It throws now, and `consumeQueue` below is careful about what that means.
  */
-export async function failRun(sb: SupabaseClient, runId: string | null | undefined, reason: string): Promise<void> {
+export async function failRun(
+  sb: SupabaseClient,
+  runId: string | null | undefined,
+  reason: string,
+  /** Stable machine code (see failure_codes.ts). `reason` is user copy; this is for queries and alerts. */
+  failureReason?: string,
+): Promise<void> {
   if (!runId) return;
   await mustRpc(
-    sb.rpc("run_advance", { p_run_id: runId, p_to: "failed", p_reason: reason }),
+    sb.rpc("run_advance", {
+      p_run_id: runId,
+      p_to: "failed",
+      p_reason: reason,
+      ...(failureReason ? { p_failure_reason: failureReason } : {}),
+    }),
     "run_advance(failed)",
   );
 }
