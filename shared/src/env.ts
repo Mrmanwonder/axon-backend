@@ -31,6 +31,10 @@ export interface Env {
   TUTOR_ROLLOUT?: string;
   /** Comma-separated Supabase auth user ids admitted at the internal stage. */
   TUTOR_INTERNAL_USERS?: string;
+  /** AXO-57: the one guardian-verification provider id this deploy accepts
+      callbacks for (unset = none), and its webhook signing secret. */
+  GUARDIAN_VERIFICATION_PROVIDER?: string;
+  GUARDIAN_VERIFICATION_WEBHOOK_SECRET?: string;
   // Legacy, from before the Gemini migration (see AXON_FIX_BRIEF.md §F3).
   // Bindings still exist on the deployed workers; nothing reads them anymore.
   GROQ_API_KEY?: string;

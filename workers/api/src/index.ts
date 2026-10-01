@@ -5,6 +5,7 @@ import type { Env } from "@mastery/shared/env.js";
 import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
 import { loadPaperEvidence, type TutorEvidence } from "./tutor_evidence.js";
 import { jwtSubject, tutorRollout } from "./tutor_rollout.js";
+import { CallbackRejected, configuredProvider, statusForRefusal } from "./guardian_verification.js";
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const MAX_OBJECTS = 60;
@@ -63,6 +64,9 @@ export default {
         case "/page-asset-urls":
           return respond(await pageAssetUrls(req, env));
         default:
+          if (path.startsWith("/guardian-verification/callback/")) {
+            return await guardianVerificationCallback(req, env, path.slice("/guardian-verification/callback/".length));
+          }
           return respond(failure("not found", 404));
       }
     } catch (cause) {
@@ -268,6 +272,40 @@ async function tutor(req: Request, env: Env): Promise<Response> {
     status: upstream.status,
     headers: { ...CORS, "Content-Type": upstream.headers.get("content-type") ?? "application/json", "Cache-Control": "no-store" },
   });
+}
+
+/**
+ * Provider → server callback (AXO-57). Not a browser endpoint: no CORS, no
+ * user session. Signature first; then the database binds the result to the
+ * guardian who started the check.
+ */
+async function guardianVerificationCallback(req: Request, env: Env, providerId: string): Promise<Response> {
+  const plain = (body: unknown, status: number) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+  const provider = configuredProvider(env, providerId);
+  if (!provider) return plain({ error: "not_found" }, 404);
+  let result;
+  try {
+    result = await provider.verify(req);
+  } catch (cause) {
+    if (cause instanceof CallbackRejected) return plain({ error: "rejected" }, 401);
+    throw cause;
+  }
+  const { data, error } = await serviceClient(env).rpc("record_guardian_verification_callback", {
+    p_state: result.state,
+    p_provider: provider.id,
+    p_reference: result.reference,
+    p_identity: result.identity,
+    p_adulthood: result.adulthood,
+    p_relationship: result.relationship,
+    p_issued_at: result.issuedAt,
+  });
+  if (error) {
+    const hint = (error as { hint?: string }).hint;
+    if ((error as { code?: string }).code === "23505") return plain({ error: "duplicate" }, 409);
+    return plain({ error: "refused" }, statusForRefusal(hint));
+  }
+  return plain({ ok: true, assertion: data }, 200);
 }
 
 async function paperSubmit(req: Request, env: Env): Promise<Response> {
