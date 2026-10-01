@@ -13,7 +13,16 @@ export interface ReconcileChecks {
 }
 
 export interface ReconcileResult {
-  reconciled: boolean;
+  /**
+   * true: the reading matches the totals printed on the paper. false: it does not, or one question
+   * is awarded more than it is worth. null: nothing printed to check against ("unchecked"). Never
+   * false merely because the paper carries no total.
+   */
+  reconciled: boolean | null;
+  /** True when the paper printed no awarded total, so the total is the sum of the marks Axon read. */
+  added_up: boolean;
+  /** True when at least one question's mark could not be read, so the sum is a lower bound. */
+  partial: boolean;
   delta: number | null;
   sum_awarded: number;
   sum_available: number;
@@ -39,11 +48,18 @@ export function reconcile(regions: QuestionMarks[], reportedTotal: number | null
   const awardedMatches = reportedTotal === null ? null : nearly(sumAwarded, reportedTotal);
   const availableMatches = statedMaximum === null ? null : nearly(sumAvailable, statedMaximum);
   const withinMax = regions.every((r) => r.awarded === null || r.available === null || r.awarded <= r.available + 1e-6);
-  const reconciled =
-    withinMax && (awardedMatches ?? true) && (availableMatches ?? true) && (awardedMatches !== null || availableMatches !== null);
+  // Nothing printed to check against is "unchecked" (null), not a mismatch (false).
+  const nothingPrinted = awardedMatches === null && availableMatches === null;
+  const reconciled: boolean | null = !withinMax
+    ? false
+    : nothingPrinted
+      ? null
+      : (awardedMatches ?? true) && (availableMatches ?? true);
   const delta = reportedTotal === null ? null : round2(sumAwarded - reportedTotal);
   return {
     reconciled,
+    added_up: reportedTotal === null,
+    partial: regions.some((r) => r.awarded === null),
     delta,
     sum_awarded: round2(sumAwarded),
     sum_available: round2(sumAvailable),
@@ -84,8 +100,32 @@ function messageFor(regions: QuestionMarks[], reportedTotal: number | null, sumA
     return "Our reading of this paper gives one question more marks than it was worth — worth checking these.";
   }
   if (reportedTotal === null) {
-    return regions.length ? "We could not find this paper's total, so we could not check our reading against it." : null;
+    return regions.length ? "There was no total printed on this paper, so Axon added up the marks it could read." : null;
   }
   if (delta === null || delta === 0) return null;
   return `Our reading of this paper adds up to ${trim(sumAwarded)}, and the total on the paper is ${trim(reportedTotal)} — worth checking these questions.`;
+}
+
+export type AdjudicationTrigger = "total_mismatch" | "mark_above_maximum" | "low_confidence_marks" | "conflicting_reads";
+
+/**
+ * Why a paper should go to the adjudicator, or [] when it should not.
+ *
+ * A missing printed total is NOT a reason: that is "unchecked", not "wrong". A paper that
+ * reconciles is never adjudicated. A paper that does not reconcile always is. An unchecked paper
+ * is adjudicated only on its own evidence: a mark that could not be read confidently, or two
+ * regions claiming the same question.
+ */
+export function adjudicationTriggers(
+  result: ReconcileResult,
+  regions: QuestionMarks[],
+  labelsConflict: boolean
+): AdjudicationTrigger[] {
+  if (result.reconciled === true) return [];
+  const out: AdjudicationTrigger[] = [];
+  if (result.checks.awarded_matches_total === false || result.checks.available_matches_maximum === false) out.push("total_mismatch");
+  if (!result.checks.every_question_within_its_maximum) out.push("mark_above_maximum");
+  if (regions.some((r) => r.recognition === "low" || r.awarded === null)) out.push("low_confidence_marks");
+  if (labelsConflict) out.push("conflicting_reads");
+  return out;
 }

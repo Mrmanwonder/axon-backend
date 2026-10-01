@@ -123,9 +123,14 @@ const handler = consumeQueue<AdjudicateMessage>(
       console.info("adjudication blocks commit", runId, structural.reason);
     }
 
-    const reason = parsed.corrections.length
-      ? "The marks do not quite add up. We have put the questions to check first."
-      : "The marks on this paper do not add up to the total written on it. We could not see why, so nothing was changed.";
+    // No printed total means there was nothing to add up against: never say the marks "do not add
+    // up" for a paper that simply did not print a total.
+    const hasPrintedTotal = paper?.reported_total !== null && paper?.reported_total !== undefined;
+    const reason = !hasPrintedTotal
+      ? "Some marks on this paper were hard to read. We have put those questions to check first."
+      : parsed.corrections.length
+        ? "The marks do not quite add up. We have put the questions to check first."
+        : "The marks on this paper do not add up to the total written on it. We could not see why, so nothing was changed.";
     await sb.rpc("run_advance", { p_run_id: runId, p_to: "needs_review", p_reason: reason });
 
     return { detail: { cause: parsed.cause, flagged } };
