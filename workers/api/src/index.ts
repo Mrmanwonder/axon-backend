@@ -54,6 +54,8 @@ export default {
           return respond(await uploadComplete(req, env));
         case "/review-complete":
           return respond(await reviewComplete(req, env));
+        case "/explain-retry":
+          return respond(await explainRetry(req, env));
         case "/tutor":
           return respond(await tutor(req, env));
         case "/page-asset-urls":
@@ -635,4 +637,31 @@ async function reviewComplete(req: Request, env: Env): Promise<Response> {
     );
   }
   return json({ run_id: body.run_id, explaining: begin?.queued ?? 0 });
+}
+
+// AXO-124: the student's "try again" on a question whose explanation failed. Ownership is checked
+// through the user's own RLS-scoped client; the re-queue itself is a service-role RPC that only
+// touches failed, student-confirmed, mark-losing regions, so a repeat tap is harmless.
+async function explainRetry(req: Request, env: Env): Promise<Response> {
+  const user = clientFor(req, env);
+  if (!user) return failure("Sign in first.", 401);
+  const body = await readJson<any>(req);
+  if (!body?.run_id) return failure("Which paper?");
+
+  const { data: run } = await user.from("extraction_run").select("id").eq("id", body.run_id).maybeSingle();
+  if (!run) return failure("That paper is not yours.", 403);
+
+  const admin = serviceClient(env);
+  const { data, error } = await admin.rpc("retry_failed_explanations", { p_run_id: body.run_id });
+  if (error) return failure("We could not retry the explanations. Nothing was changed.", 500, error.message);
+
+  const regionIds: string[] = data?.region_ids ?? [];
+  if (env.EXPLAIN_QUEUE && regionIds.length) {
+    await chunkedSendBatch(
+      env.EXPLAIN_QUEUE,
+      regionIds,
+      (regionId) => ({ body: { run_id: body.run_id, region_id: regionId } }),
+    );
+  }
+  return json({ run_id: body.run_id, retrying: data?.queued ?? 0 });
 }

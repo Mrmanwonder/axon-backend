@@ -1,4 +1,5 @@
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
+import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { reconcile, type QuestionMarks } from "@mastery/shared/reconcile.js";
 import { assess, numberingSoundness, downgradeRecognition, type Recognition } from "@mastery/shared/confidence.js";
 import { checkAnswer } from "@mastery/shared/arithmetic.js";
@@ -29,7 +30,7 @@ const handler = consumeQueue<ReconcileMessage>(
       .eq("run_id", runId)
       .order("order_index");
     if (!regions?.length) {
-      await failRun(sb, runId, "We could not find any questions on this paper. Try scanning it again in better light.");
+      await failRun(sb, runId, "We could not find any questions on this paper. Try scanning it again in better light.", "reconcile_no_questions");
       return { detail: { failed: "no questions" } };
     }
 
@@ -141,7 +142,7 @@ const handler = consumeQueue<ReconcileMessage>(
     await sb.rpc("run_advance", { p_run_id: runId, p_to: "needs_review", p_reason: result.message });
     return { detail: { reconciled: true, questions: regions.length } };
   },
-  async ({ sb, msg }) => {
+  async ({ sb, msg }, error) => {
     const runId = msg.run_id;
     let pagesStored = false;
     if (runId) {
@@ -156,7 +157,8 @@ const handler = consumeQueue<ReconcileMessage>(
       runId,
       pagesStored
         ? "We couldn't finish checking this paper's marks just now — your pages are kept, and you can try again."
-        : "We could not find the pages for this paper. Try scanning it again."
+        : "We could not find the pages for this paper. Try scanning it again.",
+      pagesStored ? failureCodeFor("reconcile", error) : "reconcile_pages_missing",
     );
   }
 );

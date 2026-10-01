@@ -1,4 +1,5 @@
 import { callModel } from "@mastery/shared/model-client.js";
+import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
 import { mustOk, mustOne, mustMaybe, mustData, mustAffectRows, mustRpc } from "@mastery/shared/db.js";
 import { clearsTheFloor } from "@mastery/shared/quality_floor.js";
@@ -333,8 +334,13 @@ const handler = consumeQueue<ExplainMessage>(
   // "the terminal state was not recorded" and retries rather than acknowledging
   // — which is the whole point: a failure to write `failed` used to be
   // swallowed, and the message acknowledged anyway, stranding the region.
-  async ({ sb, msg }) => {
-    await mustOk(sb.from("question_region").update({ explain_status: "failed" }).eq("id", msg.region_id), "explain_status=failed");
+  async ({ sb, msg }, error) => {
+    await mustOk(
+      sb.from("question_region")
+        .update({ explain_status: "failed", explain_failure_reason: failureCodeFor("explain", error) })
+        .eq("id", msg.region_id),
+      "explain_status=failed",
+    );
     await mustRpc(sb.rpc("advance_after_explain", { p_run_id: msg.run_id }), "advance_after_explain");
   }
 );
