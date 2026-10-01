@@ -85,12 +85,24 @@ function finalAcademicYear(start, tail) {
 
 export function parseCbseHeader(text) {
   const body = String(text).replace(/\r/g, "");
+  // The title block only. Subject codes and "Class" also appear inside
+  // questions ("a class of 40 students"), so the looser patterns below never
+  // look past the first lines of the paper.
+  const head = body.split("\n").filter(line => line.trim()).slice(0, 12).join("\n");
   const subjectMatch =
     /Subject\s*:\s*([^\n(]+?)\s*\((\d{3})\)/i.exec(body)
-    ?? /(?:SUBJECT|SUB)\s*[:\-]\s*([^\n]+?)\s+(?:CODE\s*[:\-]?\s*)?(\d{3})\b/i.exec(body);
+    ?? /(?:SUBJECT|SUB)\s*[:\-]\s*([^\n]+?)\s+(?:CODE\s*[:\-]?\s*)?(\d{3})\b/i.exec(body)
+    // "CHEMISTRY (CODE – 043)"
+    ?? /^\s*([A-Za-z][A-Za-z &.]*?)\s*\(\s*CODE\s*[–—:\-]?\s*(\d{3})\s*\)/im.exec(head)
+    // "BIOLOGY – CODE NO. 044", "SCIENCE – Code no. 086", "MATHEMATICS STANDARD – Code No. (041)"
+    ?? /^\s*([A-Za-z][A-Za-z &.]*?)\s*[–—\-]?\s*CODE\s*NO\.?\s*\(?\s*(\d{3})\s*\)?/im.exec(head)
+    // A bare title line: "MATHEMATICS (041)"
+    ?? /^\s*([A-Za-z][A-Za-z &.]*?)\s*\((\d{3})\)\s*$/m.exec(head);
   const classMatch = /Class\s*[–—-]\s*(XII|X)\b/i.exec(body)
     ?? /CLASS\s*[:\-]?\s*(XII|X)\b/i.exec(body);
-  const sessionMatch = /(?:Academic\s+Session|Session)\s*(20\d{2})\s*[–—-]\s*(\d{2,4})/i.exec(body);
+  const sessionMatch = /(?:Academic\s+Session|Session)\s*(20\d{2})\s*[–—-]\s*(\d{2,4})/i.exec(body)
+    // "CLASS XII (2026-27)", "CLASS- XII (2026 - 27)", "CLASS – X (2026–27)"
+    ?? /CLASS\s*[–—:\-]?\s*(?:XII|X)\s*\(\s*(20\d{2})\s*[–—-]\s*(\d{2,4})\s*\)/i.exec(head);
   if (!subjectMatch || !classMatch || !sessionMatch) return null;
 
   const classLevel = classMatch[1].toUpperCase() === "XII" ? 12 : 10;

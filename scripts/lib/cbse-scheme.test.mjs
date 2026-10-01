@@ -170,3 +170,29 @@ test("fails closed when verified label/mark coverage is too low", () => {
   ].join("\n");
   assert.throws(() => pairOfficialQuestions(sqp, ms), /coverage/);
 });
+
+// The title blocks below are the first lines of the official 2026-27 CBSE
+// SQP/MS PDFs (cbseacademic.nic.in), as `pdftotext -layout` renders them. Only
+// the title block is used: no question or scheme text.
+for (const [name, lines, want] of [
+  ["Chemistry SQP", ["CHEMISTRY (CODE - 043)", "SAMPLE QUESTION PAPER*", "CLASS XII (2026-27)"], ["CHEMISTRY", "043", 12]],
+  ["Chemistry MS", ["CHEMISTRY (CODE – 043)", "MARKING SCHEME", "CLASS XII (2026-27)"], ["CHEMISTRY", "043", 12]],
+  ["Mathematics SQP", ["SUBJECT: MATHEMATICS (041)", "SAMPLE QUESTION PAPER", "CLASS- XII (2026 - 27)"], ["MATHEMATICS", "041", 12]],
+  ["Mathematics MS", ["MATHEMATICS (041)", "MARKING SCHEME", "CLASS XII (2026-27)"], ["MATHEMATICS", "041", 12]],
+  ["Biology SQP", ["BIOLOGY – CODE NO. 044", "SAMPLE QUESTION PAPER*", "CLASS – XII (2026-27)"], ["BIOLOGY", "044", 12]],
+  ["Biology MS", ["BIOLOGY CODE NO. 044", "MARKING SCHEME", "CLASS – XII (2026–27)"], ["BIOLOGY", "044", 12]],
+  ["Science X MS", ["SCIENCE – Code no. 086", "MARKING SCHEME", "CLASS – X (2026-27)"], ["SCIENCE", "086", 10]],
+  ["Maths Standard X MS", ["MATHEMATICS STANDARD – Code No. (041)", "MARKING SCHEME", "CLASS X (2026 - 27)"], ["MATHEMATICS STANDARD", "041", 10]],
+]) {
+  test("parses the official 2026-27 header: " + name, () => {
+    const header = parseCbseHeader(lines.join("\n"));
+    assert.ok(header, "header not parsed");
+    assert.deepEqual([header.subject, header.subjectCode, header.classLevel, header.session, header.examYear],
+      [...want, "2026-27", 2027]);
+  });
+}
+
+test("a subject-like phrase deep in the body is not read as the title", () => {
+  const filler = Array.from({ length: 20 }, (_, i) => "Question " + (i + 1) + " text");
+  assert.equal(parseCbseHeader([...filler, "A CLASS (2026-27) of 40 students", "PHYSICS (042)"].join("\n")), null);
+});
