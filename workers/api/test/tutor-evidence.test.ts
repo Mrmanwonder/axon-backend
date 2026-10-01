@@ -74,7 +74,7 @@ function post(extra: Record<string, unknown>) {
   });
 }
 
-const env = () => ({ AXON_INTERNAL_TOKEN: "t", INTELLIGENCE: { fetch: fixture.intelligenceFetch } }) as any;
+const env = () => ({ AXON_INTERNAL_TOKEN: "t", INTELLIGENCE: { fetch: fixture.intelligenceFetch }, TUTOR_ROLLOUT: "ga" }) as any;
 const forwarded = () => JSON.parse(fixture.intelligenceFetch.mock.calls[0][1].body);
 
 beforeEach(() => {
@@ -163,5 +163,15 @@ describe("regionsToEvidence", () => {
     expect(Object.keys(ev[0].value).sort()).toEqual(["label", "questionText", "studentAnswer"]);
     expect(Object.keys(ev[1].value).sort()).toEqual(["label", "marksAvailable", "marksAwarded", "teacherRemark"]);
     expect(ev[0].provenance).toEqual({ paperId: "p" });
+  });
+});
+
+describe("AXO-126 rollout gate at the gateway", () => {
+  test("with the switch off the tutor answers 503 before any evidence query or model work", async () => {
+    fixture.clientFor.mockReturnValue(user());
+    const res = await worker.fetch(post({ paperId: "paper-1" }), { AXON_INTERNAL_TOKEN: "t", INTELLIGENCE: { fetch: fixture.intelligenceFetch } } as any);
+    expect(res.status).toBe(503);
+    expect(fixture.queries.some(q => q.table === "question_region" || q.table === "student")).toBe(false);
+    expect(fixture.intelligenceFetch).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,5 @@
 import { evidenceConfidence } from "../intelligence/confidence";
+import { requirePaperBindings } from "../deployment/paper-bindings";
 import { recordProviderObservation, writeTrace } from "../intelligence/telemetry/repository";
 import { classifyInk } from "./ink";
 import type { PaperIngestMetadata } from "./ingest";
@@ -48,7 +49,8 @@ export async function processPaperPage(env: Env, metadata: PaperIngestMetadata, 
     await markPageForReview(env.DB, metadata, "NO_PRIVACY_COMPLIANT_DOCUMENT_PROVIDER");
     return;
   }
-  const object = await env.PAPER_ARTIFACTS.get(metadata.objectKey);
+  const { artifacts } = requirePaperBindings(env);
+  const object = await artifacts.get(metadata.objectKey);
   if (!object) throw new Error("Original paper artifact missing");
   const bytes = await object.arrayBuffer();
   await event(env.DB, metadata.pageId, "VISION_ANALYSIS", "STARTED", metadata.originalHash, { provider: provider.id });
@@ -83,7 +85,7 @@ async function persistAnalysis(env: Env, metadata: PaperIngestMetadata, analysis
     const conditioned = base64Bytes(analysis.conditionedImageBase64);
     conditionedHash = await digest(conditioned);
     conditionedObjectKey = `papers/${metadata.paperId}/conditioned/${metadata.pageId}/${conditionedHash}`;
-    await env.PAPER_ARTIFACTS.put(conditionedObjectKey, conditioned, { httpMetadata: { contentType: analysis.conditionedImageMimeType ?? metadata.sourceType }, customMetadata: { originalHash: metadata.originalHash, conditionedHash } });
+    await requirePaperBindings(env).artifacts.put(conditionedObjectKey, conditioned, { httpMetadata: { contentType: analysis.conditionedImageMimeType ?? metadata.sourceType }, customMetadata: { originalHash: metadata.originalHash, conditionedHash } });
   }
 
   const regions: LayoutRegion[] = analysis.regions.map((region) => ({

@@ -53,3 +53,25 @@ test("a deployed Worker never binds to a locally managed Worker excluded from th
     }
   }
 });
+
+test("AXO-126: mastery-api binds INTELLIGENCE only when the tutor Worker is deployed first", async () => {
+  const workflow = await readFile(path.join(root, ".github/workflows/deploy.yml"), "utf8");
+  const tutorJob = workflow.slice(workflow.indexOf("deploy-intelligence-tutor:"), workflow.indexOf("\n  deploy:\n"));
+  assert.match(tutorJob, /if:.*vars\.TUTOR_DEPLOY_ENABLED == 'true'/, "tutor deploy must be switched off by default");
+  const migrate = tutorJob.indexOf("d1 migrations apply axon-intelligence --remote --env tutor");
+  const deploy = tutorJob.indexOf("wrangler deploy --env tutor");
+  assert.ok(migrate > -1 && deploy > migrate, "D1 migrations must run before the tutor deploy");
+
+  const deployJob = workflow.slice(workflow.indexOf("\n  deploy:\n"));
+  assert.match(deployJob, /needs:\s*\[[^\]]*deploy-intelligence-tutor[^\]]*\]/, "api deploy must wait for the tutor deploy");
+  assert.match(deployJob, /deploy-intelligence-tutor\.result == 'success' \|\| needs\.deploy-intelligence-tutor\.result == 'skipped'/,
+    "api must not deploy after a failed tutor deploy");
+  const bind = deployJob.split("\n").findIndex((line) => line.includes('binding = "INTELLIGENCE"'));
+  assert.ok(bind > -1, "the INTELLIGENCE binding step is missing");
+  const guard = deployJob.split("\n").slice(Math.max(0, bind - 2), bind + 1).join("\n");
+  assert.match(guard, /matrix\.worker == 'api' && vars\.TUTOR_DEPLOY_ENABLED == 'true'/, "binding must be guarded by the same switch");
+  assert.match(deployJob, /TUTOR_ROLLOUT:\$\{\{ vars\.TUTOR_ROLLOUT \|\| 'off' \}\}/, "rollout stage must default to off");
+
+  const api = await readFile(path.join(root, "workers/api/wrangler.toml"), "utf8");
+  assert.ok(!/axon-intelligence/.test(api), "the static api config must not bind a Worker that may not exist");
+});

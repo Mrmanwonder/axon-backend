@@ -26,6 +26,11 @@ export interface Env {
   // Internal authentication and service binding for the verified tutor.
   AXON_INTERNAL_TOKEN?: string;
   INTELLIGENCE?: Fetcher;
+  /** Tutor staged rollout (AXO-126): "off" (default), "internal" (only
+      TUTOR_INTERNAL_USERS), "ga" (every Student Mode session). */
+  TUTOR_ROLLOUT?: string;
+  /** Comma-separated Supabase auth user ids admitted at the internal stage. */
+  TUTOR_INTERNAL_USERS?: string;
   // Legacy, from before the Gemini migration (see AXON_FIX_BRIEF.md §F3).
   // Bindings still exist on the deployed workers; nothing reads them anymore.
   GROQ_API_KEY?: string;

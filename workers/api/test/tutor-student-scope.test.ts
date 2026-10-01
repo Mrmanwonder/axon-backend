@@ -153,6 +153,7 @@ function env() {
   return {
     AXON_INTERNAL_TOKEN: "internal-token",
     INTELLIGENCE: { fetch: fixture.intelligenceFetch },
+    TUTOR_ROLLOUT: "ga",
   } as any;
 }
 
