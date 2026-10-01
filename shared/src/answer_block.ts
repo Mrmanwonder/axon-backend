@@ -142,7 +142,7 @@ export function readAnswerBlock(raw: unknown, rawTextFallback: string | null): A
   return {
     lines,
     notation_profile: typeof o.notation_profile === "string" && o.notation_profile
-      ? o.notation_profile : "caie_default",
+      ? o.notation_profile : "unspecified",
     raw_text: rawText,
   };
 }

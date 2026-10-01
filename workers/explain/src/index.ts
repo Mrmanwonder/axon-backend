@@ -3,6 +3,7 @@ import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
 import { mustOk, mustOne, mustMaybe, mustData, mustAffectRows, mustRpc } from "@mastery/shared/db.js";
 import { clearsTheFloor } from "@mastery/shared/quality_floor.js";
+import { providerKeyForBoard, providerKeyForProgramme } from "@mastery/shared/provider_identity.js";
 import {
   SYSTEM as TIER1_SYSTEM,
   instruction as tier1Instruction,
@@ -96,15 +97,10 @@ const handler = consumeQueue<ExplainMessage>(
         sb.from("curriculum_programme").select("key").eq("id", student.programme_id).maybeSingle(),
         "curriculum programme read",
       ) as any;
-      providerKey = programme?.key?.startsWith("cambridge_") ? "cambridge"
-        : programme?.key?.startsWith("cbse_") ? "cbse"
-        : programme?.key === "ibdp" ? "ib"
-        : null;
+      providerKey = providerKeyForProgramme(programme?.key);
     } else {
-      providerKey = student?.board === "CBSE" ? "cbse"
-        : student?.board === "IBDP" ? "ib"
-        : student?.board ? "cambridge"
-        : null;
+      // AXO-94: only the explicit legacy boards map; any other value is unknown.
+      providerKey = providerKeyForBoard(student?.board);
     }
 
     const schemeEvidence = paper?.tier === "tier_2"
