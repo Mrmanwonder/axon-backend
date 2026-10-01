@@ -265,6 +265,9 @@ test("serviceTier flex is sent to the provider, and the standard tier sends none
 
   assert.equal(bodies[0].service_tier, "flex");
   assert.ok(!Object.hasOwn(bodies[1], "service_tier"));
+  // The tier the call was made on is logged so the database prices it correctly.
+  assert.equal(flex.inserted.at(-1)?.service_tier, "flex");
+  assert.equal(standard.inserted.at(-1)?.service_tier, "standard");
 });
 
 test("usage is logged for pricing: cached tokens and billed output including thinking", async (t) => {

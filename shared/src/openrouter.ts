@@ -213,6 +213,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
       requested_model: route.primary_model,
       prompt_version: route.prompt_version,
       thinking_level: thinkingLevel ?? null,
+      service_tier: opts.serviceTier ?? "standard",
       intent: opts.intent ?? null,
       retrieval_used: webEnabled,
       grounding_used: webSources.size > 0,
