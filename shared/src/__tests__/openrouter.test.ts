@@ -157,7 +157,7 @@ function harness(stage: string, maxTokens: number) {
       };
     },
   };
-  const run = () =>
+  const run = (extra: Record<string, unknown> = {}) =>
     callModel({
       env: { GOOGLE_API_KEY: "test" },
       sb: sb as never,
@@ -170,6 +170,7 @@ function harness(stage: string, maxTokens: number) {
         if (typeof v.answer !== "string") throw new Error("answer must be a string");
         return v as { answer: string };
       },
+      ...extra,
     });
   return { inserted, run };
 }
@@ -244,4 +245,24 @@ test("a schema mismatch on a normal stop logs the validator message and is not r
   assert.equal(row.repair_attempted, false);
   assert.match(String(row.error_detail), /finish_reason=stop/);
   assert.match(String(row.error_detail), /validator=answer must be a string/);
+});
+
+test("serviceTier flex is sent to the provider, and the standard tier sends none", async (t) => {
+  const bodies: Array<Record<string, unknown>> = [];
+  t.mock.method(globalThis, "fetch", async (_u: string | URL | Request, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return Response.json({
+      model: "gemini-3.1-flash-lite",
+      choices: [{ finish_reason: "stop", message: { content: '{"answer":"ok"}' } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    });
+  });
+
+  const flex = harness("tier-flex", 1000);
+  await flex.run({ serviceTier: "flex" });
+  const standard = harness("tier-standard", 1000);
+  await standard.run();
+
+  assert.equal(bodies[0].service_tier, "flex");
+  assert.ok(!Object.hasOwn(bodies[1], "service_tier"));
 });

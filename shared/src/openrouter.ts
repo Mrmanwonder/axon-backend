@@ -123,6 +123,12 @@ export interface CallModelOptions<T> {
   attempt?: number;
   routeOverride?: RouteOverride | null;
   timeoutMs?: number;
+  /**
+   * "flex" asks Gemini for its discounted, best-effort tier (about half price,
+   * 1-15 min latency). Only for work nobody is waiting on, such as backfills and
+   * re-explains. Omitted means the standard tier.
+   */
+  serviceTier?: "flex";
   thinkingLevel?: "minimal" | "low" | "medium" | "high";
   /** Fail closed unless both the configured route and provider response use this exact model. */
   expectedModel?: string;
@@ -156,6 +162,8 @@ export interface CallModelResult<T> {
 // so retrying inline just burns it again for no better odds.
 const TRANSIENT_HTTP = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
 const INLINE_TRIES = 2;
+// Flex requests can queue for up to 15 minutes on the provider side.
+const FLEX_TIMEOUT_MS = 15 * 60_000;
 
 export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModelResult<T>> {
   const key = opts.env.GOOGLE_API_KEY;
@@ -236,7 +244,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
             "Content-Type": "application/json",
           },
           body: JSON.stringify(body),
-          signal: AbortSignal.timeout(opts.timeoutMs ?? 90_000),
+          signal: AbortSignal.timeout(opts.timeoutMs ?? (opts.serviceTier === "flex" ? FLEX_TIMEOUT_MS : 90_000)),
         });
       } catch (cause) {
         const timedOut = cause instanceof DOMException && cause.name === "TimeoutError";
@@ -295,6 +303,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
       ...(!route.primary_model.startsWith("gemini-3.5-") ? { temperature: route.temperature } : {}),
       max_tokens: maxTokens,
       ...(thinkingLevel ? { reasoning_effort: thinkingLevel } : {}),
+      ...(opts.serviceTier === "flex" ? { service_tier: "flex" } : {}),
       messages,
       response_format: {
         type: "json_schema",
