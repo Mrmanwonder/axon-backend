@@ -265,4 +265,33 @@ test("serviceTier flex is sent to the provider, and the standard tier sends none
 
   assert.equal(bodies[0].service_tier, "flex");
   assert.ok(!Object.hasOwn(bodies[1], "service_tier"));
+  // The tier the call was made on is logged so the database prices it correctly.
+  assert.equal(flex.inserted.at(-1)?.service_tier, "flex");
+  assert.equal(standard.inserted.at(-1)?.service_tier, "standard");
+});
+
+test("usage is logged for pricing: cached tokens and billed output including thinking", async (t) => {
+  const { inserted, run } = harness("usage-pricing", 1000);
+  t.mock.method(globalThis, "fetch", async () =>
+    Response.json({
+      model: "gemini-3.1-flash-lite",
+      choices: [{ finish_reason: "stop", message: { content: '{"answer":"ok"}' } }],
+      usage: {
+        prompt_tokens: 10000,
+        completion_tokens: 1200,
+        total_tokens: 12000,
+        prompt_tokens_details: { cached_tokens: 4000 },
+        completion_tokens_details: { reasoning_tokens: 800 },
+      },
+    }));
+
+  await run();
+  const row = inserted.at(-1)!;
+  assert.equal(row.input_tokens, 10000);
+  assert.equal(row.cached_tokens, 4000);
+  // total - prompt = 2000: completion 1200 + thinking 800, billed as output.
+  assert.equal(row.billed_output_tokens, 2000);
+  assert.equal(row.reasoning_tokens, 800);
+  // The database prices the call; the worker never invents a cost.
+  assert.equal(row.cost_usd, null);
 });
