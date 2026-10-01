@@ -142,6 +142,8 @@ export interface CallModelResult<T> {
   promptVersion: string;
   inputTokens: number | null;
   outputTokens: number | null;
+  /** Thinking tokens, when the provider reports them; already included in outputTokens' billing. */
+  reasoningTokens: number | null;
   costUsd: number | null;
   /** Public URLs consulted by Tavily during this model call. */
   webSources: string[];
@@ -182,7 +184,10 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
 
   let inputTokens: number | null = null;
   let outputTokens: number | null = null;
+  let reasoningTokens: number | null = null;
   let costUsd: number | null = null;
+  let repairAttempted = false;
+  let maxTokens = route.max_tokens;
   let served = route.primary_model;
   let toolCallsUsed = 0;
   const toolCallNames = new Set<string>();
@@ -203,7 +208,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
       grounding_used: webSources.size > 0,
       tool_calls: [...toolCallNames],
       verification_failures: [],
-      repair_attempted: false,
+      repair_attempted: repairAttempted,
       attempt,
       latency_ms: Date.now() - started,
       image_keys: (opts.images ?? []).map((i) => i.key),
@@ -288,7 +293,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
     const body: Record<string, unknown> = {
       model: route.primary_model,
       ...(!route.primary_model.startsWith("gemini-3.5-") ? { temperature: route.temperature } : {}),
-      max_tokens: route.max_tokens,
+      max_tokens: maxTokens,
       ...(thinkingLevel ? { reasoning_effort: thinkingLevel } : {}),
       messages,
       response_format: {
@@ -302,6 +307,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
     served = data.model ?? served;
     inputTokens = add(inputTokens, data.usage?.prompt_tokens);
     outputTokens = add(outputTokens, data.usage?.completion_tokens);
+    reasoningTokens = add(reasoningTokens, data.usage?.completion_tokens_details?.reasoning_tokens);
     costUsd = add(costUsd, data.usage?.cost);
     if (opts.expectedModel && served !== opts.expectedModel) {
       const err = new ModelError("served_model_mismatch", `Provider served ${served}; expected ${opts.expectedModel}.`, 200, false);
@@ -310,6 +316,13 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
     }
 
     const message = data.choices?.[0]?.message;
+    const finishReason: string | null = data.choices?.[0]?.finish_reason ?? null;
+    const usageFields = {
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      reasoning_tokens: reasoningTokens,
+      cost_usd: costUsd,
+    };
     if (data.error || !message) {
       const err = new ModelError("empty_response", data.error?.message ?? "Gemini returned nothing", 200, true);
       await log({
@@ -320,9 +333,8 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
         verification_status: "failed",
         verification_failures: [{ code: err.code }],
         answer_status: "controlled_failure",
-        input_tokens: inputTokens,
-        output_tokens: outputTokens,
-        cost_usd: costUsd,
+        error_detail: failureDetail(finishReason, usageFields, data.error?.message),
+        ...usageFields,
       });
       throw err;
     }
@@ -381,7 +393,17 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
     }
 
     const raw = message.content;
+    // Gemini 3.x counts thinking against max_tokens, so a `length` stop means the
+    // budget was spent before the answer finished. Repair once with double the
+    // budget; anything else is a real failure and is logged with a reason.
+    const truncated = finishReason === "length" && !repairAttempted;
     if (typeof raw !== "string" || raw.length === 0) {
+      if (truncated) {
+        repairAttempted = true;
+        maxTokens = route.max_tokens * 2;
+        round -= 1;
+        continue;
+      }
       const err = new ModelError("empty_response", "Gemini returned no final content", 200, true);
       await log({
         model_id: served,
@@ -391,9 +413,8 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
         verification_status: "failed",
         verification_failures: [{ code: err.code }],
         answer_status: "controlled_failure",
-        input_tokens: inputTokens,
-        output_tokens: outputTokens,
-        cost_usd: costUsd,
+        error_detail: failureDetail(finishReason, usageFields),
+        ...usageFields,
       });
       throw err;
     }
@@ -402,7 +423,13 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
     try {
       parsed = opts.validate(JSON.parse(raw));
     } catch (cause) {
-      const err = new ModelError("bad_shape", `the model's answer did not fit the schema: ${cause}`, 200, true);
+      if (truncated) {
+        repairAttempted = true;
+        maxTokens = route.max_tokens * 2;
+        round -= 1;
+        continue;
+      }
+      const err = new ModelError("bad_shape", `the model's answer did not fit the schema: ${redactDetail(cause)}`, 200, true);
       await log({
         model_id: served,
         ok: false,
@@ -411,9 +438,8 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
         verification_status: "failed",
         verification_failures: [{ code: err.code }],
         answer_status: "controlled_failure",
-        input_tokens: inputTokens,
-        output_tokens: outputTokens,
-        cost_usd: costUsd,
+        error_detail: failureDetail(finishReason, usageFields, cause),
+        ...usageFields,
       });
       throw err;
     }
@@ -424,9 +450,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
       schema_valid: true,
       verification_status: "transport_only",
       answer_status: "pending_verification",
-      input_tokens: inputTokens,
-      output_tokens: outputTokens,
-      cost_usd: costUsd,
+      ...usageFields,
     });
 
     return {
@@ -436,6 +460,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
       promptVersion: route.prompt_version,
       inputTokens,
       outputTokens,
+      reasoningTokens,
       costUsd,
       webSources: [...webSources],
       latencyMs: Date.now() - started,
@@ -445,6 +470,35 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
   const err = new ModelError("tool_loop_limit", "Gemini did not finish within the live-web tool budget", 200, false);
   await log({ model_id: served, ok: false, error_code: err.code, verification_status: "failed", verification_failures: [{ code: err.code }], answer_status: "controlled_failure" });
   throw err;
+}
+
+/**
+ * A validator or JSON.parse message can quote the model's output, which for the
+ * explain stage restates the student's answer. Keep the shape of the message,
+ * drop anything quoted, and bound the length.
+ */
+export function redactDetail(cause: unknown): string {
+  const text = cause instanceof Error ? cause.message : String(cause ?? "");
+  return text
+    .replace(/"[^"]*"/g, '"…"')
+    .replace(/'[^']*'/g, "'…'")
+    .replace(/`[^`]*`/g, "`…`")
+    .replace(/\s+/g, " ")
+    .slice(0, 200);
+}
+
+function failureDetail(
+  finishReason: string | null,
+  usage: { input_tokens: number | null; output_tokens: number | null; reasoning_tokens: number | null },
+  cause?: unknown
+): string {
+  const parts = [
+    `finish_reason=${finishReason ?? "unknown"}`,
+    `output_tokens=${usage.output_tokens ?? "?"}`,
+    `reasoning_tokens=${usage.reasoning_tokens ?? "?"}`,
+  ];
+  if (cause !== undefined && cause !== null && cause !== "") parts.push(`validator=${redactDetail(cause)}`);
+  return parts.join("; ").slice(0, 500);
 }
 
 async function logCall(sb: SupabaseClient, row: Record<string, unknown>): Promise<void> {

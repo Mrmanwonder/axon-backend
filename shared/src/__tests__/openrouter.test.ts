@@ -125,3 +125,123 @@ test("a provider response from a different model is withheld and recorded", asyn
   assert.equal(inserted.at(-1)?.model_id, "gemini-unapproved");
   assert.equal(inserted.at(-1)?.answer_status, "controlled_failure");
 });
+
+function harness(stage: string, maxTokens: number) {
+  const inserted: Array<Record<string, unknown>> = [];
+  const route = {
+    stage,
+    primary_model: "gemini-3.1-flash-lite",
+    fallbacks: [],
+    temperature: 0,
+    max_tokens: maxTokens,
+    prompt_version: "test.v1",
+    thinking_level: "low",
+    allow_training: false,
+    enabled: true,
+  };
+  const sb = {
+    from(table: string) {
+      if (table === "model_route") {
+        const query = {
+          select: () => query,
+          eq: () => query,
+          maybeSingle: async () => ({ data: route, error: null }),
+        };
+        return query;
+      }
+      return {
+        insert: async (row: Record<string, unknown>) => {
+          inserted.push(row);
+          return { error: null };
+        },
+      };
+    },
+  };
+  const run = () =>
+    callModel({
+      env: { GOOGLE_API_KEY: "test" },
+      sb: sb as never,
+      stage,
+      system: "system",
+      instruction: "instruction",
+      schema: { name: "test", schema: { type: "object" } },
+      validate: (value) => {
+        const v = value as { answer?: string };
+        if (typeof v.answer !== "string") throw new Error("answer must be a string");
+        return v as { answer: string };
+      },
+    });
+  return { inserted, run };
+}
+
+test("a truncated answer is repaired once with double the budget", async (t) => {
+  const { inserted, run } = harness("truncate-repair", 1000);
+  const bodies: Array<Record<string, unknown>> = [];
+  t.mock.method(globalThis, "fetch", async (_u: string | URL | Request, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return bodies.length === 1
+      ? Response.json({
+          model: "gemini-3.1-flash-lite",
+          choices: [{ finish_reason: "length", message: { content: '{"answer": "cut' } }],
+          usage: { prompt_tokens: 10, completion_tokens: 75, completion_tokens_details: { reasoning_tokens: 70 } },
+        })
+      : Response.json({
+          model: "gemini-3.1-flash-lite",
+          choices: [{ finish_reason: "stop", message: { content: '{"answer":"ok"}' } }],
+          usage: { prompt_tokens: 10, completion_tokens: 40, completion_tokens_details: { reasoning_tokens: 20 } },
+        });
+  });
+
+  const result = await run();
+  assert.equal(result.parsed.answer, "ok");
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[0].max_tokens, 1000);
+  assert.equal(bodies[1].max_tokens, 2000);
+  assert.equal(result.reasoningTokens, 90);
+  assert.equal(inserted.length, 1);
+  assert.equal(inserted[0].ok, true);
+  assert.equal(inserted[0].repair_attempted, true);
+  assert.equal(inserted[0].reasoning_tokens, 90);
+});
+
+test("a still-truncated answer fails once, diagnosably, with no student text", async (t) => {
+  const { inserted, run } = harness("truncate-fail", 1000);
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls += 1;
+    return Response.json({
+      model: "gemini-3.1-flash-lite",
+      choices: [{ finish_reason: "length", message: { content: '{"answer": "student wrote SECRET' } }],
+      usage: { prompt_tokens: 10, completion_tokens: 75, completion_tokens_details: { reasoning_tokens: 70 } },
+    });
+  });
+
+  await assert.rejects(run(), (err: unknown) => err instanceof ModelError && err.code === "bad_shape");
+  assert.equal(calls, 2);
+  const row = inserted.at(-1)!;
+  assert.equal(row.ok, false);
+  assert.equal(row.repair_attempted, true);
+  assert.match(String(row.error_detail), /finish_reason=length/);
+  assert.match(String(row.error_detail), /reasoning_tokens=140/);
+  assert.doesNotMatch(String(row.error_detail), /SECRET/);
+});
+
+test("a schema mismatch on a normal stop logs the validator message and is not repaired", async (t) => {
+  const { inserted, run } = harness("shape-mismatch", 1000);
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls += 1;
+    return Response.json({
+      model: "gemini-3.1-flash-lite",
+      choices: [{ finish_reason: "stop", message: { content: '{"answer": 5}' } }],
+      usage: { prompt_tokens: 10, completion_tokens: 8 },
+    });
+  });
+
+  await assert.rejects(run(), (err: unknown) => err instanceof ModelError && err.code === "bad_shape");
+  assert.equal(calls, 1);
+  const row = inserted.at(-1)!;
+  assert.equal(row.repair_attempted, false);
+  assert.match(String(row.error_detail), /finish_reason=stop/);
+  assert.match(String(row.error_detail), /validator=answer must be a string/);
+});
