@@ -1,4 +1,4 @@
-import { callModel } from "@mastery/shared/openrouter.js";
+import { callModel } from "@mastery/shared/model-client.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
 import { adjudicationBlocksCommit } from "@mastery/shared/labels.js";
 import { imageRef } from "@mastery/shared/r2.js";

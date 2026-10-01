@@ -1,4 +1,4 @@
-import { callModel } from "@mastery/shared/openrouter.js";
+import { callModel } from "@mastery/shared/model-client.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
 import { mustOk, mustOne, mustMaybe, mustData, mustAffectRows, mustRpc } from "@mastery/shared/db.js";
 import { clearsTheFloor } from "@mastery/shared/quality_floor.js";

@@ -12,8 +12,12 @@ export interface Env {
   // own JWT, so RLS applies to student-facing endpoints.
   SUPABASE_ANON_KEY?: string;
 
-  // Model
+  // Model. GOOGLE_API_KEY serves provider = ai_studio. provider = vertex needs the
+  // three VERTEX_* bindings (a service-account secret, never a literal).
   GOOGLE_API_KEY?: string;
+  VERTEX_PROJECT?: string;
+  VERTEX_LOCATION?: string;
+  VERTEX_SERVICE_ACCOUNT_JSON?: string;
 
   // Live web grounding for Gemini custom tools. Secrets are bound per Worker.
   TAVILY_API_KEY?: string;
