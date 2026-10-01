@@ -1,4 +1,5 @@
 import { callModel } from "@mastery/shared/model-client.js";
+import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
 import { imageRef } from "@mastery/shared/r2.js";
 import { planPage, regionsWrittenByPage, structureFailureReason, uniqueLabelKey } from "@mastery/shared/structure_plan.js";
@@ -266,7 +267,7 @@ const handler = consumeQueue<StructureMessage>(
   },
   async ({ env, sb, msg }, error) => {
     if (error instanceof ConfigurationError) {
-      await failRun(sb, msg.run_id, "A processing service could not read this paper. Your pages are kept. Please try again later.");
+      await failRun(sb, msg.run_id, "A processing service could not read this paper. Your pages are kept. Please try again later.", failureCodeFor("structure", error));
       return;
     }
     const pageId = msg.page_id;
@@ -296,7 +297,8 @@ const handler = consumeQueue<StructureMessage>(
         msg.run_id,
         pagesStored
           ? "We couldn't finish reading this paper's questions just now — your pages are kept, and you can try again."
-          : "We could not find the pages for this paper. Try scanning it again."
+          : "We could not find the pages for this paper. Try scanning it again.",
+        pagesStored ? failureCodeFor("structure", error) : "structure_pages_missing",
       );
     }
   }

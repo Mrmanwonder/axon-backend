@@ -3,6 +3,7 @@ export * from "./http.js";
 export * from "./model-client.js";
 export * from "./tavily.js";
 export * from "./worker.js";
+export * from "./failure_codes.js";
 export * from "./r2.js";
 export * from "./contract.js";
 export * from "./attribution.js";

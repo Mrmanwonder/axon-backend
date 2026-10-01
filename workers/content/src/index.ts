@@ -1,4 +1,5 @@
 import { callModel } from "@mastery/shared/model-client.js";
+import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
 import { imageRef } from "@mastery/shared/r2.js";
 import { pageDimensions } from "@mastery/shared/page.js";
@@ -278,7 +279,7 @@ const handler = consumeQueue<ContentMessage>(
       throw e;
     }
   },
-  async ({ env, sb, msg }) => {
+  async ({ env, sb, msg }, error) => {
     const regionId = msg.region_id;
     const { data: region } = await sb.from("question_region").select("confidence_signals").eq("id", regionId).maybeSingle();
     await sb
@@ -290,6 +291,8 @@ const handler = consumeQueue<ContentMessage>(
         confidence_signals: {
           ...(region?.confidence_signals ?? {}),
           unreadable_reason: "We could not finish reading this question. It has been flagged for review.",
+          // Stable machine reason, separate from the user copy above.
+          failure_reason: failureCodeFor("content", error),
         },
         updated_at: new Date().toISOString(),
       })
