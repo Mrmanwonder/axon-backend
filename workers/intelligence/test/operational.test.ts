@@ -56,7 +56,7 @@ describe("operational pipeline", () => {
     const stableFacts = await env.DB.prepare("SELECT COUNT(*) AS count FROM stable_knowledge WHERE active = 1").first<{ count: number }>();
     expect(prompts?.count).toBeGreaterThanOrEqual(5);
     expect(routes?.count).toBe(5);
-    expect(models.results).toEqual([{ model: "gemini-3.5-flash-lite" }]);
+    expect(models.results).toEqual([{ model: "gemini-3.8-flash" }]);
     expect(evalCases?.count).toBeGreaterThanOrEqual(17);
     expect(stableFacts?.count).toBeGreaterThanOrEqual(3);
   });
@@ -232,7 +232,7 @@ describe("operational pipeline", () => {
     };
     const result = await probeReleaseCapabilities({
       provider,
-      model: "gemini-3.5-flash-lite",
+      model: "gemini-3.8-flash",
       retrieval: {
         retrieve: () => Promise.resolve([{
           id: "probe-source",
@@ -254,7 +254,7 @@ describe("operational pipeline", () => {
     });
     expect(result.artifact).toEqual({
       formatVersion: "axon-capability-probe.v1",
-      model: "gemini-3.5-flash-lite",
+      model: "gemini-3.8-flash",
       geminiPassed: true,
       tavilyPassed: true,
       visionPassed: true,
@@ -277,7 +277,7 @@ describe("operational pipeline", () => {
     };
     const result = await probeReleaseCapabilities({
       provider,
-      model: "gemini-3.5-flash-lite",
+      model: "gemini-3.8-flash",
       retrieval: {
         retrieve: () => Promise.resolve([{
           id: "probe-source",

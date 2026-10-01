@@ -6,7 +6,7 @@ export const RUNTIME_CONFIG_V3 = Object.freeze({
   // The release contract names the requested model explicitly. Supabase still
   // owns the live route used by callModel(), but this expected value lets the
   // capability probe and circuit breaker fail closed if that route drifts.
-  primaryModel: "gemini-3.5-flash-lite",
+  primaryModel: "gemini-3.8-flash",
   thinking: {
     classification: "minimal", simple: "low", standard: "medium", complex: "high",
     verification: "medium", adjudication: "high"
