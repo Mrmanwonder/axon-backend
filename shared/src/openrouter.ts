@@ -193,6 +193,8 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
   let inputTokens: number | null = null;
   let outputTokens: number | null = null;
   let reasoningTokens: number | null = null;
+  let cachedTokens: number | null = null;
+  let billedOutputTokens: number | null = null;
   let costUsd: number | null = null;
   let repairAttempted = false;
   let maxTokens = route.max_tokens;
@@ -317,6 +319,14 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
     inputTokens = add(inputTokens, data.usage?.prompt_tokens);
     outputTokens = add(outputTokens, data.usage?.completion_tokens);
     reasoningTokens = add(reasoningTokens, data.usage?.completion_tokens_details?.reasoning_tokens);
+    cachedTokens = add(cachedTokens, data.usage?.prompt_tokens_details?.cached_tokens);
+    // Thinking is billed as output. total - prompt is the output actually billed
+    // whether or not completion_tokens already includes the thinking tokens.
+    const prompt = data.usage?.prompt_tokens;
+    const total = data.usage?.total_tokens;
+    if (typeof prompt === "number" && typeof total === "number" && total >= prompt) {
+      billedOutputTokens = add(billedOutputTokens, total - prompt);
+    }
     costUsd = add(costUsd, data.usage?.cost);
     if (opts.expectedModel && served !== opts.expectedModel) {
       const err = new ModelError("served_model_mismatch", `Provider served ${served}; expected ${opts.expectedModel}.`, 200, false);
@@ -330,6 +340,8 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
       input_tokens: inputTokens,
       output_tokens: outputTokens,
       reasoning_tokens: reasoningTokens,
+      cached_tokens: cachedTokens,
+      billed_output_tokens: billedOutputTokens,
       cost_usd: costUsd,
     };
     if (data.error || !message) {
