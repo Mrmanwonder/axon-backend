@@ -3,6 +3,7 @@ import { presignPut, headObject, signAssetUrl, verifyAssetSignature, objectKey, 
 import { CAPTURE, PIPELINE_VERSION, SAFE_OBJECT_NAME } from "@mastery/shared/contract.js";
 import type { Env } from "@mastery/shared/env.js";
 import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
+import { loadPaperEvidence, type TutorEvidence } from "./tutor_evidence.js";
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const MAX_OBJECTS = 60;
@@ -173,8 +174,27 @@ async function tutor(req: Request, env: Env): Promise<Response> {
     if (paperResult.error || !paperResult.data) return failure("That paper is not available for this student.", 403);
     paper = paperResult.data;
   }
+  if (body.questionId !== undefined) {
+    if (!paper) return failure("Choose the paper this question belongs to.");
+    if (typeof body.questionId !== "string" || !body.questionId || body.questionId.length > 128) {
+      return failure("Choose a valid question.");
+    }
+  }
   if (!env.INTELLIGENCE || !env.AXON_INTERNAL_TOKEN) {
     return failure("The tutor is not available yet.", 503);
+  }
+
+  // Paper evidence comes from the database under this session's own scope,
+  // never from the request body (AXO-36).
+  let evidence: TutorEvidence[] = [];
+  if (paper) {
+    const loaded = await loadPaperEvidence(user, {
+      studentId: student.id,
+      paperId: paper.id,
+      ...(typeof body.questionId === "string" ? { questionId: body.questionId } : {}),
+    });
+    if (!loaded.ok) return failure(loaded.message, loaded.status);
+    evidence = loaded.evidence;
   }
 
   // Build public research context exclusively from authenticated database
@@ -228,6 +248,7 @@ async function tutor(req: Request, env: Env): Promise<Response> {
     ...(retrievalContext ? { retrievalContext } : {}),
     ...(typeof body.paperId === "string" ? { paperId: body.paperId } : {}),
     ...(["BRIEF", "NORMAL", "DEEP"].includes(body.depth) ? { depth: body.depth } : {}),
+    ...(evidence.length ? { evidence } : {}),
   };
 
   const upstream = await env.INTELLIGENCE.fetch("https://axon-intelligence.internal/v1/tutor", {
