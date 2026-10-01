@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { callModel, ModelError } from "../openrouter.js";
+import { callModel, ModelError } from "../model-client.js";
 
 test("Gemini 3.5 uses the route thinking level and omits legacy temperature", async (t) => {
   const inserted: Array<Record<string, unknown>> = [];

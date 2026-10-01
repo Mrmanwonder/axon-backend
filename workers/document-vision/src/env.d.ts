@@ -1,5 +1,7 @@
 interface DocumentVisionSecretBindings {
   GOOGLE_API_KEY: string;
+  /** Deploy-time configuration (a var set at deploy), never a literal in code or wrangler.jsonc. */
+  GEMINI_MODEL: string;
 }
 
 type Env = DocumentVisionBindings & DocumentVisionSecretBindings;

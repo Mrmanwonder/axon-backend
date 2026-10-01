@@ -1,4 +1,4 @@
-import { callModel } from "@mastery/shared/openrouter.js";
+import { callModel } from "@mastery/shared/model-client.js";
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
 import { imageRef } from "@mastery/shared/r2.js";
 import { SYSTEM, instruction, SCHEMA, validate, REJECTION_REASON, qualityFailureMessage, type QualitySignals } from "@mastery/shared/prompts/triage.v1.js";

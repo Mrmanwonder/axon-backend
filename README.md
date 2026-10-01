@@ -17,7 +17,7 @@ shared/                 the actually-shared library — one copy, not six
   src/
     env.ts               Env bindings interface
     http.ts               CORS, JSON responses, Supabase clients
-    openrouter.ts         callModel(): Gemini call + retry/tool loop
+    model-client.ts       callModel(): the one Gemini client (AI Studio or Vertex) + retry/tool loop
     tavily.ts             Tavily Search/Extract tools for opt-in live web grounding
     worker.ts             consumeQueue(): the queue-consumer harness
     r2.ts                  R2 reads/writes, presigned URLs, asset signing

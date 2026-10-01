@@ -1,6 +1,6 @@
 export * from "./env.js";
 export * from "./http.js";
-export * from "./openrouter.js";
+export * from "./model-client.js";
 export * from "./tavily.js";
 export * from "./worker.js";
 export * from "./r2.js";

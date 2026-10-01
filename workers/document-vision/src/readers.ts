@@ -43,7 +43,8 @@ function parseJsonText(text: string): unknown {
 }
 
 export class GeminiTargetedRegionReader implements TargetedRegionReader {
-  readonly id = "gemini-3.5-flash-lite-targeted-region";
+  // Model-agnostic on purpose: the model is configuration (GEMINI_MODEL), never a literal.
+  readonly id = "gemini-targeted-region";
   constructor(private readonly apiKey: string, private readonly model: string) {}
 
   async readRegion(dataUrl: string, context: TargetedRegionContext, timeoutMs: number): Promise<TargetedRegionRead> {

@@ -1,13 +1,11 @@
-// Despite the filename (a holdover from before the Gemini migration — see
-// AXON_FIX_BRIEF.md §F1/§F3), this calls Gemini directly via its
-// OpenAI-compatible endpoint. Renaming the file is a one-line import change
-// away whenever someone gets to it; not done here to keep this reconstruction
-// a faithful port of the live bundle, not a drive-by rename.
+// The one Gemini client for every mastery-* Worker and axon-intelligence. Model,
+// provider, thinking level and token budget all come from `public.model_route`;
+// nothing in code names a model. It speaks the OpenAI-compatible chat-completions
+// contract of Google AI Studio or Vertex AI (see model-provider.ts).
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Env } from "./env.js";
+import { ProviderConfigError, normalizeServedModel, resolveProviderTarget, type ModelProvider, type ProviderTarget } from "./model-provider.js";
 import { TAVILY_TOOLS, WEB_TOOL_SYSTEM_GUARD, runTavilyTool, type TavilyToolCall } from "./tavily.js";
-
-const OR_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
 export class ModelError extends Error {
   code: string;
@@ -25,6 +23,8 @@ export class ModelError extends Error {
 export interface ModelRoute {
   stage: string;
   primary_model: string;
+  /** Which endpoint serves the model. A route change, not a code change. */
+  provider: ModelProvider;
   fallbacks: string[] | null;
   temperature: number;
   max_tokens: number;
@@ -51,13 +51,13 @@ export async function getRoute(sb: SupabaseClient, stage: string): Promise<Model
   if (cached && Date.now() - cached.at < ROUTE_TTL_MS) return cached.route;
   const { data, error } = await sb
     .from("model_route")
-    .select("stage, primary_model, fallbacks, temperature, max_tokens, prompt_version, thinking_level, allow_training, enabled")
+    .select("stage, primary_model, provider, fallbacks, temperature, max_tokens, prompt_version, thinking_level, allow_training, enabled")
     .eq("stage", stage)
     .maybeSingle();
   if (error) throw new ModelError("route_lookup_failed", `could not read the route for ${stage}: ${error.message}`);
   if (!data) throw new ModelError("no_route", `no model route is configured for ${stage}`);
   if (!data.enabled) throw new ModelError("route_disabled", `the ${stage} route is switched off`);
-  const route = data as ModelRoute;
+  const route = { ...data, provider: data.provider ?? "ai_studio" } as ModelRoute;
   routes.set(stage, { at: Date.now(), route });
   return route;
 }
@@ -166,10 +166,14 @@ const INLINE_TRIES = 2;
 const FLEX_TIMEOUT_MS = 15 * 60_000;
 
 export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModelResult<T>> {
-  const key = opts.env.GOOGLE_API_KEY;
-  if (!key) throw new ModelError("no_key", "GOOGLE_API_KEY is not set for this worker", 0, false);
-
   const route = applyOverride(await getRoute(opts.sb, opts.stage), opts.routeOverride);
+  let target: ProviderTarget;
+  try {
+    target = await resolveProviderTarget(opts.env, route.provider, route.primary_model);
+  } catch (cause) {
+    if (cause instanceof ProviderConfigError) throw new ModelError("no_key", cause.message, 0, false);
+    throw cause;
+  }
   const thinkingLevel = opts.thinkingLevel ?? route.thinking_level ?? undefined;
   const attempt = opts.attempt ?? 1;
   const started = Date.now();
@@ -240,12 +244,9 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
     for (let tryNo = 1; ; tryNo++) {
       let caught: ModelError | null = null;
       try {
-        res = await fetch(OR_URL, {
+        res = await fetch(target.url, {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${key}`,
-            "Content-Type": "application/json",
-          },
+          headers: target.headers,
           body: JSON.stringify(body),
           signal: AbortSignal.timeout(opts.timeoutMs ?? (opts.serviceTier === "flex" ? FLEX_TIMEOUT_MS : 90_000)),
         });
@@ -302,8 +303,10 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
 
   for (let round = 0; round < maxRounds; round++) {
     const body: Record<string, unknown> = {
-      model: route.primary_model,
-      ...(!route.primary_model.startsWith("gemini-3.5-") ? { temperature: route.temperature } : {}),
+      model: target.model,
+      // No temperature: Gemini 3.x is tuned for its default sampling and recommends
+      // against lowering it. Behaviour is controlled by thinking level, evidence and
+      // verification. model_route.temperature stays only for historical rollback.
       max_tokens: maxTokens,
       ...(thinkingLevel ? { reasoning_effort: thinkingLevel } : {}),
       ...(opts.serviceTier === "flex" ? { service_tier: "flex" } : {}),
@@ -316,7 +319,7 @@ export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModel
     };
 
     const data = await request(body);
-    served = data.model ?? served;
+    served = normalizeServedModel(data.model) ?? served;
     inputTokens = add(inputTokens, data.usage?.prompt_tokens);
     outputTokens = add(outputTokens, data.usage?.completion_tokens);
     reasoningTokens = add(reasoningTokens, data.usage?.completion_tokens_details?.reasoning_tokens);

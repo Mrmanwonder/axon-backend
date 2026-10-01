@@ -25,7 +25,7 @@ bundle nobody can diff, review, or type-check.
 The reconstructed source, mined back out of those live bundles on
 2026-09-01 (see `AXON_FIX_BRIEF.md` §2 and §5.3 for the method) and
 organized into the `shared/` + `workers/*` structure that brief lays out.
-Every module boundary here (`shared/openrouter.ts`, `shared/worker.ts`,
+Every module boundary here (`shared/model-client.ts`, `shared/worker.ts`,
 `shared/r2.ts`, `shared/prompts/*.ts`, etc.) is the **real** file boundary
 recovered from esbuild's own `// ../shared/foo.ts` source-comments in the
 bundles — not a guess at how the code should have been organized.
