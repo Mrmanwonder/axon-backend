@@ -330,7 +330,7 @@ function validateModelComparison(comparison, certification, errors) {
   fail(errors, isObject(baseline), "model comparison baseline is absent");
   fail(errors, isObject(candidate), "model comparison candidate is absent");
   if (!isObject(baseline) || !isObject(candidate)) return;
-  fail(errors, candidate.model === "gemini-3.5-flash-lite", "model comparison candidate is not gemini-3.5-flash-lite");
+  fail(errors, candidate.model === "gemini-3.8-flash", "model comparison candidate is not gemini-3.8-flash");
   fail(errors, candidate.deploymentSha === certification.deploymentSha, "model comparison candidate deploymentSha does not match certification");
   fail(errors, candidate.configRevision === certification.configRevision, "model comparison candidate configRevision does not match certification");
   fail(errors, baseline.datasetSha256 === certification.tutorDatasetSha256, "model comparison baseline dataset does not match tutor evidence");
@@ -372,7 +372,7 @@ function validateReviewManifest(manifest, certification, errors) {
 
 function validateCapabilityProbe(probe, certification, errors) {
   fail(errors, probe?.formatVersion === "axon-capability-probe.v1", "capability probe version is invalid");
-  fail(errors, probe?.model === "gemini-3.5-flash-lite", "capability probe did not serve gemini-3.5-flash-lite");
+  fail(errors, probe?.model === "gemini-3.8-flash", "capability probe did not serve gemini-3.8-flash");
   for (const name of ["geminiPassed", "tavilyPassed", "visionPassed"]) fail(errors, probe?.[name] === true, `capability probe ${name} is not true`);
   fail(errors, boundedString(probe?.deploymentSha, 64), "capability probe deploymentSha is absent");
   fail(errors, boundedString(probe?.configRevision), "capability probe configRevision is absent");
