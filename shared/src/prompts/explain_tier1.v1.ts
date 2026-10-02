@@ -271,7 +271,7 @@ function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-export function validate(parsed: unknown, providerKey: string | null = "cambridge"): ExplainResult {
+export function validate(parsed: unknown, providerKey: string | null = null): ExplainResult {
   const v = parsed as any;
   if (!v || typeof v !== "object") throw new Error("nothing returned");
 
