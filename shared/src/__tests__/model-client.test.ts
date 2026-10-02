@@ -6,7 +6,7 @@ test("Gemini 3.5 uses the route thinking level and omits legacy temperature", as
   const inserted: Array<Record<string, unknown>> = [];
   const route = {
     stage: "thinking-test",
-    primary_model: "gemini-3.5-flash-lite",
+    primary_model: "gemini-3.8-flash",
     fallbacks: [],
     temperature: 0,
     max_tokens: 512,
@@ -37,7 +37,7 @@ test("Gemini 3.5 uses the route thinking level and omits legacy temperature", as
   t.mock.method(globalThis, "fetch", async (_url: string | URL | Request, init?: RequestInit) => {
     requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
     return Response.json({
-      model: "gemini-3.5-flash-lite",
+      model: "gemini-3.8-flash",
       choices: [{ message: { content: JSON.stringify({ answer: "ok" }) } }],
       usage: { prompt_tokens: 3, completion_tokens: 2 },
     });
@@ -53,8 +53,8 @@ test("Gemini 3.5 uses the route thinking level and omits legacy temperature", as
     validate: (value) => value as { answer: string },
   });
 
-  assert.equal(result.model, "gemini-3.5-flash-lite");
-  assert.equal(result.requestedModel, "gemini-3.5-flash-lite");
+  assert.equal(result.model, "gemini-3.8-flash");
+  assert.equal(result.requestedModel, "gemini-3.8-flash");
   assert.equal(requestBody?.reasoning_effort, "high");
   assert.ok(!Object.hasOwn(requestBody ?? {}, "temperature"));
   assert.equal(inserted.at(-1)?.thinking_level, "high");
@@ -88,7 +88,7 @@ test("an unexpected configured route is rejected before student data reaches Gem
   await assert.rejects(callModel({
     env: { GOOGLE_API_KEY: "test" }, sb: sb as never, stage: route.stage, system: "system", instruction: "student input",
     schema: { name: "test", schema: { type: "object" } }, validate: (value) => value,
-    expectedModel: "gemini-3.5-flash-lite"
+    expectedModel: "gemini-3.8-flash"
   }), (error: unknown) => error instanceof ModelError && error.code === "route_model_mismatch");
 
   assert.equal(fetched, false);
@@ -98,7 +98,7 @@ test("an unexpected configured route is rejected before student data reaches Gem
 test("a provider response from a different model is withheld and recorded", async (t) => {
   const inserted: Array<Record<string, unknown>> = [];
   const route = {
-    stage: "served-drift-test", primary_model: "gemini-3.5-flash-lite", fallbacks: [], temperature: 0,
+    stage: "served-drift-test", primary_model: "gemini-3.8-flash", fallbacks: [], temperature: 0,
     max_tokens: 512, prompt_version: "test.v1", thinking_level: "low" as const, allow_training: false, enabled: true
   };
   const sb = {
@@ -119,7 +119,7 @@ test("a provider response from a different model is withheld and recorded", asyn
   await assert.rejects(callModel({
     env: { GOOGLE_API_KEY: "test" }, sb: sb as never, stage: route.stage, system: "system", instruction: "student input",
     schema: { name: "test", schema: { type: "object" } }, validate: (value) => value,
-    expectedModel: "gemini-3.5-flash-lite"
+    expectedModel: "gemini-3.8-flash"
   }), (error: unknown) => error instanceof ModelError && error.code === "served_model_mismatch");
 
   assert.equal(inserted.at(-1)?.model_id, "gemini-unapproved");

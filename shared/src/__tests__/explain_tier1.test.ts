@@ -120,9 +120,20 @@ test("validate: Cambridge's own definition beats the model's paraphrase", () => 
   const v = validate({ can_explain: true,
     cause: "incomplete", marks_lost: 1, concepts: [],
     command_word: "explain", command_word_note: "Explain means to write a lot.",
-  });
+  }, "cambridge");
   assert.equal(v.command_word, "Explain");
   assert.equal(v.command_word_note, UNIVERSAL_MEANING["Explain"]);
+});
+
+test("validate: with no provider identity Cambridge's definitions are not injected (AXO-94)", () => {
+  for (const provider of [undefined, null, "cbse", "ib"] as const) {
+    const v = validate({ can_explain: true,
+      cause: "incomplete", marks_lost: 1, concepts: [],
+      command_word: "explain", command_word_note: "Explain means to write a lot.",
+    }, provider as string | null | undefined);
+    assert.notEqual(v.command_word_note, UNIVERSAL_MEANING["Explain"], String(provider));
+    assert.equal(v.command_word_note, "Explain means to write a lot.", String(provider));
+  }
 });
 
 test("validate: the model's note is kept for a subject-specific word", () => {

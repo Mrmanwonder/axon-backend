@@ -78,7 +78,7 @@ function fixture() {
   const visionZdrEvidence = Buffer.from("signed vision ZDR evidence");
   const capabilityProbe = Buffer.from(JSON.stringify({
     formatVersion: "axon-capability-probe.v1",
-    model: "gemini-3.5-flash-lite",
+    model: "gemini-3.8-flash",
     geminiPassed: true,
     tavilyPassed: true,
     visionPassed: true,
@@ -152,7 +152,7 @@ function fixture() {
     reviewer: reviewed.reviewer,
     reviewedAt: "2026-09-24T00:00:00.000Z",
     baseline: { ...comparisonResult, model: "gemini-3.1-flash-lite", promptId: "paper_feedback.v1", datasetSha256: certification.tutorDatasetSha256 },
-    candidate: { ...comparisonResult, model: "gemini-3.5-flash-lite", promptId: "paper_feedback.v2", datasetSha256: certification.tutorDatasetSha256, deploymentSha: certification.deploymentSha, configRevision: certification.configRevision }
+    candidate: { ...comparisonResult, model: "gemini-3.8-flash", promptId: "paper_feedback.v2", datasetSha256: certification.tutorDatasetSha256, deploymentSha: certification.deploymentSha, configRevision: certification.configRevision }
   }));
   artifacts.modelComparison = modelComparison;
   certification.modelComparisonEvidenceSha256 = sha256Hex(modelComparison);
