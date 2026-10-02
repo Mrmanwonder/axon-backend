@@ -6,6 +6,7 @@ import {
   detectMarksColumn,
   extractMarkTotal,
   pairOfficialQuestions,
+  parseSectionPlan,
   parseCbseHeader,
   parseQuestionBlocks,
 } from "../lib/cbse-scheme.mjs";
@@ -111,6 +112,8 @@ test("pairs only exact SQP/MS labels with matching mark totals", () => {
     "Class - XII",
     "Academic Session 2026-27",
     "There are 4 questions in all.",
+    "Section A contains one question of 1 mark each. Section B contains one question of 2 marks each.",
+    "Section C contains one question of 3 marks each. Section D contains one question of 1 mark each.",
   ].join("\n");
 
   const sqp = header + "\n" + [
@@ -157,6 +160,7 @@ test("fails closed when verified label/mark coverage is too low", () => {
     "Class - XII",
     "Academic Session 2026-27",
     "There are 4 questions in all.",
+    "Section A contains four questions of 1 mark each.",
   ].join("\n");
   const sqp = header + "\n" + [
     "1. Question one.                            1",
@@ -169,4 +173,74 @@ test("fails closed when verified label/mark coverage is too low", () => {
     "2. Scheme two has a conflicting allocation. 2",
   ].join("\n");
   assert.throws(() => pairOfficialQuestions(sqp, ms), /coverage/);
+});
+
+// The title blocks below are the first lines of the official 2026-27 CBSE
+// SQP/MS PDFs (cbseacademic.nic.in), as `pdftotext -layout` renders them. Only
+// the title block is used: no question or scheme text.
+for (const [name, lines, want] of [
+  ["Chemistry SQP", ["CHEMISTRY (CODE - 043)", "SAMPLE QUESTION PAPER*", "CLASS XII (2026-27)"], ["CHEMISTRY", "043", 12]],
+  ["Chemistry MS", ["CHEMISTRY (CODE – 043)", "MARKING SCHEME", "CLASS XII (2026-27)"], ["CHEMISTRY", "043", 12]],
+  ["Mathematics SQP", ["SUBJECT: MATHEMATICS (041)", "SAMPLE QUESTION PAPER", "CLASS- XII (2026 - 27)"], ["MATHEMATICS", "041", 12]],
+  ["Mathematics MS", ["MATHEMATICS (041)", "MARKING SCHEME", "CLASS XII (2026-27)"], ["MATHEMATICS", "041", 12]],
+  ["Biology SQP", ["BIOLOGY – CODE NO. 044", "SAMPLE QUESTION PAPER*", "CLASS – XII (2026-27)"], ["BIOLOGY", "044", 12]],
+  ["Biology MS", ["BIOLOGY CODE NO. 044", "MARKING SCHEME", "CLASS – XII (2026–27)"], ["BIOLOGY", "044", 12]],
+  ["Science X MS", ["SCIENCE – Code no. 086", "MARKING SCHEME", "CLASS – X (2026-27)"], ["SCIENCE", "086", 10]],
+  ["Maths Standard X MS", ["MATHEMATICS STANDARD – Code No. (041)", "MARKING SCHEME", "CLASS X (2026 - 27)"], ["MATHEMATICS STANDARD", "041", 10]],
+]) {
+  test("parses the official 2026-27 header: " + name, () => {
+    const header = parseCbseHeader(lines.join("\n"));
+    assert.ok(header, "header not parsed");
+    assert.deepEqual([header.subject, header.subjectCode, header.classLevel, header.session, header.examYear],
+      [...want, "2026-27", 2027]);
+  });
+}
+
+test("a subject-like phrase deep in the body is not read as the title", () => {
+  const filler = Array.from({ length: 20 }, (_, i) => "Question " + (i + 1) + " text");
+  assert.equal(parseCbseHeader([...filler, "A CLASS (2026-27) of 40 students", "PHYSICS (042)"].join("\n")), null);
+});
+
+// Section plans: sentences as they appear in the official 2026-27 General
+// Instructions (Physics / Chemistry count style, Mathematics range style).
+test("reads a count-style section plan", () => {
+  const plan = parseSectionPlan([
+    "Section A contains sixteen questions, twelve MCQ and four Assertion-Reasoning based of",
+    "1mark each, Section B contains five questions of two marks each, Section C contains",
+    "seven questions of three marks each, Section D contains two case study-based questions",
+    "of four marks each and Section E contains three long answer questions of five marks each.",
+  ].join("\n"));
+  assert.equal(plan.size, 33);
+  assert.deepEqual([plan.get(1), plan.get(16), plan.get(17), plan.get(22), plan.get(29), plan.get(33)], [1, 1, 2, 3, 4, 5]);
+});
+
+test("reads a range-style section plan, including 'and' pairs", () => {
+  const plan = parseSectionPlan([
+    "(iii) In Section A, Question number 1 to 18 are Multiple Choice Questions (MCQs) and Question",
+    "number 19 and 20 are Assertion - Reason based questions of 1 mark each.",
+    "(iv) In Section B, Question number 21 to 25 are Very Short Answer (VSA)-type questions, carrying",
+    "2 marks each.",
+    "(v) In Section C, Question number 26 to 31 are Short Answer (SA)-type questions carrying 3 marks",
+    "(vi) In Section D, Question number 32 to 35 are Long Answer (LA)-type questions carrying 5 marks",
+    "(vii) In Section E, Question number 36 to 38 are case study-based questions carrying 4 marks each.",
+  ].join("\n"));
+  assert.equal(plan.size, 38);
+  assert.deepEqual([plan.get(20), plan.get(21), plan.get(31), plan.get(35), plan.get(36)], [1, 2, 3, 5, 4]);
+});
+
+test("a paper whose sections are subjects, not mark bands, has no readable plan", () => {
+  assert.equal(parseSectionPlan("This question paper consists of 39 questions in 3 sections. Section A is Biology, Section B is Chemistry and Section C is Physics."), null);
+});
+
+test("a record whose marks disagree with the paper's own plan is dropped, never stored", () => {
+  const header = [
+    "Subject: Mathematics (041)", "Class - X", "Academic Session 2026-27", "There are 2 questions in all.",
+    "Section A contains one question of 1 mark each. Section B contains one question of 4 marks each.",
+  ].join("\n");
+  // Q2's two case-study parts plus an internal-choice alternative summed to 6.
+  const sqp = header + "\n" + ["1. One.                                   1", "2. Case study.                            6"].join("\n");
+  const ms = header + "\n" + ["1. Scheme one.                            1", "2. Scheme two.                            6"].join("\n");
+  assert.throws(() => pairOfficialQuestions(sqp, ms, 0.75), /coverage 50\.0%/);
+  const paired = pairOfficialQuestions(sqp, ms, 0.5);
+  assert.deepEqual(paired.questions.map(q => q.label), ["1"]);
 });

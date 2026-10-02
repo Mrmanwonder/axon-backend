@@ -85,12 +85,24 @@ function finalAcademicYear(start, tail) {
 
 export function parseCbseHeader(text) {
   const body = String(text).replace(/\r/g, "");
+  // The title block only. Subject codes and "Class" also appear inside
+  // questions ("a class of 40 students"), so the looser patterns below never
+  // look past the first lines of the paper.
+  const head = body.split("\n").filter(line => line.trim()).slice(0, 12).join("\n");
   const subjectMatch =
     /Subject\s*:\s*([^\n(]+?)\s*\((\d{3})\)/i.exec(body)
-    ?? /(?:SUBJECT|SUB)\s*[:\-]\s*([^\n]+?)\s+(?:CODE\s*[:\-]?\s*)?(\d{3})\b/i.exec(body);
+    ?? /(?:SUBJECT|SUB)\s*[:\-]\s*([^\n]+?)\s+(?:CODE\s*[:\-]?\s*)?(\d{3})\b/i.exec(body)
+    // "CHEMISTRY (CODE – 043)"
+    ?? /^\s*([A-Za-z][A-Za-z &.]*?)\s*\(\s*CODE\s*[–—:\-]?\s*(\d{3})\s*\)/im.exec(head)
+    // "BIOLOGY – CODE NO. 044", "SCIENCE – Code no. 086", "MATHEMATICS STANDARD – Code No. (041)"
+    ?? /^\s*([A-Za-z][A-Za-z &.]*?)\s*[–—\-]?\s*CODE\s*NO\.?\s*\(?\s*(\d{3})\s*\)?/im.exec(head)
+    // A bare title line: "MATHEMATICS (041)"
+    ?? /^\s*([A-Za-z][A-Za-z &.]*?)\s*\((\d{3})\)\s*$/m.exec(head);
   const classMatch = /Class\s*[–—-]\s*(XII|X)\b/i.exec(body)
     ?? /CLASS\s*[:\-]?\s*(XII|X)\b/i.exec(body);
-  const sessionMatch = /(?:Academic\s+Session|Session)\s*(20\d{2})\s*[–—-]\s*(\d{2,4})/i.exec(body);
+  const sessionMatch = /(?:Academic\s+Session|Session)\s*(20\d{2})\s*[–—-]\s*(\d{2,4})/i.exec(body)
+    // "CLASS XII (2026-27)", "CLASS- XII (2026 - 27)", "CLASS – X (2026–27)"
+    ?? /CLASS\s*[–—:\-]?\s*(?:XII|X)\s*\(\s*(20\d{2})\s*[–—-]\s*(\d{2,4})\s*\)/i.exec(head);
   if (!subjectMatch || !classMatch || !sessionMatch) return null;
 
   const classLevel = classMatch[1].toUpperCase() === "XII" ? 12 : 10;
@@ -258,6 +270,62 @@ export function parseQuestionBlocks(text) {
   }).filter(block => block.text);
 }
 
+const NUMBER_WORDS = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17,
+  eighteen: 18, nineteen: 19, twenty: 20,
+};
+
+function countValue(token) {
+  if (/^\d+$/.test(token)) return Number(token);
+  return NUMBER_WORDS[String(token).toLowerCase()] ?? null;
+}
+
+/**
+ * The paper's own statement of how many marks each question carries, read from
+ * its General Instructions: "Section B contains five questions of two marks
+ * each" or "In Section C, Question number 26 to 31 … carrying 3 marks each".
+ *
+ * Returns question number → marks, or null when no complete, contiguous plan
+ * can be read. A record whose parsed maximum disagrees with the paper's own
+ * plan is a parse error (two sub-parts merged, an internal-choice alternative
+ * summed), and a wrong maximum is a number a student would see as fact.
+ */
+export function parseSectionPlan(sqpText) {
+  const flat = String(sqpText).replace(/\r/g, "").split("\n").slice(0, 120).join(" ").replace(/\s+/g, " ");
+  const chunks = flat.split(/(?=\bSection\s*[–—-]?\s*[A-E]\b)/i);
+  const sections = new Map();
+  const NUM = "(\\d+|" + Object.keys(NUMBER_WORDS).join("|") + ")";
+  for (const chunk of chunks) {
+    const letter = /^Section\s*[–—-]?\s*([A-E])\b/i.exec(chunk)?.[1]?.toUpperCase();
+    if (!letter || sections.has(letter)) continue;
+    const body = chunk.slice(0, 260);
+    const marks = countValue(new RegExp("(?:of|carrying)\\s+" + NUM + "\\s*marks?\\b", "i").exec(body)?.[1] ?? "");
+    if (!marks) continue;
+    const ranges = [...body.matchAll(/(\d{1,2})\s*(?:to|and|-|–)\s*(\d{1,2})/g)].map(m => [Number(m[1]), Number(m[2])]);
+    if (/Question/i.test(body) && ranges.length) {
+      const nums = ranges.flat();
+      sections.set(letter, { marks, from: Math.min(...nums), to: Math.max(...nums) });
+      continue;
+    }
+    const count = countValue(new RegExp("(?:contains|consists of|has)\\s+" + NUM + "\\b", "i").exec(body)?.[1] ?? "");
+    if (count) sections.set(letter, { marks, count });
+  }
+  if (!sections.size) return null;
+
+  const plan = new Map();
+  let next = 1;
+  for (const letter of ["A", "B", "C", "D", "E"].filter(l => sections.has(l))) {
+    const section = sections.get(letter);
+    const from = section.from ?? next;
+    const to = section.to ?? next + section.count - 1;
+    if (from !== next || to < from) return null;
+    for (let q = from; q <= to; q++) plan.set(q, section.marks);
+    next = to + 1;
+  }
+  return plan;
+}
+
 export function pairOfficialQuestions(sqpText, msText, minCoverage = 0.75) {
   const sqpHeader = parseCbseHeader(sqpText);
   const msHeader = parseCbseHeader(msText);
@@ -302,6 +370,17 @@ export function pairOfficialQuestions(sqpText, msText, minCoverage = 0.75) {
       markingScheme: scheme.text,
       maxMarks: question.maxMarks,
     });
+  }
+
+  const plan = parseSectionPlan(sqpText);
+  if (!plan) throw new Error("Could not read the paper's section mark plan; refusing to certify any maximum mark");
+  for (let i = questions.length - 1; i >= 0; i--) {
+    const base = Number(/^\d+/.exec(questions[i].label)?.[0] ?? 0);
+    const declared = plan.get(base);
+    if (declared !== questions[i].maxMarks) {
+      pairingFailures.push({ label: questions[i].label, reason: "section_plan_mismatch", parsedMarks: questions[i].maxMarks, declaredMarks: declared ?? null });
+      questions.splice(i, 1);
+    }
   }
 
   const expected = sqpHeader.expectedQuestions ?? Math.max(0, ...sqpBlocks.map(block => block.number));

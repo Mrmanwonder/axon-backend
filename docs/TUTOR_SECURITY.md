@@ -101,9 +101,12 @@ Allowed request fields are schema-validated. The API supplies:
 - raw student message for the private reasoning provider;
 - bounded request/depth metadata;
 - authenticated server-derived curriculum context;
-- authorized paper identifier when applicable.
+- authorized paper identifier when applicable;
+- **server-hydrated paper evidence** (AXO-36, `workers/api/src/tutor_evidence.ts`): for an authorized paper, and optionally one question on it, the gateway loads the latest reviewable run's regions through the caller's own RLS-scoped client, with explicit `student_id`/`paper_id`/`run_id` joins. It forwards only label, question text, the student's answer, and the teacher's marks and remark, as `paper`/`teacher` evidence with `primary` authority. An `unsure` read is `unverified`; a student-confirmed one is `verified`; unreadable regions are omitted. At most 12 regions, each text field bounded. No names, image keys, boxes or signed URLs.
 
-The browser cannot provide verified Evidence objects or an internal `retrievalContext`.
+These are **Private schoolwork** (§4). They reach Gemini only through the `STUDENT_CHAT_STRICT` route, which admits `gemini-zdr` alone. With `GEMINI_PRIVACY_MODE=unverified`, the orchestrator returns a controlled failure and nothing is sent. Teacher marks are the fact being explained and are never re-graded.
+
+The browser cannot provide verified Evidence objects or an internal `retrievalContext`. A body-supplied `evidence` field is dropped at the gateway (`test/tutor-evidence.test.ts`).
 
 The internal token/service binding must never be exposed to the browser, logs, Tavily or model content.
 

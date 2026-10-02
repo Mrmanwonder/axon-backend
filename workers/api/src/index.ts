@@ -3,6 +3,8 @@ import { presignPut, headObject, signAssetUrl, verifyAssetSignature, objectKey, 
 import { CAPTURE, PIPELINE_VERSION, SAFE_OBJECT_NAME } from "@mastery/shared/contract.js";
 import type { Env } from "@mastery/shared/env.js";
 import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
+import { loadPaperEvidence, type TutorEvidence } from "./tutor_evidence.js";
+import { CallbackRejected, configuredProvider, statusForRefusal } from "./guardian_verification.js";
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const MAX_OBJECTS = 60;
@@ -61,6 +63,9 @@ export default {
         case "/page-asset-urls":
           return respond(await pageAssetUrls(req, env));
         default:
+          if (path.startsWith("/guardian-verification/callback/")) {
+            return await guardianVerificationCallback(req, env, path.slice("/guardian-verification/callback/".length));
+          }
           return respond(failure("not found", 404));
       }
     } catch (cause) {
@@ -153,7 +158,6 @@ async function tutor(req: Request, env: Env): Promise<Response> {
   if (!scope?.active || scope.student_id !== body.studentId) {
     return failure("Switch to that student first.", 403);
   }
-
   // Internal stage (AXO-126): the Tutor answers only for guardians it has been switched on for.
   // Asked as the signed-in user, so nothing a client sends can move it; any doubt fails closed.
   const { data: tutorOn, error: flagError } = await user.rpc("tutor_enabled");
@@ -179,8 +183,27 @@ async function tutor(req: Request, env: Env): Promise<Response> {
     if (paperResult.error || !paperResult.data) return failure("That paper is not available for this student.", 403);
     paper = paperResult.data;
   }
+  if (body.questionId !== undefined) {
+    if (!paper) return failure("Choose the paper this question belongs to.");
+    if (typeof body.questionId !== "string" || !body.questionId || body.questionId.length > 128) {
+      return failure("Choose a valid question.");
+    }
+  }
   if (!env.INTELLIGENCE || !env.AXON_INTERNAL_TOKEN) {
     return failure("The tutor is not available yet.", 503);
+  }
+
+  // Paper evidence comes from the database under this session's own scope,
+  // never from the request body (AXO-36).
+  let evidence: TutorEvidence[] = [];
+  if (paper) {
+    const loaded = await loadPaperEvidence(user, {
+      studentId: student.id,
+      paperId: paper.id,
+      ...(typeof body.questionId === "string" ? { questionId: body.questionId } : {}),
+    });
+    if (!loaded.ok) return failure(loaded.message, loaded.status);
+    evidence = loaded.evidence;
   }
 
   // Build public research context exclusively from authenticated database
@@ -234,6 +257,7 @@ async function tutor(req: Request, env: Env): Promise<Response> {
     ...(retrievalContext ? { retrievalContext } : {}),
     ...(typeof body.paperId === "string" ? { paperId: body.paperId } : {}),
     ...(["BRIEF", "NORMAL", "DEEP"].includes(body.depth) ? { depth: body.depth } : {}),
+    ...(evidence.length ? { evidence } : {}),
   };
 
   const upstream = await env.INTELLIGENCE.fetch("https://axon-intelligence.internal/v1/tutor", {
@@ -249,6 +273,40 @@ async function tutor(req: Request, env: Env): Promise<Response> {
     status: upstream.status,
     headers: { ...CORS, "Content-Type": upstream.headers.get("content-type") ?? "application/json", "Cache-Control": "no-store" },
   });
+}
+
+/**
+ * Provider → server callback (AXO-57). Not a browser endpoint: no CORS, no
+ * user session. Signature first; then the database binds the result to the
+ * guardian who started the check.
+ */
+async function guardianVerificationCallback(req: Request, env: Env, providerId: string): Promise<Response> {
+  const plain = (body: unknown, status: number) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+  const provider = configuredProvider(env, providerId);
+  if (!provider) return plain({ error: "not_found" }, 404);
+  let result;
+  try {
+    result = await provider.verify(req);
+  } catch (cause) {
+    if (cause instanceof CallbackRejected) return plain({ error: "rejected" }, 401);
+    throw cause;
+  }
+  const { data, error } = await serviceClient(env).rpc("record_guardian_verification_callback", {
+    p_state: result.state,
+    p_provider: provider.id,
+    p_reference: result.reference,
+    p_identity: result.identity,
+    p_adulthood: result.adulthood,
+    p_relationship: result.relationship,
+    p_issued_at: result.issuedAt,
+  });
+  if (error) {
+    const hint = (error as { hint?: string }).hint;
+    if ((error as { code?: string }).code === "23505") return plain({ error: "duplicate" }, 409);
+    return plain({ error: "refused" }, statusForRefusal(hint));
+  }
+  return plain({ ok: true, assertion: data }, 200);
 }
 
 async function paperSubmit(req: Request, env: Env): Promise<Response> {

@@ -2,7 +2,7 @@ import { callModel } from "@mastery/shared/model-client.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
 import { imageRef } from "@mastery/shared/r2.js";
-import { takeBox } from "@mastery/shared/contract.js";
+import { planPage, regionsWrittenByPage, structureFailureReason, uniqueLabelKey } from "@mastery/shared/structure_plan.js";
 import { pageDimensions, UNPLACEABLE_PAGE_REASON } from "@mastery/shared/page.js";
 import { attribute, type RawMark } from "@mastery/shared/attribution.js";
 import { mustData, mustOk, mustRpc, mustMaybe } from "@mastery/shared/db.js";
@@ -169,82 +169,61 @@ const handler = consumeQueue<StructureMessage>(
     }
     const { width, height } = dims;
 
-    const existing = await mustData(
-      sb.from("question_region")
-        .select("id, order_index, page_spans")
-        .eq("run_id", runId)
-        .order("order_index", { ascending: false })
-        .limit(1),
-      "highest order_index read",
-    ) as Array<{ id: string; order_index: number; page_spans: unknown[] }>;
-    let nextIndex = existing?.length ? existing[0].order_index + 1 : 0;
+    // A redelivered page starts from nothing. Queue delivery is at-least-once,
+    // so an attempt can die after its regions landed and before the page was
+    // marked done; the retry used to insert the same questions a second time
+    // (and collide on the label index). Everything this page wrote for this
+    // run is removed first: its marks, then the regions whose first span is
+    // this page. Assembly is run-level now, so no other region carries a span
+    // written by this page until every page is done.
+    await mustOk(
+      sb.from("teacher_mark").delete().eq("run_id", runId).eq("page_number", page.page_number),
+      "clear this page's earlier teacher marks",
+    );
+    const runRegions = await mustData(
+      sb.from("question_region").select("id, order_index, page_spans, question_label").eq("run_id", runId),
+      "run regions read",
+    ) as Array<{ id: string; order_index: number; page_spans: unknown; question_label: string | null }>;
+    const stale = regionsWrittenByPage(runRegions, page.page_number);
+    if (stale.length) {
+      await mustOk(sb.from("question_region").delete().in("id", stale), "clear this page's earlier regions");
+    }
+    const kept = runRegions.filter((r) => !stale.includes(r.id));
+    const nextIndex = kept.reduce((m, r) => Math.max(m, r.order_index + 1), 0);
+    const takenLabels = new Set(
+      kept.map((r) => uniqueLabelKey(r.question_label)).filter((k): k is string => k !== null),
+    );
+
+    const plan = planPage({
+      regions: parsed.regions,
+      page: page.page_number,
+      width,
+      height,
+      runId,
+      paperId: page.paper_id,
+      studentId: page.student_id,
+      nextIndex,
+      takenLabels,
+    });
 
     const created: Array<{ id: string; order_index: number; spans: unknown[] }> = [];
-    /** Everything on THIS page a teacher mark could belong to: the questions
-        created below, plus any prior question stitched onto this page. */
+    /** Everything on THIS page a teacher mark could belong to. A continuation
+        band is one of them: it is written as its own region here and merged
+        into the question it continues by `private.assemble_structure`, which
+        moves its marks with it. */
     const candidates: Array<{ id: string; order_index: number; spans: unknown[] }> = [];
-    const toInsert: Array<{ order_index: number; span: unknown; row: Record<string, unknown> }> = [];
 
-    for (const [i, region] of parsed.regions.entries()) {
-      const box = takeBox(region.box, page.page_number, width, height);
-      if (!box) continue;
-      const span = { page: page.page_number, box: { x: box.x, y: box.y, w: box.w, h: box.h } };
-
-      if (i === 0 && region.continues_from_previous && existing?.length) {
-        const prior = existing[0];
-        const spans = [...prior.page_spans, span];
-        await mustOk(
-          sb.from("question_region").update({ page_spans: spans }).eq("id", prior.id),
-          "stitch continuation span",
-        );
-        // The stitched question is a candidate for THIS page's teacher marks,
-        // and it used to `continue` straight past this — never entering
-        // `created`, which is the only list mark attribution looks at.
-        //
-        // Concretely: page 2 carries the tail of Q3 and then Q4. The teacher
-        // writes 4 in the margin beside the Q3 tail and 2 beside Q4. With Q3
-        // absent from the candidates, the 4 either attaches to nothing or, far
-        // worse, to Q4 — a plausible, confidently wrong mark on the wrong
-        // question, which is exactly the failure hard rule 1 exists to prevent.
-        //
-        // Its span here is this page's band only. Attribution is per-page
-        // geometry, so handing it the question's earlier bands on other pages
-        // would compare a margin mark against a box that is not on this page.
-        // It goes first because a continuation is always the top band.
-        candidates.push({ id: prior.id, order_index: prior.order_index, spans: [span] });
-        continue;
-      }
-
-      const numberBox = takeBox(region.number_box, page.page_number, width, height);
-      const label = numberBox ? region.candidate_number : null;
-      toInsert.push({
-        order_index: nextIndex,
-        span,
-        row: {
-          run_id: runId,
-          paper_id: page.paper_id,
-          student_id: page.student_id,
-          order_index: nextIndex,
-          page_spans: [span],
-          question_label: label,
-          question_label_box: label ? numberBox : null,
-          confidence_tier: "unsure",
-        },
-      });
-      nextIndex += 1;
-    }
-
-    if (toInsert.length) {
-      // Checked. An insert that collided on the unique (run_id, order_index) —
-      // the race this worker still has, contained for now by max_concurrency=1
-      // — used to be dropped on the floor here, and the page was marked done
-      // with its questions missing.
+    if (plan.length) {
+      // Checked. The (run_id, order_index) race this worker still has is
+      // contained by max_concurrency=1; a collision throws and the retry
+      // starts clean (above) rather than marking the page done without its
+      // questions.
       const insertedRows = await mustData(
-        sb.from("question_region").insert(toInsert.map((t) => t.row)).select("id, order_index"),
+        sb.from("question_region").insert(plan.map((t) => t.row)).select("id, order_index"),
         "question_region insert",
       ) as Array<{ id: string; order_index: number }>;
       const byOrder = new Map((insertedRows ?? []).map((r) => [r.order_index, r]));
-      for (const t of toInsert) {
+      for (const t of plan) {
         const row = byOrder.get(t.order_index);
         if (row) {
           created.push({ id: row.id, order_index: row.order_index, spans: [t.span] });
@@ -299,7 +278,7 @@ const handler = consumeQueue<StructureMessage>(
         student_id: page.student_id,
         page_number: page.page_number,
         storage_path: page.r2_key,
-        reason: "We could not read this page well enough to find the questions on it.",
+        reason: structureFailureReason(error),
       }), "record unreadable page");
       await mustOk(sb.from("paper_page").update({ structure_status: "failed" }).eq("id", pageId), "structure_status=failed");
       const advance = await mustRpc(sb.rpc("advance_after_structure", { p_run_id: msg.run_id }), "advance_after_structure");

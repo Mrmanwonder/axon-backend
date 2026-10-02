@@ -30,6 +30,10 @@ export interface Env {
   // Admin token for axon-intelligence /v1/admin/* (Tutor deletion purge from the sweep worker).
   AXON_ADMIN_TOKEN?: string;
   INTELLIGENCE?: Fetcher;
+  /** AXO-57: the one guardian-verification provider id this deploy accepts
+      callbacks for (unset = none), and its webhook signing secret. */
+  GUARDIAN_VERIFICATION_PROVIDER?: string;
+  GUARDIAN_VERIFICATION_WEBHOOK_SECRET?: string;
   // Legacy, from before the Gemini migration (see AXON_FIX_BRIEF.md §F3).
   // Bindings still exist on the deployed workers; nothing reads them anymore.
   GROQ_API_KEY?: string;
