@@ -1,4 +1,5 @@
 import { parseSchema, CorrectionEventSchema, TutorRequestSchema } from "./schemas";
+import { parsePurgeRequest, purgeTutorDataForPapers } from "./intelligence/security/purge";
 import { GeminiProvider } from "./providers/gemini";
 import { TavilyRetrievalService } from "./providers/tavily";
 import { TutorOrchestrator } from "./intelligence/tutor/orchestrator";
@@ -208,6 +209,10 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     }
     await reviewActiveLearning(env.DB, decodeURIComponent(activeLearningMatch[1]), await readBoundedJson(request), { decision, ...(studentPseudonym ? { studentPseudonym } : {}) });
     return json({ updated: true });
+  }
+  if (request.method === "POST" && url.pathname === "/v1/admin/purge") {
+    const paperIds = parsePurgeRequest(await readBoundedJson(request, 8_192));
+    return json(await purgeTutorDataForPapers(env.DB, paperIds));
   }
   if (request.method === "GET" && url.pathname === "/v1/admin/provider-health") {
     const rows = await env.DB.prepare("SELECT * FROM provider_health ORDER BY provider, model").all();
