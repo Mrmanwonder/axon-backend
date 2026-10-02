@@ -20,6 +20,8 @@ jobs:
       - run: npm test
       - run: npm run test:registry
       - run: npm run check:contract-parity
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   dry-run:
     runs-on: ubuntu-latest
