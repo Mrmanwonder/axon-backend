@@ -349,18 +349,27 @@ async function paperRetry(req: Request, env: Env): Promise<Response> {
 
   // A retry must use the exact already-stored paper, never client-supplied object
   // keys. Verify every page still exists before starting a fresh run.
+  // ⚡ Bolt: Fast synchronous validation before expensive network calls
   for (const page of storedPages as any[]) {
-    const bucket: BucketKind = page.r2_bucket === "originals" ? "originals" : "derived";
     if (!page.r2_key.startsWith(`${paper.student_id}/${paper.id}/`)) {
       return json({ retry: "not_retryable", reason: "stored_pages_unavailable" }, 409);
     }
-    let head: Awaited<ReturnType<typeof headObject>>;
+  }
+
+  // ⚡ Bolt: Batched concurrent `headObject` requests to prevent N+1 latency bottlenecks
+  const headResults = await mapLimit(storedPages as any[], IO_CONCURRENCY, async (page) => {
+    const bucket: BucketKind = page.r2_bucket === "originals" ? "originals" : "derived";
     try {
-      head = await headObject(env, bucket, page.r2_key);
+      const head = await headObject(env, bucket, page.r2_key);
+      if (!head) return json({ retry: "not_retryable", reason: "stored_pages_unavailable" }, 409);
+      return null;
     } catch {
       return json({ retry: "temporarily_unavailable", reason: "storage_check_failed" }, 503);
     }
-    if (!head) return json({ retry: "not_retryable", reason: "stored_pages_unavailable" }, 409);
+  });
+
+  for (const errorResponse of headResults) {
+    if (errorResponse) return errorResponse;
   }
 
   const { data, error } = await user.rpc("submit_paper", {
