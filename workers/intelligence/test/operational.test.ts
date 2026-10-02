@@ -25,7 +25,7 @@ describe("operational pipeline", () => {
     const paperId = crypto.randomUUID();
     const objectKey = `papers/${paperId}/original/${pageId}`;
     const bytes = new TextEncoder().encode("synthetic page");
-    await env.PAPER_ARTIFACTS!.put(objectKey, bytes);
+    await env.PAPER_ARTIFACTS.put(objectKey, bytes);
     await env.DB.prepare("INSERT INTO paper_page (paper_id, page_id, student_id, original_hash, source_type, object_key, processing_state, created_at) VALUES (?, ?, 'student', 'hash', 'image/png', ?, 'QUEUED', ?)")
       .bind(paperId, pageId, objectKey, new Date().toISOString()).run();
     const analysis: VisionAnalysis = {

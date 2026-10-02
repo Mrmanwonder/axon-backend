@@ -21,10 +21,14 @@ export interface Env {
 
   // Live web grounding for Gemini custom tools. Secrets are bound per Worker.
   TAVILY_API_KEY?: string;
+  // Where the sweep worker posts spend alerts (AXO-124). Unset: alerts wait in cost_alert.
+  ALERT_WEBHOOK_URL?: string;
   // Optional Tavily project identifier for usage attribution.
   TAVILY_PROJECT?: string;
   // Internal authentication and service binding for the verified tutor.
   AXON_INTERNAL_TOKEN?: string;
+  // Admin token for axon-intelligence /v1/admin/* (Tutor deletion purge from the sweep worker).
+  AXON_ADMIN_TOKEN?: string;
   INTELLIGENCE?: Fetcher;
   /** Tutor staged rollout (AXO-126): "off" (default), "internal" (only
       TUTOR_INTERNAL_USERS), "ga" (every Student Mode session). */

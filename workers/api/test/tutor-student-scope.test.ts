@@ -72,6 +72,7 @@ function userWithScope(
   scope: unknown,
   scopeError: unknown = null,
   override: Partial<FixtureRows> = {},
+  tutor: { data: unknown; error: unknown } = { data: true, error: null },
 ) {
   const rows: FixtureRows = {
     student: {
@@ -144,6 +145,7 @@ function userWithScope(
 
   const rpc = vi.fn(async (name: string) => {
     fixture.trace.push(`rpc:${name}`);
+    if (name === "tutor_enabled") return tutor;
     return { data: scope, error: scopeError };
   });
   return { rpc, from };
@@ -251,9 +253,45 @@ describe("AXO-63 Tutor Student Mode abuse boundary", () => {
     expect(JSON.stringify(forwarded)).not.toContain("attacker supplied context");
     expect(fixture.trace).toEqual([
       "rpc:student_scope_state",
+      "rpc:tutor_enabled",
       "student-lookup",
       "intelligence",
     ]);
+  });
+
+  test("a guardian the Tutor is not switched on for is refused before any resource or model work", async () => {
+    const user = userWithScope({ active: true, student_id: A, remaining_seconds: 600 }, null, {}, { data: false, error: null });
+    fixture.clientFor.mockReturnValue(user);
+
+    const response = await worker.fetch(request(A), env());
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: "The tutor is not switched on for this account yet." });
+    expect(user.from).not.toHaveBeenCalled();
+    expect(fixture.intelligenceFetch).not.toHaveBeenCalled();
+    expect(fixture.trace).toEqual(["rpc:student_scope_state", "rpc:tutor_enabled"]);
+  });
+
+  test("a flag that cannot be read fails closed, never open", async () => {
+    const user = userWithScope({ active: true, student_id: A, remaining_seconds: 600 }, null, {}, { data: null, error: { message: "down" } });
+    fixture.clientFor.mockReturnValue(user);
+
+    const response = await worker.fetch(request(A), env());
+
+    expect(response.status).toBe(503);
+    expect(user.from).not.toHaveBeenCalled();
+    expect(fixture.intelligenceFetch).not.toHaveBeenCalled();
+  });
+
+  test("anything other than an explicit true leaves the Tutor off", async () => {
+    for (const data of [null, undefined, "true", 1]) {
+      fixture.trace.length = 0;
+      const user = userWithScope({ active: true, student_id: A, remaining_seconds: 600 }, null, {}, { data, error: null });
+      fixture.clientFor.mockReturnValue(user);
+      const response = await worker.fetch(request(A), env());
+      expect(response.status).toBe(403);
+    }
+    expect(fixture.intelligenceFetch).not.toHaveBeenCalled();
   });
 
   test("caller cannot smuggle an unselected subject into retrieval context", async () => {

@@ -1,0 +1,53 @@
+{
+  "comment": "See scripts/lib/prompt-gate.mjs. Do not edit by hand.",
+  "prompts": {
+    "shared/src/prompts.ts": {
+      "sha256": "f2bcc7c78eda08b7c681b5331e9d56d115d12ddd46ee6f933995d14636991240",
+      "eval_run": "baseline-2026-10-02"
+    },
+    "shared/src/prompts/adjudicate.v1.ts": {
+      "sha256": "7e2fa479142e6b0ada90de266a468edad45df9a61984b17b7dea42a1eaf538e4",
+      "eval_run": "baseline-2026-10-02"
+    },
+    "shared/src/prompts/content.v1.ts": {
+      "sha256": "2a3a0b28552c47e893812029f86afc943904e8b04b26eb2bd92adbde9bfb1d59",
+      "eval_run": "baseline-2026-10-02"
+    },
+    "shared/src/prompts/explain_tier1.v1.ts": {
+      "sha256": "4eac9b4424b35a8837d91610ba0160b8274c57543b71f9213eda06868193d620",
+      "eval_run": "baseline-2026-10-02"
+    },
+    "shared/src/prompts/explain_tier1.v2.ts": {
+      "sha256": "f2e22b24c364f550628495ada19f7e441eff7b41326c029db825af399f8e713f",
+      "eval_run": "baseline-2026-10-02"
+    },
+    "shared/src/prompts/explain_tier2.v1.ts": {
+      "sha256": "1b0ca1a2acff32c09a0268b92656e64a71585b19421b2f4f16e2ec297341797d",
+      "eval_run": "baseline-2026-10-02"
+    },
+    "shared/src/prompts/structure.v1.ts": {
+      "sha256": "41188b0cf86e1f4c64bd6240627d5996b519e858a52f5b569dad4bba39b1ad9e",
+      "eval_run": "baseline-2026-10-02"
+    },
+    "shared/src/prompts/triage.v1.ts": {
+      "sha256": "d1834e77eae2001d9965e36f5e41388a4ae4b75d26ca98f80bd9d65346fdc791",
+      "eval_run": "baseline-2026-10-02"
+    },
+    "shared/src/prompts/untrusted.ts": {
+      "sha256": "73ae574f2d51b74e63532bab5904262572c899c422a9593dcd72ea45a9c01384",
+      "eval_run": "baseline-2026-10-02"
+    },
+    "workers/intelligence/src/prompts/kernel.v3.ts": {
+      "sha256": "06256e335b81505d3e16ac397c42bcd1148cd6672dfa0afef2f9579b34268309",
+      "eval_run": "baseline-2026-10-02"
+    },
+    "workers/intelligence/src/prompts/registry.ts": {
+      "sha256": "ad5b4237a825b4d58044562527684d017f0ebd60457bf917814205937789b89d",
+      "eval_run": "baseline-2026-10-02"
+    },
+    "workers/intelligence/src/prompts/scanner/index.ts": {
+      "sha256": "949504e129e39f9fd26243ba730dd991854febd79cf38a4dcf6832170cd63e19",
+      "eval_run": "baseline-2026-10-02"
+    }
+  }
+}

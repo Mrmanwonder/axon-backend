@@ -1,5 +1,5 @@
 import { parseSchema, CorrectionEventSchema, TutorRequestSchema } from "./schemas";
-import { requirePaperBindings } from "./deployment/paper-bindings";
+import { parsePurgeRequest, purgeTutorDataForPapers } from "./intelligence/security/purge";
 import { GeminiProvider } from "./providers/gemini";
 import { TavilyRetrievalService } from "./providers/tavily";
 import { TutorOrchestrator } from "./intelligence/tutor/orchestrator";
@@ -37,18 +37,10 @@ async function readBoundedJson(request: Request, maxBytes = 100_000): Promise<un
   return readBoundedJsonBody(request.body, maxBytes);
 }
 
-/** Routes served by `wrangler deploy --env tutor`. */
-export const TUTOR_PROFILE_ROUTES = new Set(["/health", "/v1/tutor", "/v1/admin/provider-health"]);
-
 async function handle(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/health") {
     return json({ status: "ok", pipelineVersion: env.AXON_PIPELINE_VERSION, deploymentSha: env.AXON_DEPLOYMENT_SHA, configRevision: env.AXON_CONFIG_REVISION });
-  }
-  // AXO-126: the tutor-only deploy has no document-vision binding and no paper
-  // queue, so every route that would need them is absent rather than broken.
-  if (String(env.AXON_PROFILE) === "tutor" && !TUTOR_PROFILE_ROUTES.has(url.pathname)) {
-    return json({ error: "NOT_FOUND" }, 404);
   }
   const expectedToken = url.pathname.startsWith("/v1/admin/") ? env.AXON_ADMIN_TOKEN : env.AXON_INTERNAL_TOKEN;
   if (url.pathname.startsWith("/v1/") && !await authenticateInternalRequest(request, expectedToken)) {
@@ -179,7 +171,7 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
       provider,
       model: RUNTIME_CONFIG_V3.primaryModel,
       ...(retrieval ? { retrieval } : {}),
-      visionService: requirePaperBindings(env).vision,
+      visionService: env.DOCUMENT_VISION,
       visionPrivacyAttested: String(env.AXON_VISION_PRIVACY_MODE) === "zdr",
       deploymentSha: env.AXON_DEPLOYMENT_SHA,
       configRevision: env.AXON_CONFIG_REVISION
@@ -218,6 +210,10 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     await reviewActiveLearning(env.DB, decodeURIComponent(activeLearningMatch[1]), await readBoundedJson(request), { decision, ...(studentPseudonym ? { studentPseudonym } : {}) });
     return json({ updated: true });
   }
+  if (request.method === "POST" && url.pathname === "/v1/admin/purge") {
+    const paperIds = parsePurgeRequest(await readBoundedJson(request, 8_192));
+    return json(await purgeTutorDataForPapers(env.DB, paperIds));
+  }
   if (request.method === "GET" && url.pathname === "/v1/admin/provider-health") {
     const rows = await env.DB.prepare("SELECT * FROM provider_health ORDER BY provider, model").all();
     return json({ providers: rows.results });
@@ -230,7 +226,7 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
       env.DB.prepare("SELECT model, passed FROM capability_probe WHERE provider = 'gemini-zdr' AND capability = 'thinking' AND deployment_sha = ? AND config_revision = ? ORDER BY probed_at DESC LIMIT 1").bind(env.AXON_DEPLOYMENT_SHA, env.AXON_CONFIG_REVISION).first<{ model: string; passed: number }>(),
       env.DB.prepare("SELECT passed FROM capability_probe WHERE provider = 'tavily' AND capability = 'native_search' AND deployment_sha = ? AND config_revision = ? ORDER BY probed_at DESC LIMIT 1").bind(env.AXON_DEPLOYMENT_SHA, env.AXON_CONFIG_REVISION).first<{ passed: number }>(),
       env.DB.prepare("SELECT passed FROM capability_probe WHERE provider = 'axon-document-vision' AND capability = 'image_input' AND deployment_sha = ? AND config_revision = ? ORDER BY probed_at DESC LIMIT 1").bind(env.AXON_DEPLOYMENT_SHA, env.AXON_CONFIG_REVISION).first<{ passed: number }>(),
-      String(env.AXON_VISION_PRIVACY_MODE) === "zdr" && env.DOCUMENT_VISION
+      String(env.AXON_VISION_PRIVACY_MODE) === "zdr"
         ? env.DOCUMENT_VISION.fetch("https://axon-document-vision/health").then((response) => response.ok).catch(() => false)
         : Promise.resolve(false)
     ]);

@@ -1,5 +1,4 @@
 import { pseudonymizeIdentifier } from "../../intelligence/security/privacy";
-import { requirePaperBindings } from "../../deployment/paper-bindings";
 import { readBoundedBytes } from "../../shared/bounded-bytes";
 
 export interface PaperIngestMetadata { paperId: string; pageId: string; studentId: string; originalHash: string; perceptualHash?: string; sourceType: string; timestamp: string; objectKey: string; pageIndex: number }
@@ -44,30 +43,28 @@ export async function ingestPaperPage(request: Request, env: Env): Promise<{ met
   const timestamp = new Date().toISOString();
   const sourceType = detectedType;
   const objectKey = `papers/${paperId}/original/${pageId}`;
-  const { artifacts, queue } = requirePaperBindings(env);
-  await artifacts.put(objectKey, bytes, { httpMetadata: { contentType: sourceType }, customMetadata: { originalHash, studentId } });
+  await env.PAPER_ARTIFACTS.put(objectKey, bytes, { httpMetadata: { contentType: sourceType }, customMetadata: { originalHash, studentId } });
   const metadata: PaperIngestMetadata = { paperId, pageId, studentId, originalHash, sourceType, timestamp, objectKey, pageIndex };
   await env.DB.prepare("INSERT INTO paper_page (paper_id, page_id, student_id, original_hash, source_type, created_at, object_key, processing_state, page_index) VALUES (?, ?, ?, ?, ?, ?, ?, 'QUEUED', ?)")
     .bind(paperId, pageId, studentId, originalHash, sourceType, timestamp, objectKey, pageIndex).run();
-  await queue.send({ type: "PROCESS_PAGE", metadata } satisfies PaperJob);
+  await env.PAPER_QUEUE.send({ type: "PROCESS_PAGE", metadata } satisfies PaperJob);
   return { metadata, duplicate: false };
 }
 
 export async function processPaperBatch(batch: MessageBatch<PaperJob>, env: Env): Promise<void> {
   const { ServiceBindingDocumentVisionProvider } = await import("../vision/provider");
   const { markPageForReview, processPaperPage } = await import("../orchestrator");
-  const { artifacts, vision } = requirePaperBindings(env);
   for (const message of batch.messages) {
     try {
       const { metadata } = message.body;
-      const object = await artifacts.head(metadata.objectKey);
+      const object = await env.PAPER_ARTIFACTS.head(metadata.objectKey);
       if (!object) throw new Error("Original paper artifact missing");
       if (!new Set(["image/jpeg", "image/png", "image/webp"]).has(metadata.sourceType)) {
         await markPageForReview(env.DB, metadata, "DOCUMENT_FORMAT_REQUIRES_NORMALIZATION");
       } else if (String(env.AXON_VISION_PRIVACY_MODE) !== "zdr") {
         await markPageForReview(env.DB, metadata, "NO_PRIVACY_COMPLIANT_DOCUMENT_PROVIDER");
       } else {
-        const provider = new ServiceBindingDocumentVisionProvider(vision, "zdr");
+        const provider = new ServiceBindingDocumentVisionProvider(env.DOCUMENT_VISION, "zdr");
         await processPaperPage(env, metadata, provider);
       }
       message.ack();

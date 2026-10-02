@@ -64,7 +64,7 @@ Live counts (verified 2026-08-31): `question_region` 48, `student_attempt` 7, `r
 
 ### Model
 
-All five model-calling stages and the tutor route use `gemini-3.5-flash-lite` via an OpenAI-compatible endpoint with `GOOGLE_API_KEY`. No fallbacks are configured. `model_route.allow_training = false` for every enabled stage, and each route carries an explicit `thinking_level`; the 2026-09-24 forward migration is the source of truth.
+*(Snapshot of 2026-08-31, kept for history. `gemini-3.5-flash-lite` is retired everywhere; `model_route` is the source of truth and a change to it needs a linked passing eval run — see `eval/` and `scripts/check-prompt-gate.mjs`.)* All five model-calling stages and the tutor route use `gemini-3.5-flash-lite` via an OpenAI-compatible endpoint with `GOOGLE_API_KEY`. No fallbacks are configured. `model_route.allow_training = false` for every enabled stage, and each route carries an explicit `thinking_level`; the 2026-09-24 forward migration is the source of truth.
 
 ---
 

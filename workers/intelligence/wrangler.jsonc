@@ -11,8 +11,7 @@
     "GEMINI_PRIVACY_MODE": "unverified",
     "AXON_VISION_PRIVACY_MODE": "unverified",
     "TAVILY_API_BASE": "https://api.tavily.com",
-    "SUPABASE_URL": "https://dlgcqieyevoebefhcggi.supabase.co",
-    "AXON_PROFILE": "full"
+    "SUPABASE_URL": "https://dlgcqieyevoebefhcggi.supabase.co"
   },
   "d1_databases": [
     {
@@ -52,36 +51,5 @@
     "enabled": true,
     "logs": { "head_sampling_rate": 1 },
     "traces": { "enabled": true, "head_sampling_rate": 0.1 }
-  },
-  // AXO-126. `wrangler deploy --env tutor` ships the Tutor alone under the
-  // same Worker name mastery-api binds to. No document-vision binding, no
-  // paper queue, no paper routes (the mastery pipeline is the only paper
-  // pipeline). D1 keeps traces, rate windows and idempotency; KV keeps the
-  // Tavily cache; the hourly cron only prunes those tables.
-  "env": {
-    "tutor": {
-      "name": "axon-intelligence",
-      "vars": {
-        "AXON_DEPLOYMENT_SHA": "development",
-        "AXON_CONFIG_REVISION": "v3.tutor",
-        "AXON_PIPELINE_VERSION": "3.0.0",
-        "GEMINI_PRIVACY_MODE": "unverified",
-        "AXON_VISION_PRIVACY_MODE": "unverified",
-        "TAVILY_API_BASE": "https://api.tavily.com",
-        "SUPABASE_URL": "https://dlgcqieyevoebefhcggi.supabase.co",
-        "AXON_PROFILE": "tutor"
-      },
-      "d1_databases": [
-        {
-          "binding": "DB",
-          "database_name": "axon-intelligence",
-          "database_id": "f4d5b07c-f960-45e3-b25a-f56bab682fe2",
-          "migrations_dir": "migrations"
-        }
-      ],
-      "kv_namespaces": [
-        { "binding": "PIPELINE_CACHE", "id": "c1a921d9e8f049e6b88e48ad71bd8277" }
-      ]
-    }
   }
 }

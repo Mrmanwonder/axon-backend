@@ -24,11 +24,22 @@ test("a deployed Worker never binds to a locally managed Worker excluded from th
   assert.ok(matrices.length >= 2, "expected dry-run and deploy worker matrices");
   const deployedDirectories = new Set(quotedList(matrices.at(-1)[1]));
 
+  // Workers deployed by their own step rather than the matrix (axon-intelligence, Tutor-only
+  // profile, AXO-126). A real deploy is a `wrangler deploy` that is not a dry run; the config it
+  // ships is the one named by -c, else the directory's default. That config, not the default, is
+  // what is checked for bindings.
+  const configOverrides = new Map();
+  for (const match of workflow.matchAll(/- run: npx wrangler deploy(?! --dry-run)([^\n]*)\n\s+working-directory:\s*workers\/([\w-]+)\s*\n/g)) {
+    deployedDirectories.add(match[2]);
+    const config = match[1].match(/(?:^|\s)-c\s+(\S+)/)?.[1];
+    if (config) configOverrides.set(match[2], config);
+  }
+
   const workerDirectories = await readdir(path.join(root, "workers"), { withFileTypes: true });
   const configs = new Map();
   for (const directory of workerDirectories.filter((entry) => entry.isDirectory())) {
     let configPath;
-    for (const filename of ["wrangler.toml", "wrangler.jsonc"]) {
+    for (const filename of [configOverrides.get(directory.name), "wrangler.toml", "wrangler.jsonc"].filter(Boolean)) {
       const candidate = path.join(root, "workers", directory.name, filename);
       try { await readFile(candidate, "utf8"); configPath = candidate; break; }
       catch (error) { if (error?.code !== "ENOENT") throw error; }
@@ -54,24 +65,17 @@ test("a deployed Worker never binds to a locally managed Worker excluded from th
   }
 });
 
-test("AXO-126: mastery-api binds INTELLIGENCE only when the tutor Worker is deployed first", async () => {
+test("document-vision stays out of the deploy plan, and the Tutor profile binds nothing local to it", async () => {
   const workflow = await readFile(path.join(root, ".github/workflows/deploy.yml"), "utf8");
-  const tutorJob = workflow.slice(workflow.indexOf("deploy-intelligence-tutor:"), workflow.indexOf("\n  deploy:\n"));
-  assert.match(tutorJob, /if:.*vars\.TUTOR_DEPLOY_ENABLED == 'true'/, "tutor deploy must be switched off by default");
-  const migrate = tutorJob.indexOf("d1 migrations apply axon-intelligence --remote --env tutor");
-  const deploy = tutorJob.indexOf("wrangler deploy --env tutor");
-  assert.ok(migrate > -1 && deploy > migrate, "D1 migrations must run before the tutor deploy");
+  const deploySteps = [...workflow.matchAll(/- run: npx wrangler deploy(?! --dry-run)[^\n]*\n\s+working-directory:\s*([^\n]+)/g)].map((m) => m[1].trim());
+  assert.ok(!deploySteps.some((dir) => dir.includes("document-vision")), "document-vision must not be deployed");
+  const tutor = await readFile(path.join(root, "workers/intelligence/wrangler.tutor.jsonc"), "utf8");
+  assert.deepEqual(serviceTargets(tutor), [], "the Tutor-only profile must not bind any service");
+  assert.ok(!/DOCUMENT_VISION|axon-paper-processing/.test(tutor.replace(/\/\/[^\n]*/g, "")), "the Tutor-only profile must not bind the document pipeline");
+});
 
-  const deployJob = workflow.slice(workflow.indexOf("\n  deploy:\n"));
-  assert.match(deployJob, /needs:\s*\[[^\]]*deploy-intelligence-tutor[^\]]*\]/, "api deploy must wait for the tutor deploy");
-  assert.match(deployJob, /deploy-intelligence-tutor\.result == 'success' \|\| needs\.deploy-intelligence-tutor\.result == 'skipped'/,
-    "api must not deploy after a failed tutor deploy");
-  const bind = deployJob.split("\n").findIndex((line) => line.includes('binding = "INTELLIGENCE"'));
-  assert.ok(bind > -1, "the INTELLIGENCE binding step is missing");
-  const guard = deployJob.split("\n").slice(Math.max(0, bind - 2), bind + 1).join("\n");
-  assert.match(guard, /matrix\.worker == 'api' && vars\.TUTOR_DEPLOY_ENABLED == 'true'/, "binding must be guarded by the same switch");
-  assert.match(deployJob, /TUTOR_ROLLOUT:\$\{\{ vars\.TUTOR_ROLLOUT \|\| 'off' \}\}/, "rollout stage must default to off");
-
-  const api = await readFile(path.join(root, "workers/api/wrangler.toml"), "utf8");
-  assert.ok(!/axon-intelligence/.test(api), "the static api config must not bind a Worker that may not exist");
+test("services that bind axon-intelligence deploy after it", async () => {
+  const workflow = await readFile(path.join(root, ".github/workflows/deploy.yml"), "utf8");
+  assert.match(workflow, /deploy-intelligence:/);
+  assert.match(workflow, /needs:\s*\[typecheck-and-test, dry-run, deploy-intelligence\]/);
 });

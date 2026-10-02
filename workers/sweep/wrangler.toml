@@ -14,6 +14,13 @@ bucket_name = "axon-originals"
 binding = "DERIVED"
 bucket_name = "axon-derived"
 
+# Carries Tutor deletion purges to axon-intelligence (AXO-126); needs AXON_ADMIN_TOKEN.
+[[services]]
+binding = "INTELLIGENCE"
+service = "axon-intelligence"
+
 # Secrets: ASSET_SIGNING_SECRET, MASTERY_ASSET_URL, R2_ACCESS_KEY_ID,
 # R2_BUCKET_DERIVED, R2_BUCKET_ORIGINALS, R2_ENDPOINT, R2_SECRET_ACCESS_KEY,
 # SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
+# AXON_ADMIN_TOKEN (Tutor purge)
+# Optional: ALERT_WEBHOOK_URL (spend alerts, AXO-124). Unset, alerts wait in cost_alert.
