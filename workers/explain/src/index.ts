@@ -20,18 +20,24 @@ import { fullMarkPreviousContext, normalisePartKey, resolveDependencies } from "
 import { gateModelAnswer } from "@mastery/shared/grounding.js";
 import { resolveSchemeEvidence } from "@mastery/shared/assessment.js";
 import type { Env } from "@mastery/shared/env.js";
+import { runExplainEvalCase, type EvalExplainMessage } from "@mastery/shared/eval/explain-run.js";
 
-interface ExplainMessage {
+interface PipelineExplainMessage {
   run_id: string;
   region_id: string;
   _retries?: number;
 }
+
+// An eval message (AXO-41) is not a pipeline message: it names an eval case, never a student's
+// region, and its handler touches no table a student reads. See shared/src/eval/explain-run.ts.
+type ExplainMessage = PipelineExplainMessage | EvalExplainMessage;
 
 // Tier 2 is used only after exact assessment identity + exact question-label
 // resolution against an authorized stored official scheme. Any unresolved Tier
 // 2 paper falls back to Tier 1 without scheme claims rather than fabricating one.
 const handler = consumeQueue<ExplainMessage>(
   async ({ env, sb, msg, attempt, beat }) => {
+    if ("eval" in msg) return { detail: await runExplainEvalCase({ env, sb, message: msg.eval }) };
     const runId = msg.run_id;
     const regionId = msg.region_id;
     // maybeSingle + checked: a failed read used to be indistinguishable from
@@ -331,6 +337,8 @@ const handler = consumeQueue<ExplainMessage>(
   // — which is the whole point: a failure to write `failed` used to be
   // swallowed, and the message acknowledged anyway, stranding the region.
   async ({ sb, msg }, error) => {
+    // A failed eval message has no region to fail; the eval case result records its own failure.
+    if ("eval" in msg) return;
     await mustOk(
       sb.from("question_region")
         .update({ explain_status: "failed", explain_failure_reason: failureCodeFor("explain", error) })
