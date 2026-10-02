@@ -1,7 +1,7 @@
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
 import { mustOk } from "@mastery/shared/db.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
-import { reconcile, type QuestionMarks } from "@mastery/shared/reconcile.js";
+import { adjudicationTriggers, reconcile, type QuestionMarks } from "@mastery/shared/reconcile.js";
 import { assess, numberingSoundness, downgradeRecognition, type Recognition } from "@mastery/shared/confidence.js";
 import { checkAnswer } from "@mastery/shared/arithmetic.js";
 import { checkLabels } from "@mastery/shared/labels.js";
@@ -130,26 +130,43 @@ const handler = consumeQueue<ReconcileMessage>(
 
     // A failed write here used to be ignored: the run moved on with a stale or missing
     // reconciliation. Throwing lets the queue retry the stage and the terminal handler classify it.
+    //
+    // A paper with no printed total is "unchecked" (reconciled = null) with a machine reason, never
+    // "false": there is no mismatch, only nothing to compare against. Its total is the sum of the
+    // teacher marks Axon read, labelled as such, and partial when a mark could not be read.
+    const unchecked = result.reconciled === null;
     await mustOk(
-      sb.from("extraction_run").update({ reconciled: result.reconciled, reconcile_delta: result.delta }).eq("id", runId),
+      sb.from("extraction_run").update({
+        reconciled: result.reconciled,
+        reconcile_delta: result.delta,
+        status_reason_code: result.added_up ? "no_printed_total" : null,
+      }).eq("id", runId),
       "reconcile: write run result",
     );
     await mustOk(
       sb
         .from("paper")
-        .update({ total_awarded: result.sum_awarded, total_available: result.sum_available || null, reconciled: result.reconciled })
+        .update({
+          total_awarded: result.sum_awarded,
+          total_available: result.sum_available || null,
+          reconciled: result.reconciled,
+          total_basis: result.added_up ? "added_up" : "printed",
+          total_partial: result.partial,
+        })
         .eq("id", run.paper_id),
       "reconcile: write paper totals",
     );
 
-    if (!result.reconciled) {
+    // Adjudication runs on its own triggers, never because a total is missing.
+    const triggers = adjudicationTriggers(result, marks, !labelCheck.ok);
+    if (triggers.length > 0) {
       await sb.rpc("run_advance", { p_run_id: runId, p_to: "adjudicating" });
       if (env.ADJUDICATE_QUEUE) await env.ADJUDICATE_QUEUE.send({ run_id: runId });
-      return { detail: { reconciled: false, delta: result.delta } };
+      return { detail: { reconciled: result.reconciled, delta: result.delta, adjudicate: triggers } };
     }
 
     await sb.rpc("run_advance", { p_run_id: runId, p_to: "needs_review", p_reason: result.message });
-    return { detail: { reconciled: true, questions: regions.length } };
+    return { detail: { reconciled: result.reconciled, unchecked, questions: regions.length } };
   },
   async ({ sb, msg }, error) => {
     const runId = msg.run_id;
