@@ -39,6 +39,14 @@ Current public API behavior:
 
 A future production release must add the private service binding only as part of the certified deployment plan. The absence of the binding is a release gate, not an error to bypass.
 
+**Internal stage (AXO-126, 2026-10-02).** `axon-intelligence` is now deployed from `workers/intelligence/wrangler.tutor.jsonc`, a Tutor-only profile with no document-vision binding and no paper queue, and `mastery-api` and `mastery-sweep` bind to it. This is not a release. Three things keep it internal:
+
+- `/tutor` asks the database, as the signed-in guardian, whether `tutor_enabled` is on (`guardian_feature_flag`, default off). Anything other than an explicit `true` is refused, and an unreadable flag fails closed.
+- `GEMINI_PRIVACY_MODE` stays `unverified`, so a Tutor request fails closed with `NO_COMPLIANT_PROVIDER` until the owner attests Google zero-data-retention for the key in use. That attestation is the owner's to make; nothing here sets it.
+- The remaining release gates (AXO-13 certification, probes, rollback evidence) are unchanged.
+
+Deletion parity: deleting a paper, or erasing a student, queues `tutor_purge`; the sweep worker calls `POST /v1/admin/purge` on `axon-intelligence` (admin token), which deletes the paper's `ai_trace` rows and the claim and evidence rows under them. Tutor provenance is keyed by paper only, so a question asked with no paper carries no student link.
+
 ## 3. Architecture and trust boundaries
 
 ```text

@@ -2,6 +2,7 @@ import { serviceClient } from "@mastery/shared/http.js";
 import { deleteObject, deletePrefix, type BucketKind } from "@mastery/shared/r2.js";
 import type { Env } from "@mastery/shared/env.js";
 import { deliverCostAlerts, type CostAlertRow } from "@mastery/shared/cost_alerts.js";
+import { runTutorPurges } from "@mastery/shared/tutor_purge.js";
 
 const KEYS_PER_TICK = 200;
 const CLAIMS_PER_TICK = 20;
@@ -45,6 +46,33 @@ export default {
       );
     } catch (cause) {
       console.error("cost alert delivery failed", String(cause).slice(0, 200));
+    }
+
+    // Deletion parity for the Tutor's own provenance rows (AXO-126). Also before the R2 queue.
+    try {
+      await runTutorPurges(
+        {
+          async claim(limit) {
+            const { data } = await sb.rpc("claim_tutor_purges", { p_limit: limit });
+            return (data ?? []) as Array<{ id: number; paper_id: string }>;
+          },
+          async finish(id, error) {
+            await sb.rpc("finish_tutor_purge", { p_id: id, p_error: error });
+          },
+        },
+        env.INTELLIGENCE && env.AXON_ADMIN_TOKEN
+          ? async (paperIds) => {
+              const res = await env.INTELLIGENCE!.fetch("https://axon-intelligence.internal/v1/admin/purge", {
+                method: "POST",
+                headers: { "content-type": "application/json", authorization: `Bearer ${env.AXON_ADMIN_TOKEN}` },
+                body: JSON.stringify({ paperIds }),
+              });
+              return { ok: res.ok, status: res.status };
+            }
+          : undefined,
+      );
+    } catch (cause) {
+      console.error("tutor purge failed", String(cause).slice(0, 200));
     }
 
     const { data: claims, error: claimError } = await sb.rpc("claim_deletions", { p_limit: CLAIMS_PER_TICK });

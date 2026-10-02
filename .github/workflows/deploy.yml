@@ -40,6 +40,35 @@ jobs:
       # touching any live binding — it does not need account credentials.
       - run: npx wrangler deploy --dry-run
         working-directory: workers/${{ matrix.worker }}
+        if: matrix.worker != 'intelligence'
+      # axon-intelligence ships its Tutor-only profile (AXO-126). The full document profile is
+      # dry-run too, so neither can rot.
+      - run: npx wrangler deploy --dry-run -c wrangler.tutor.jsonc
+        working-directory: workers/intelligence
+        if: matrix.worker == 'intelligence'
+      - run: npx wrangler deploy --dry-run
+        working-directory: workers/intelligence
+        if: matrix.worker == 'intelligence'
+
+  # axon-intelligence goes first, Tutor-only (AXO-126): mastery-api and mastery-sweep bind to it, and a
+  # service binding to a Worker that does not exist yet fails their deploy. document-vision stays
+  # out of the plan; this profile has no binding to it.
+  deploy-intelligence:
+    runs-on: ubuntu-latest
+    needs: [typecheck-and-test, dry-run]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx wrangler deploy -c wrangler.tutor.jsonc --var AXON_DEPLOYMENT_SHA:${{ github.sha }}
+        working-directory: workers/intelligence
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   # Deploys only run from main, and only once typecheck/tests/dry-run have
   # passed on this exact commit. See docs/DEPLOY.md for the manual
@@ -49,14 +78,13 @@ jobs:
   # AXON_FIX_BRIEF.md §5.3.5.
   deploy:
     runs-on: ubuntu-latest
-    needs: [typecheck-and-test, dry-run]
+    needs: [typecheck-and-test, dry-run, deploy-intelligence]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     strategy:
       matrix:
-        # intelligence and document-vision are deliberately excluded until the
-        # release preflight has real privacy, benchmark, rollback, probe, and
-        # secret evidence. No deployed Worker may bind to either service before
-        # they are admitted to this same deployment plan.
+        # document-vision is deliberately excluded until the release preflight has real
+        # privacy, benchmark, rollback, probe, and secret evidence. axon-intelligence is
+        # admitted for its Tutor-only internal stage (see deploy-intelligence above).
         worker: [triage, structure, crop, content, reconcile, adjudicate, explain, sweep, api]
       # One worker's deploy failing should not silently skip verifying the
       # rest — each is independent and every failure should be visible.

@@ -154,6 +154,12 @@ async function tutor(req: Request, env: Env): Promise<Response> {
     return failure("Switch to that student first.", 403);
   }
 
+  // Internal stage (AXO-126): the Tutor answers only for guardians it has been switched on for.
+  // Asked as the signed-in user, so nothing a client sends can move it; any doubt fails closed.
+  const { data: tutorOn, error: flagError } = await user.rpc("tutor_enabled");
+  if (flagError) return failure("The tutor is not available yet.", 503);
+  if (tutorOn !== true) return failure("The tutor is not switched on for this account yet.", 403);
+
   const { data: student, error } = await user
     .from("student")
     .select("id,board,class_level,programme_id,stage_id")
