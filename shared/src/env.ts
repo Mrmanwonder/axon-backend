@@ -30,11 +30,6 @@ export interface Env {
   // Admin token for axon-intelligence /v1/admin/* (Tutor deletion purge from the sweep worker).
   AXON_ADMIN_TOKEN?: string;
   INTELLIGENCE?: Fetcher;
-  /** Tutor staged rollout (AXO-126): "off" (default), "internal" (only
-      TUTOR_INTERNAL_USERS), "ga" (every Student Mode session). */
-  TUTOR_ROLLOUT?: string;
-  /** Comma-separated Supabase auth user ids admitted at the internal stage. */
-  TUTOR_INTERNAL_USERS?: string;
   /** AXO-57: the one guardian-verification provider id this deploy accepts
       callbacks for (unset = none), and its webhook signing secret. */
   GUARDIAN_VERIFICATION_PROVIDER?: string;

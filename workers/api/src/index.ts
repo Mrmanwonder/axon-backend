@@ -4,7 +4,6 @@ import { CAPTURE, PIPELINE_VERSION, SAFE_OBJECT_NAME } from "@mastery/shared/con
 import type { Env } from "@mastery/shared/env.js";
 import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
 import { loadPaperEvidence, type TutorEvidence } from "./tutor_evidence.js";
-import { jwtSubject, tutorRollout } from "./tutor_rollout.js";
 import { CallbackRejected, configuredProvider, statusForRefusal } from "./guardian_verification.js";
 
 const MAX_BYTES = 25 * 1024 * 1024;
@@ -159,10 +158,6 @@ async function tutor(req: Request, env: Env): Promise<Response> {
   if (!scope?.active || scope.student_id !== body.studentId) {
     return failure("Switch to that student first.", 403);
   }
-  if (!tutorRollout(env, jwtSubject(req.headers.get("authorization"))).allowed) {
-    return failure("The tutor is not available yet.", 503);
-  }
-
   // Internal stage (AXO-126): the Tutor answers only for guardians it has been switched on for.
   // Asked as the signed-in user, so nothing a client sends can move it; any doubt fails closed.
   const { data: tutorOn, error: flagError } = await user.rpc("tutor_enabled");

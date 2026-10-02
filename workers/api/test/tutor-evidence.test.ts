@@ -52,7 +52,7 @@ function chain(table: string, result: () => { data: unknown; error: unknown }) {
   return b;
 }
 
-function user(opts: { regions?: RegionRow[]; run?: unknown; paper?: unknown } = {}) {
+function user(opts: { regions?: RegionRow[]; run?: unknown; paper?: unknown; tutorOn?: boolean } = {}) {
   const tables: Record<string, () => { data: unknown; error: unknown }> = {
     student: () => ({ data: { id: A, board: "cbse", class_level: 12, programme_id: null, stage_id: null }, error: null }),
     paper: () => ({ data: opts.paper === undefined ? { id: "paper-1", subject: "Physics" } : opts.paper, error: null }),
@@ -61,7 +61,9 @@ function user(opts: { regions?: RegionRow[]; run?: unknown; paper?: unknown } = 
     question_region: () => ({ data: opts.regions ?? [region()], error: null }),
   };
   return {
-    rpc: vi.fn(async () => ({ data: { active: true, student_id: A }, error: null })),
+    rpc: vi.fn(async (name: string) => name === "tutor_enabled"
+      ? { data: opts.tutorOn ?? true, error: null }
+      : { data: { active: true, student_id: A }, error: null }),
     from: vi.fn((t: string) => chain(t, tables[t] ?? (() => { throw new Error("unexpected table " + t); }))),
   };
 }
@@ -74,7 +76,7 @@ function post(extra: Record<string, unknown>) {
   });
 }
 
-const env = () => ({ AXON_INTERNAL_TOKEN: "t", INTELLIGENCE: { fetch: fixture.intelligenceFetch }, TUTOR_ROLLOUT: "ga" }) as any;
+const env = () => ({ AXON_INTERNAL_TOKEN: "t", INTELLIGENCE: { fetch: fixture.intelligenceFetch } }) as any;
 const forwarded = () => JSON.parse(fixture.intelligenceFetch.mock.calls[0][1].body);
 
 beforeEach(() => {
@@ -166,11 +168,11 @@ describe("regionsToEvidence", () => {
   });
 });
 
-describe("AXO-126 rollout gate at the gateway", () => {
-  test("with the switch off the tutor answers 503 before any evidence query or model work", async () => {
-    fixture.clientFor.mockReturnValue(user());
-    const res = await worker.fetch(post({ paperId: "paper-1" }), { AXON_INTERNAL_TOKEN: "t", INTELLIGENCE: { fetch: fixture.intelligenceFetch } } as any);
-    expect(res.status).toBe(503);
+describe("AXO-126 per-guardian flag at the gateway", () => {
+  test("with tutor_enabled off the tutor refuses before any evidence query or model work", async () => {
+    fixture.clientFor.mockReturnValue(user({ tutorOn: false }));
+    const res = await worker.fetch(post({ paperId: "paper-1" }), env());
+    expect(res.status).toBe(403);
     expect(fixture.queries.some(q => q.table === "question_region" || q.table === "student")).toBe(false);
     expect(fixture.intelligenceFetch).not.toHaveBeenCalled();
   });
