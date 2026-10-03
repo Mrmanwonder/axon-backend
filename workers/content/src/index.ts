@@ -3,6 +3,7 @@ import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
 import { imageRef } from "@mastery/shared/r2.js";
 import { pageDimensions } from "@mastery/shared/page.js";
+import { planContentSources } from "@mastery/shared/content_sources.js";
 import { mapModelBoxToPage, frameForIndex, type ModelFrame } from "@mastery/shared/frames.js";
 import { bandForRegion } from "@mastery/shared/crop.js";
 import { mustData, mustMaybe } from "@mastery/shared/db.js";
@@ -78,6 +79,7 @@ const handler = consumeQueue<ContentMessage>(
 
     const spans: Array<{ page: number }> = region.page_spans ?? [];
     if (!spans.length) throw new Error("a question with no page span has nothing to read");
+    const sourcePlan = planContentSources(spans, !!region.crop_key);
 
     // Every page this question touches, with the metadata needed to establish
     // its own dimensions. Fetched BEFORE the images because a frame cannot be
@@ -87,12 +89,14 @@ const handler = consumeQueue<ContentMessage>(
       sb.from("paper_page")
         .select("page_number, r2_bucket, r2_key, mask_key, layer_fallback, conditioning_meta, quality_signals")
         .eq("paper_id", region.paper_id)
-        .in("page_number", spans.map((s) => s.page))
+        .in("page_number", sourcePlan.pageNumbers)
         .order("page_number"),
       "paper_page read",
     ) as any[];
     const firstPage = pageRows.find((p) => p.page_number === spans[0].page) ?? null;
 
+    // A crop covers only the first page: multi-page regions must use all full
+    // pages so continuation working and marks remain visible (AXO-138).
     // Prefer a pre-cut crop (§8 of AXON_FIX_BRIEF.md) over sending the whole
     // page. A crop is only used where its band can be recomputed exactly —
     // `bandForRegion` is the same function the crop worker cut with, so the
@@ -100,7 +104,7 @@ const handler = consumeQueue<ContentMessage>(
     // way to map the model's coordinates back, and a crop whose provenance we
     // cannot express is worse than a full page: it is cheaper and wrong.
     const firstDims = firstPage ? pageDimensions(firstPage as any) : null;
-    const cropBand = region.crop_key && firstDims
+    const cropBand = sourcePlan.kind === "crop" && firstDims
       ? bandForRegion(spans as any, spans[0].page, firstDims.width, firstDims.height)
       : null;
 
