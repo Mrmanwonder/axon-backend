@@ -21,6 +21,7 @@ import { gateModelAnswer } from "@mastery/shared/grounding.js";
 import { resolveSchemeEvidence } from "@mastery/shared/assessment.js";
 import type { Env } from "@mastery/shared/env.js";
 import { runExplainEvalCase, type EvalExplainMessage } from "@mastery/shared/eval/explain-run.js";
+import { tagRegion, failTopicTag, type TopicTagMessage } from "@mastery/shared/topic_tag.js";
 
 interface PipelineExplainMessage {
   run_id: string;
@@ -30,7 +31,10 @@ interface PipelineExplainMessage {
 
 // An eval message (AXO-41) is not a pipeline message: it names an eval case, never a student's
 // region, and its handler touches no table a student reads. See shared/src/eval/explain-run.ts.
-type ExplainMessage = PipelineExplainMessage | EvalExplainMessage;
+// A topic_tag message (syllabus heatmap) is queued by the sweep. It shares this
+// queue and worker because this worker holds the model key; it never touches
+// explain_status.
+type ExplainMessage = PipelineExplainMessage | EvalExplainMessage | TopicTagMessage;
 
 // Tier 2 is used only after exact assessment identity + exact question-label
 // resolution against an authorized stored official scheme. Any unresolved Tier
@@ -38,6 +42,9 @@ type ExplainMessage = PipelineExplainMessage | EvalExplainMessage;
 const handler = consumeQueue<ExplainMessage>(
   async ({ env, sb, msg, attempt, beat }) => {
     if ("eval" in msg) return { detail: await runExplainEvalCase({ env, sb, message: msg.eval }) };
+    if ("topic_tag" in msg) {
+      return { detail: await tagRegion({ env, sb, regionId: msg.topic_tag.region_id, documentId: msg.topic_tag.document_id, attempt }) };
+    }
     const runId = msg.run_id;
     const regionId = msg.region_id;
     // maybeSingle + checked: a failed read used to be indistinguishable from
@@ -339,6 +346,7 @@ const handler = consumeQueue<ExplainMessage>(
   async ({ sb, msg }, error) => {
     // A failed eval message has no region to fail; the eval case result records its own failure.
     if ("eval" in msg) return;
+    if ("topic_tag" in msg) { await failTopicTag(sb, msg, error); return; }
     await mustOk(
       sb.from("question_region")
         .update({ explain_status: "failed", explain_failure_reason: failureCodeFor("explain", error) })

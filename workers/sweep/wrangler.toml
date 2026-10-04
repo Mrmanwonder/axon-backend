@@ -14,6 +14,11 @@ bucket_name = "axon-originals"
 binding = "DERIVED"
 bucket_name = "axon-derived"
 
+# Topic-tag work for the syllabus heatmap goes to the explain worker, which holds the model key.
+[[queues.producers]]
+binding = "EXPLAIN_QUEUE"
+queue = "explain-queue"
+
 # Carries Tutor deletion purges to axon-intelligence (AXO-126); needs AXON_ADMIN_TOKEN.
 [[services]]
 binding = "INTELLIGENCE"
