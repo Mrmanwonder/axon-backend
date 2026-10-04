@@ -1,3 +1,5 @@
+import { pipelineWrite } from "@mastery/shared/pipeline_write.js";
+import { mustData, mustMaybe } from "@mastery/shared/db.js";
 import { callModel } from "@mastery/shared/model-client.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
 import { adjudicationBlocksCommit } from "@mastery/shared/labels.js";
@@ -16,34 +18,31 @@ const RANK: Record<string, number> = { unreadable: 0, unsure: 1, confident: 2 };
 const handler = consumeQueue<AdjudicateMessage>(
   async ({ env, sb, msg, attempt, beat }) => {
     const runId = msg.run_id;
-    const { data: run } = await sb
-      .from("extraction_run")
-      .select("id, paper_id, student_id, status, reconcile_delta, route_override")
-      .eq("id", runId)
-      .single();
+    const run = await mustMaybe<any>(sb.from("extraction_run")
+      .select("id, paper_id, student_id, status, reconcile_delta, route_override").eq("id", runId).maybeSingle(), "adjudicate run read");
     if (!run) return { detail: { skipped: "no such run" } };
     if (run.status !== "adjudicating") return { detail: { skipped: run.status } };
     const override = run.route_override;
     await beat();
 
-    const { data: paper } = await sb.from("paper").select("reported_total, total_awarded").eq("id", run.paper_id).single();
-    const { data: regions } = await sb
+    const paper = await mustMaybe<any>(sb.from("paper").select("reported_total, total_awarded").eq("id", run.paper_id).maybeSingle(), "adjudicate paper read");
+    const regions = await mustData<any[]>(sb
       .from("question_region")
       .select("id, order_index, question_label, marks_awarded, marks_available, confidence_tier, confidence_signals, crop_key, page_spans")
       .eq("run_id", runId)
-      .order("order_index");
+      .order("order_index"), "adjudicate regions read");
     if (!regions?.length) {
-      await sb.rpc("run_advance", { p_run_id: runId, p_to: "needs_review" });
+      await pipelineWrite(sb, runId, "adjudicate");
       return { detail: { skipped: "nothing to adjudicate" } };
     }
 
     const suspects = [...regions].sort((a: any, b: any) => (RANK[a.confidence_tier] ?? 3) - (RANK[b.confidence_tier] ?? 3)).slice(0, CROPS);
     const [suspectImages, coverPageRow] = await Promise.all([
       Promise.all(suspects.filter((r: any) => r.crop_key).map((r: any) => imageRef(env, "derived", r.crop_key, "high"))),
-      sb.from("paper_page").select("r2_bucket, r2_key").eq("paper_id", run.paper_id).order("page_number").limit(1).maybeSingle(),
+      mustMaybe<any>(sb.from("paper_page").select("r2_bucket, r2_key").eq("paper_id", run.paper_id).order("page_number").limit(1).maybeSingle(), "adjudicate cover page read"),
     ]);
     const images = [...suspectImages];
-    const coverPage = coverPageRow.data;
+    const coverPage = coverPageRow;
     if (coverPage?.r2_key) {
       images.push(await imageRef(env, coverPage.r2_bucket ?? "derived", coverPage.r2_key, "high"));
     }
@@ -77,26 +76,19 @@ const handler = consumeQueue<AdjudicateMessage>(
 
     const byIndex = new Map(regions.map((r: any) => [r.order_index, r]));
     let flagged = 0;
+    const confidenceById = new Map<string, any>();
     for (const correction of parsed.corrections) {
       const region = byIndex.get(correction.order_index) as any;
       if (!region) continue;
-      await sb
-        .from("question_region")
-        .update({
-          confidence_tier: "unsure",
-          needs_review: true,
-          confidence_signals: {
-            ...(region.confidence_signals ?? {}),
-            adjudication: { field: correction.field, suggests: correction.corrected_value, evidence: correction.evidence },
-          },
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", region.id);
+      confidenceById.set(region.id, {
+        id: region.id, tier: "unsure", needs_review: true,
+        signals: { ...(region.confidence_signals ?? {}),
+          adjudication: { field: correction.field, suggests: correction.corrected_value, evidence: correction.evidence } },
+      });
       flagged += 1;
     }
 
     const adjudication = { cause: parsed.cause, checked: parsed.checked, corrections: parsed.corrections };
-    await sb.from("extraction_run").update({ adjudication }).eq("id", runId);
 
     // A structural finding must stop the paper, not decorate it.
     //
@@ -116,10 +108,6 @@ const handler = consumeQueue<AdjudicateMessage>(
       evidence: (parsed.corrections ?? []).map((c: any) => c.evidence ?? "").join(" "),
     });
     if (structural.blocked) {
-      await sb.from("extraction_run")
-        .update({ adjudication: { ...adjudication, blocks_commit: true, blocked_reason: structural.reason } })
-        .eq("id", runId);
-      await sb.from("question_region").update({ needs_review: true }).eq("run_id", runId);
       console.info("adjudication blocks commit", runId, structural.reason);
     }
 
@@ -131,15 +119,17 @@ const handler = consumeQueue<AdjudicateMessage>(
       : parsed.corrections.length
         ? "The marks do not quite add up. We have put the questions to check first."
         : "The marks on this paper do not add up to the total written on it. We could not see why, so nothing was changed.";
-    await sb.rpc("run_advance", { p_run_id: runId, p_to: "needs_review", p_reason: reason });
+    if (!await pipelineWrite(sb, runId, "adjudicate", {
+      confidence: [...confidenceById.values()],
+      adjudication: structural.blocked ? { ...adjudication, blocks_commit: true, blocked_reason: structural.reason } : adjudication,
+      reason,
+    })) return { detail: { skipped: "stale adjudication result" } };
 
     return { detail: { cause: parsed.cause, flagged } };
   },
   async ({ sb, msg }) => {
-    await sb.rpc("run_advance", {
-      p_run_id: msg.run_id,
-      p_to: "needs_review",
-      p_reason: "The marks on this paper do not add up to the total written on it. Check the questions below.",
+    await pipelineWrite(sb, msg.run_id, "adjudicate", {
+      reason: "The marks on this paper do not add up to the total written on it. Check the questions below.",
     });
   }
 );

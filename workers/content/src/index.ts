@@ -1,5 +1,6 @@
 import { callModel } from "@mastery/shared/model-client.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
+import { pipelineWrite } from "@mastery/shared/pipeline_write.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
 import { imageRef } from "@mastery/shared/r2.js";
 import { pageDimensions } from "@mastery/shared/page.js";
@@ -76,7 +77,7 @@ const handler = consumeQueue<ContentMessage>(
     }
     const override = run.route_override;
 
-    await mustOk(sb.from("question_region").update({ extract_status: "running" }).eq("id", regionId), "content running");
+    if (!await pipelineWrite(sb, runId, "content", { region_id: regionId, patch: { extract_status: "running" } })) return { detail: { skipped: "stale content work" } };
     await beat();
 
     const spans: Array<{ page: number }> = region.page_spans ?? [];
@@ -205,16 +206,13 @@ const handler = consumeQueue<ContentMessage>(
       // an empty list is exactly the case where nothing the model returned can
       // be placed anywhere.
       if (!frames.length) {
-        await mustOk(sb
-          .from("question_region")
-          .update({
+        if (!await pipelineWrite(sb, runId, "content", { region_id: regionId, patch: {
             extract_status: "done",
             confidence_tier: "unreadable",
             needs_review: true,
             confidence_signals: { unreadable_reason: "We could not work out the size of this page, so we cannot say where anything on it sits." },
             updated_at: new Date().toISOString(),
-          })
-          .eq("id", regionId), "content unreadable completion");
+          } })) return { detail: { skipped: "stale content result" } };
         await advanceAndEnqueue(env, sb, runId);
         return { detail: { unreadable: "no page dimensions" } };
       }
@@ -227,23 +225,18 @@ const handler = consumeQueue<ContentMessage>(
       const remark = field(parsed.teacher_remark, frames);
 
       if (parsed.unreadable) {
-        await mustOk(sb
-          .from("question_region")
-          .update({
+        if (!await pipelineWrite(sb, runId, "content", { region_id: regionId, patch: {
             extract_status: "done",
             confidence_tier: "unreadable",
             needs_review: true,
             confidence_signals: { unreadable_reason: parsed.unreadable_reason },
             updated_at: new Date().toISOString(),
-          })
-          .eq("id", regionId), "content unreadable completion");
+          } })) return { detail: { skipped: "stale content result" } };
         await advanceAndEnqueue(env, sb, runId);
         return { detail: { unreadable: parsed.unreadable_reason } };
       }
 
-      const { error: updErr } = await sb
-        .from("question_region")
-        .update({
+      if (!await pipelineWrite(sb, runId, "content", { region_id: regionId, patch: {
           question_label: label.value ?? region.question_label,
           question_label_box: label.box ?? region.question_label_box,
           question_text: question.value,
@@ -265,19 +258,7 @@ const handler = consumeQueue<ContentMessage>(
           region_type: parsed.region_type ?? null,
           extract_status: "done",
           updated_at: new Date().toISOString(),
-        })
-        .eq("id", regionId);
-      if (updErr) throw new Error("question_region update failed: " + updErr.message + " | " + JSON.stringify(updErr));
-
-      if (awarded.value !== null && awarded.box) {
-        const { error: tmErr } = await sb
-          .from("teacher_mark")
-          .update({ value: awarded.value })
-          .eq("region_id", regionId)
-          .eq("mark_class", "marginal_number")
-          .is("value", null);
-        if (tmErr) throw new Error("teacher_mark update failed: " + tmErr.message + " | " + JSON.stringify(tmErr));
-      }
+        } })) return { detail: { skipped: "stale content result" } };
 
       await advanceAndEnqueue(env, sb, runId);
       return { detail: { awarded: awarded.value, available: available.value } };
@@ -289,9 +270,7 @@ const handler = consumeQueue<ContentMessage>(
   async ({ env, sb, msg }, error) => {
     const regionId = msg.region_id;
     const region = await mustMaybe<any>(sb.from("question_region").select("confidence_signals").eq("id", regionId).maybeSingle(), "content terminal region read");
-    await mustOk(sb
-      .from("question_region")
-      .update({
+    if (!await pipelineWrite(sb, msg.run_id, "content", { region_id: regionId, patch: {
         extract_status: "failed",
         confidence_tier: "unreadable",
         needs_review: true,
@@ -302,8 +281,7 @@ const handler = consumeQueue<ContentMessage>(
           failure_reason: failureCodeFor("content", error),
         },
         updated_at: new Date().toISOString(),
-      })
-      .eq("id", regionId), "content terminal failure");
+      } })) return;
     await advanceAndEnqueue(env, sb, msg.run_id);
   }
 );

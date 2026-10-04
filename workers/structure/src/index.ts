@@ -167,18 +167,11 @@ const handler = consumeQueue<StructureMessage>(
     // run is removed first: its marks, then the regions whose first span is
     // this page. Assembly is run-level now, so no other region carries a span
     // written by this page until every page is done.
-    await mustOk(
-      sb.from("teacher_mark").delete().eq("run_id", runId).eq("page_number", page.page_number),
-      "clear this page's earlier teacher marks",
-    );
     const runRegions = await mustData(
       sb.from("question_region").select("id, order_index, page_spans, question_label").eq("run_id", runId),
       "run regions read",
     ) as Array<{ id: string; order_index: number; page_spans: unknown; question_label: string | null }>;
     const stale = regionsWrittenByPage(runRegions, page.page_number);
-    if (stale.length) {
-      await mustOk(sb.from("question_region").delete().in("id", stale), "clear this page's earlier regions");
-    }
     const kept = runRegions.filter((r) => !stale.includes(r.id));
     const nextIndex = kept.reduce((m, r) => Math.max(m, r.order_index + 1), 0);
     const takenLabels = new Set(
@@ -204,24 +197,13 @@ const handler = consumeQueue<StructureMessage>(
         moves its marks with it. */
     const candidates: Array<{ id: string; order_index: number; spans: unknown[] }> = [];
 
-    if (plan.length) {
-      // Checked. The (run_id, order_index) race this worker still has is
-      // contained by max_concurrency=1; a collision throws and the retry
-      // starts clean (above) rather than marking the page done without its
-      // questions.
-      const insertedRows = await mustData(
-        sb.from("question_region").insert(plan.map((t) => t.row)).select("id, order_index"),
-        "question_region insert",
-      ) as Array<{ id: string; order_index: number }>;
-      const byOrder = new Map((insertedRows ?? []).map((r) => [r.order_index, r]));
-      for (const t of plan) {
-        const row = byOrder.get(t.order_index);
-        if (row) {
-          created.push({ id: row.id, order_index: row.order_index, spans: [t.span] });
-          candidates.push({ id: row.id, order_index: row.order_index, spans: [t.span] });
-        }
-      }
-    }
+    const regionRows = plan.map(t => {
+      const id = crypto.randomUUID();
+      created.push({ id, order_index: t.order_index, spans: [t.span] });
+      candidates.push({ id, order_index: t.order_index, spans: [t.span] });
+      return { ...t.row, id };
+    });
+    let teacherRows: Record<string, unknown>[] = [];
 
     const marks: RawMark[] = page.teacher_marks ?? [];
     if (marks.length && candidates.length) {
@@ -233,7 +215,7 @@ const handler = consumeQueue<StructureMessage>(
         marginBands: new Map([[page.page_number, null]]),
         pageWidths: new Map([[page.page_number, width]]),
       });
-      const rows = attributed.map((m) => ({
+      teacherRows = attributed.map((m) => ({
         run_id: runId,
         paper_id: page.paper_id,
         student_id: page.student_id,
@@ -245,12 +227,11 @@ const handler = consumeQueue<StructureMessage>(
         metrics: m.metrics,
         confidence_tier: "unsure",
       }));
-      if (rows.length) await mustOk(sb.from("teacher_mark").insert(rows), "teacher_mark insert");
     }
 
     // After the writes above have all landed, never before: `done` is a claim
     // that this page's questions and marks are in the database.
-    if (!await pipelineWrite(sb, runId, "structure", { page_id: pageId, patch: { structure_status: "done" } })) return { detail: { skipped: "stale structure result" } };
+    if (!await pipelineWrite(sb, runId, "structure", { page_id: pageId, patch: { structure_status: "done" }, regions: regionRows, teacher_marks: teacherRows })) return { detail: { skipped: "stale structure result" } };
     const advance = await mustRpc(sb.rpc("advance_after_structure", { p_run_id: runId }), "advance_after_structure") as any;
     await enqueueFromAdvance(env, runId, advance ?? {});
 

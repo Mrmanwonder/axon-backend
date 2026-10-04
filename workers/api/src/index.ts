@@ -1,5 +1,5 @@
 import { CORS, corsFor, withCors, json, failure, clientFor, readJson, serviceClient } from "@mastery/shared/http.js";
-import { presignPut, headObject, sealUpload, signAssetUrl, verifyAssetSignature, objectKey, stagingKey, BUCKET_FOR, type BucketKind } from "@mastery/shared/r2.js";
+import { presignPut, headObject, sealUpload, signAssetUrl, verifyAssetSignature, objectKey, stagingKey, deleteObject, BUCKET_FOR, type BucketKind } from "@mastery/shared/r2.js";
 import { CAPTURE, PIPELINE_VERSION, SAFE_OBJECT_NAME } from "@mastery/shared/contract.js";
 import type { Env } from "@mastery/shared/env.js";
 import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
@@ -554,7 +554,10 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
   // the capability is dead, including abandoned/rejected uploads and erasure races.
   const cleanupAt = new Date(Date.now() + 20 * 60 * 1000).toISOString();
   const { error: cleanupError } = await admin.from("r2_deletion").insert(
-    prepared.map(({ bucket, key }) => ({ bucket, key: stagingKey(key), not_before: cleanupAt }))
+    prepared.flatMap(({ bucket, key }) => [
+      { bucket, key: stagingKey(key), not_before: cleanupAt },
+      { bucket, key, not_before: cleanupAt, unconfirmed_upload_id: ledgerByKey.get(key) },
+    ])
   );
   if (cleanupError) return failure("We could not prepare upload cleanup. Try again.", 503);
 
@@ -649,6 +652,12 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
         .eq("r2_bucket", claim.bucket)
         .eq("student_id", paper.student_id)
         .select("id");
+      if (!error && updated?.length === 0) {
+        // Erasure may finish while R2 promotion is in flight. Delete the orphan
+        // immediately; the intent's deferred canonical cleanup is the durable fallback.
+        await deleteObject(env, claim.bucket, claim.key);
+        await deleteObject(env, claim.bucket, stagingKey(claim.key));
+      }
       if (error || updated?.length !== 1) throw new Error(error?.message ?? "upload confirmation did not affect one issued object");
     });
   } catch (cause) {

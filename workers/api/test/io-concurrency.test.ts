@@ -8,6 +8,7 @@ const fixture = vi.hoisted(() => ({
   signAssetUrl: vi.fn(),
   insert: vi.fn(),
   cleanupInsert: vi.fn(),
+  deleteObject: vi.fn(),
   update: vi.fn(),
   pages: [] as any[],
   ledger: null as any[] | null,
@@ -51,6 +52,7 @@ vi.mock("@mastery/shared/r2.js", () => ({
   verifyAssetSignature: vi.fn(),
   objectKey: ({ studentId, paperId, kind, name, extension }: any) =>
     `${studentId}/${paperId}/${kind}/${name}.${extension}`,
+  deleteObject: fixture.deleteObject,
   stagingKey: (key: string) => key + ".pending",
   BUCKET_FOR: {
     upload: "originals",
@@ -165,6 +167,7 @@ beforeEach(() => {
   fixture.signActive = fixture.signMax = 0;
 
   fixture.cleanupInsert.mockResolvedValue({ error: null });
+  fixture.deleteObject.mockResolvedValue(undefined);
   fixture.clientFor.mockReturnValue(userClient());
   fixture.serviceClient.mockReturnValue(adminClient());
 
@@ -431,4 +434,21 @@ test("issued PUT capabilities get cleanup after their expiry, and cleanup failur
   const failed = await worker.fetch(request("/upload-intent", { student_id: STUDENT, paper_id: PAPER, objects: [uploadObject(2)] }), {} as any, {} as any);
   expect(failed.status).toBe(503);
   expect(await failed.json()).not.toHaveProperty("objects");
+});
+
+test("canonical cleanup remains armed for unconfirmed upload intents", async () => {
+  const response = await worker.fetch(request("/upload-intent", { student_id: STUDENT, paper_id: PAPER, objects: [uploadObject(1)] }), {} as any, {} as any);
+  expect(response.status).toBe(200);
+  const rows = fixture.cleanupInsert.mock.calls[0][0];
+  expect(rows[1]).toMatchObject({ key: uploadClaim(1).key, unconfirmed_upload_id: "upload-0" });
+});
+test("erasure during promotion removes the orphan canonical object", async () => {
+  fixture.update.mockImplementation(() => {
+    const b: any = { eq: () => b, select: async () => ({ data: [], error: null }) };
+    return b;
+  });
+  const response = await worker.fetch(request("/upload-complete", { paper_id: PAPER, uploads: [uploadClaim(1)] }), {} as any, {} as any);
+  expect(response.status).toBe(500);
+  expect(fixture.deleteObject).toHaveBeenCalledWith(expect.anything(), "originals", uploadClaim(1).key);
+  expect(fixture.deleteObject).toHaveBeenCalledWith(expect.anything(), "originals", uploadClaim(1).key + ".pending");
 });

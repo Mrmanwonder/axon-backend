@@ -22,6 +22,7 @@ function db() {
         if (fixture.runStatus !== "structure") return { data: { applied: false }, error: null };
         const state = args.p_args.patch.structure_status;
         if (state === "done") {
+          if (args.p_args.regions) fixture.events.push("regions");
           fixture.events.push("retire");
           if (fixture.deleteError) return { data: null, error: { code: "08006", message: "connection failed" } };
           fixture.markers = fixture.markers.filter(marker => marker.page_number !== 2);
@@ -91,6 +92,7 @@ test("old model work released after a retake cannot complete the replacement pag
   release(); await old;
   expect(fixture.status).toBe("pending");
   expect(fixture.markers).toHaveLength(2);
+  expect(fixture.events).not.toContain("regions");
 });
 test("a failed downstream send is retried after structure has already advanced", async () => {
   fixture.dispatch = true;
