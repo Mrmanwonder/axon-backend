@@ -1,5 +1,5 @@
 import { CORS, corsFor, withCors, json, failure, clientFor, readJson, serviceClient } from "@mastery/shared/http.js";
-import { presignPut, sealUpload, signAssetUrl, verifyAssetSignature, objectKey, stagingKey, BUCKET_FOR, type BucketKind } from "@mastery/shared/r2.js";
+import { presignPut, headObject, sealUpload, signAssetUrl, verifyAssetSignature, objectKey, stagingKey, BUCKET_FOR, type BucketKind } from "@mastery/shared/r2.js";
 import { CAPTURE, PIPELINE_VERSION, SAFE_OBJECT_NAME } from "@mastery/shared/contract.js";
 import type { Env } from "@mastery/shared/env.js";
 import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
