@@ -3,7 +3,7 @@ export interface QuestionMarks {
   label: string | null;
   awarded: number | null;
   available: number | null;
-  recognition: "high" | "medium" | "low";
+  recognition: "high" | "medium" | "low" | null;
 }
 
 export interface ReconcileChecks {

@@ -27,9 +27,10 @@ import { classifyDbError, PermanentError } from "./errors.js";
 type Result<T> = { data: T; error: unknown };
 
 /** A read or write whose rows the caller needs. Throws on failure. */
-export async function mustData<T>(op: PromiseLike<Result<T>>, context: string): Promise<T> {
+export async function mustData<T>(op: PromiseLike<Result<T | null>>, context: string): Promise<T> {
   const { data, error } = await op;
   if (error) throw classifyDbError(error, context);
+  if (data === null) throw new PermanentError("db_result_missing", `${context}: no result returned`);
   return data;
 }
 
