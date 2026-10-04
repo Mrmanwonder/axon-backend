@@ -31,7 +31,7 @@ export type Annotation =
 export type LineRole = "working" | "final_answer" | "restatement" | "crossed_out";
 
 /** A box on the page image, in the same 0–1000 grid the rest of the pipeline uses. */
-export interface Bbox { x: number; y: number; w: number; h: number; page_index?: number }
+export interface Bbox { x: number; y: number; w: number; h: number; page_index?: number; page?: number }
 
 export interface Segment {
   type: SegmentType;
@@ -59,6 +59,7 @@ export interface AnswerBlock {
   /** Declares the `^` / `_` / radix conventions so each call stops inventing one. */
   notation_profile: string;
   raw_text: string;
+  source_space?: "page_pixels_v1";
 }
 
 const SEGMENT_TYPES = new Set<string>(["math", "prose", "numeral", "binary", "label"]);
@@ -76,6 +77,8 @@ function readBbox(v: unknown): Bbox | null {
   const b = v as Record<string, unknown>;
   const x = num(b.x), y = num(b.y), w = num(b.w), h = num(b.h);
   if (x === null || y === null || w === null || h === null) return null;
+  const sourcePage = num(b.page);
+  if (sourcePage !== null && Number.isInteger(sourcePage) && sourcePage > 0) return { x, y, w, h, page: sourcePage };
   const page = num(b.page_index);
   return page === null ? { x, y, w, h } : { x, y, w, h, page_index: page };
 }
@@ -144,6 +147,7 @@ export function readAnswerBlock(raw: unknown, rawTextFallback: string | null): A
     notation_profile: typeof o.notation_profile === "string" && o.notation_profile
       ? o.notation_profile : "unspecified",
     raw_text: rawText,
+    ...(o.source_space === "page_pixels_v1" ? { source_space: "page_pixels_v1" as const } : {}),
   };
 }
 

@@ -259,6 +259,7 @@ const handler = consumeQueue<StructureMessage>(
 
     // After the writes above have all landed, never before: `done` is a claim
     // that this page's questions and marks are in the database.
+    await mustOk(sb.from("page_unreadable").delete().eq("paper_id", page.paper_id).eq("student_id", page.student_id).eq("page_number", page.page_number), "retire recovered page unreadability");
     await mustOk(sb.from("paper_page").update({ structure_status: "done" }).eq("id", pageId), "structure_status=done");
     const advance = await mustRpc(sb.rpc("advance_after_structure", { p_run_id: runId }), "advance_after_structure") as any;
     if (advance?.advanced) await enqueueFromAdvance(env, runId, advance);

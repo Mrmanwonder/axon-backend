@@ -72,6 +72,7 @@ function persistedEvidenceProvenance(evidence: Evidence): Evidence["provenance"]
 }
 
 const DIAGNOSTIC_CATEGORIES: Array<[RegExp, string]> = [
+  [/^USAGE_INCOMPLETE$/, "USAGE_INCOMPLETE"],
   [/\bNO_COMPLIANT_PROVIDER\b/i, "NO_COMPLIANT_PROVIDER"],
   [/\bMODEL_TIMEOUT\b/i, "MODEL_TIMEOUT"],
   [/\bMODEL_RATE_LIMIT\b/i, "MODEL_RATE_LIMIT"],

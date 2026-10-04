@@ -461,6 +461,11 @@ async function paperRetry(req: Request, env: Env): Promise<Response> {
   }, 202);
 }
 
+export function ownedObjectKey(key: unknown, studentId: string, paperId: string): key is string {
+  return typeof key === "string" && key.startsWith(`${studentId}/${paperId}/`)
+    && !/(?:^|\/)\.{1,2}(?:\/|$)/.test(key) && !key.includes("%") && !key.includes("\\");
+}
+
 async function uploadIntent(req: Request, env: Env): Promise<Response> {
   const user = clientFor(req, env);
   if (!user) return failure("Sign in first.", 401);
@@ -487,7 +492,7 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
   for (const object of body.objects) {
     const extension = CAPTURE.UPLOAD_EXTENSIONS[object.content_type as keyof typeof CAPTURE.UPLOAD_EXTENSIONS];
     if (!extension) return failure(`We cannot take a ${object.content_type} file.`);
-    if (object.bytes && object.bytes > MAX_BYTES) return failure("One of those files is too large to upload.");
+    if (!Number.isSafeInteger(object.bytes) || object.bytes <= 0 || object.bytes > MAX_BYTES) return failure("One of those files is too large to upload.");
     const bucket = BUCKET_FOR[object.kind as keyof typeof BUCKET_FOR] as BucketKind | undefined;
     if (!bucket) return failure("Unknown file kind.");
 
@@ -519,7 +524,6 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
 
   const admin = serviceClient(env);
   const ledgerRows = prepared
-    .filter(({ object }) => object.kind === "upload" || object.kind === "raw")
     .map(({ object, bucket, key }) => ({
       paper_id: body.paper_id,
       student_id: body.student_id,
@@ -527,6 +531,7 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
       r2_bucket: bucket,
       r2_key: key,
       content_type: object.content_type,
+      bytes: object.bytes,
     }));
 
   const ledgerByKey = new Map<string, string>();
@@ -566,6 +571,10 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
   const { data: paper } = await user.from("paper").select("id, student_id").eq("id", body.paper_id).maybeSingle();
   if (!paper) return failure("That paper is not yours.", 403);
 
+  const admin = serviceClient(env);
+  const { data: ledger, error: ledgerError } = await admin.from("upload")
+    .select("r2_bucket,r2_key,bytes").eq("paper_id", paper.id).eq("student_id", paper.student_id);
+  if (ledgerError) return failure("We could not check the upload ledger. Try again.", 503);
   const missing: Array<{ key: string; reason: string }> = [];
   const validClaims: any[] = [];
   for (const claim of body.uploads) {
@@ -574,11 +583,16 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
       missing.push({ key: claim.key ?? "", reason: "that storage bucket is not valid" });
       continue;
     }
-    if (!claim.key?.startsWith(`${paper.student_id}/${paper.id}/`)) {
+    if (!ownedObjectKey(claim.key, paper.student_id, paper.id)) {
       missing.push({ key: claim.key ?? "", reason: "that file does not belong to this paper" });
       continue;
     }
-    validClaims.push(claim);
+    const issued = ledger?.find((row: any) => row.r2_key === claim.key && row.r2_bucket === claim.bucket);
+    if (!issued) {
+      missing.push({ key: claim.key, reason: "that file has no upload intent" });
+      continue;
+    }
+    validClaims.push({ ...claim, expectedBytes: issued.bytes });
   }
 
   type CheckedUpload = {
@@ -590,7 +604,11 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
     try {
       const head = await headObject(env, claim.bucket, claim.key);
       if (!head) return { claim, head: null, reason: "that file did not arrive" };
-      if (claim.bytes && claim.bytes !== head.bytes) {
+      if (!Number.isSafeInteger(head.bytes) || head.bytes <= 0 || head.bytes > MAX_BYTES) {
+        return { claim, head, reason: "that file is too large or has an invalid size" };
+      }
+      if ((claim.expectedBytes != null && claim.expectedBytes !== head.bytes)
+          || (claim.bytes !== undefined && claim.bytes !== head.bytes)) {
         return { claim, head, reason: "that file arrived incomplete" };
       }
       return { claim, head };
@@ -606,10 +624,9 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
     (item): item is CheckedUpload & { head: NonNullable<CheckedUpload["head"]> } => !item.reason && item.head !== null,
   );
 
-  const admin = serviceClient(env);
   try {
     await mapLimit(confirmedCandidates, IO_CONCURRENCY, async ({ claim, head }) => {
-      const { error } = await admin
+      const { data: updated, error } = await admin
         .from("upload")
         .update({
           confirmed: true,
@@ -620,8 +637,11 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
           client_reported_sha256: typeof claim.sha256 === "string" ? claim.sha256 : null,
         })
         .eq("paper_id", body.paper_id)
-        .eq("r2_key", claim.key);
-      if (error) throw new Error(error.message ?? "upload confirmation update failed");
+        .eq("r2_key", claim.key)
+        .eq("r2_bucket", claim.bucket)
+        .eq("student_id", paper.student_id)
+        .select("id");
+      if (error || updated?.length !== 1) throw new Error(error?.message ?? "upload confirmation did not affect one issued object");
     });
   } catch (cause) {
     return failure("We could not confirm those uploaded files. Try again.", 500, String(cause));
@@ -640,7 +660,7 @@ async function pageAssetUrls(req: Request, env: Env): Promise<Response> {
   }
   const { data: pages, error } = await user
     .from("paper_page")
-    .select("page_number, r2_bucket, r2_key, mask_key")
+    .select("page_number, student_id, paper_id, r2_bucket, r2_key, mask_key")
     .eq("paper_id", body.paper_id)
     .in("page_number", body.page_numbers);
   if (error) return failure("We could not look up those pages.", 500, error.message);
@@ -648,6 +668,11 @@ async function pageAssetUrls(req: Request, env: Env): Promise<Response> {
   // Sign back to the exact API origin the browser reached. This makes the asset
   // URL immune to a missing/stale MASTERY_ASSET_URL secret and guarantees that
   // /page-asset-urls cannot hand the frontend a URL for a different Worker.
+  if ((pages ?? []).some(page => !["originals", "derived"].includes(page.r2_bucket ?? "derived")
+    || (page.r2_key && !ownedObjectKey(page.r2_key, page.student_id, page.paper_id))
+    || (page.mask_key && !ownedObjectKey(page.mask_key, page.student_id, page.paper_id)))) {
+    return failure("Those page assets do not belong to this paper.", 403);
+  }
   const assetOrigin = new URL(req.url).origin;
   const signed = await mapLimit(pages ?? [], PAGE_PAIR_CONCURRENCY, async (page) => {
     const bucket = (page.r2_bucket as BucketKind) ?? "derived";

@@ -37,6 +37,27 @@ async function readBoundedJson(request: Request, maxBytes = 100_000): Promise<un
   return readBoundedJsonBody(request.body, maxBytes);
 }
 
+const initialized = new WeakMap<D1Database, { revision: string; ready: Promise<void> }>();
+async function initializeRegistries(env: Env): Promise<void> {
+  const revision = `${env.AXON_DEPLOYMENT_SHA}:${env.AXON_CONFIG_REVISION}`;
+  const previous = initialized.get(env.DB);
+  if (previous?.revision === revision) return previous.ready;
+  const ready = Promise.all([
+    recordDeploymentProvenance(env.DB, { deploymentSha: env.AXON_DEPLOYMENT_SHA, configRevision: env.AXON_CONFIG_REVISION, pipelineVersion: env.AXON_PIPELINE_VERSION }),
+    recordConceptTaxonomy(env.DB, new ConceptTaxonomy().all(), env.AXON_CONFIG_REVISION),
+    promptRegistry.compileAll().then(prompts => recordRuntimeArtifacts(env.DB, prompts, env.AXON_DEPLOYMENT_SHA, env.AXON_CONFIG_REVISION)),
+    persistEvalSuite(env.DB, { id: "axon-golden-v3", name: "AXON v3 synthetic regression suite", version: "3.0.0", category: "all", cases: GOLDEN_CASES }),
+    recordStableKnowledge(env.DB, env.AXON_CONFIG_REVISION),
+  ]).then(() => undefined);
+  initialized.set(env.DB, { revision, ready });
+  try { await ready; } catch (error) { initialized.delete(env.DB); throw error; }
+}
+
+function registryRoute(method: string, path: string): boolean {
+  if (method === "POST") return /^\/v1\/(?:tutor|papers\/ingest|papers\/pages\/[^/]+\/(?:review|commit)|corrections|insights\/observations|admin\/capabilities\/probe|admin\/active-learning\/[^/]+|admin\/purge)$/.test(path);
+  return method === "GET" && /^\/v1\/(?:papers\/pages\/[^/]+|insights\/patterns|admin\/(?:active-learning|learning\/(?:targets|error-clusters|calibration)|provider-health|readiness))$/.test(path);
+}
+
 async function handle(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/health") {
@@ -53,6 +74,7 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
       status: 429, headers: { ...JSON_HEADERS, "retry-after": String(rate.retryAfterSeconds), "x-ratelimit-remaining": "0" }
     });
   }
+  if (registryRoute(request.method, url.pathname)) await initializeRegistries(env);
   if (request.method === "POST" && url.pathname === "/v1/tutor") {
     const input = parseSchema(TutorRequestSchema, await readBoundedJson(request));
     const provider = new GeminiProvider(env, String(env.GEMINI_PRIVACY_MODE) === "zdr" ? "zdr" : "unverified");
@@ -77,7 +99,7 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
           ...(trace.promptHash ? { promptHash: trace.promptHash } : {}), ...(trace.schemaId ? { schemaId: trace.schemaId } : {}),
           ...(trace.schemaHash ? { schemaHash: trace.schemaHash } : {}), toolCalls: trace.toolCalls, retrievalUsed: trace.retrievalUsed,
           verificationStatus: trace.verificationStatus, repairAttempted: trace.repairAttempted,
-          intent: trace.intent, verificationFailures: trace.verificationFailures ?? [],
+          intent: trace.intent, verificationFailures: [...(trace.verificationFailures ?? []), ...(trace.usageIncomplete ? ["USAGE_INCOMPLETE"] : [])],
           groundingUsed: trace.groundingUsed ?? false, ...(trace.answerStatus ? { answerStatus: trace.answerStatus } : {}),
           ...(trace.latencyMs !== undefined ? { latencyMs: trace.latencyMs } : {}),
           ...(trace.inputTokens !== undefined ? { inputTokens: trace.inputTokens } : {}), ...(trace.outputTokens !== undefined ? { outputTokens: trace.outputTokens } : {}),
@@ -254,11 +276,6 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    ctx.waitUntil(recordDeploymentProvenance(env.DB, { deploymentSha: env.AXON_DEPLOYMENT_SHA, configRevision: env.AXON_CONFIG_REVISION, pipelineVersion: env.AXON_PIPELINE_VERSION }));
-    ctx.waitUntil(recordConceptTaxonomy(env.DB, new ConceptTaxonomy().all(), env.AXON_CONFIG_REVISION));
-    ctx.waitUntil(promptRegistry.compileAll().then((prompts) => recordRuntimeArtifacts(env.DB, prompts, env.AXON_DEPLOYMENT_SHA, env.AXON_CONFIG_REVISION)));
-    ctx.waitUntil(persistEvalSuite(env.DB, { id: "axon-golden-v3", name: "AXON v3 synthetic regression suite", version: "3.0.0", category: "all", cases: GOLDEN_CASES }));
-    ctx.waitUntil(recordStableKnowledge(env.DB, env.AXON_CONFIG_REVISION));
     try { return await handle(request, env, ctx); }
     catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";

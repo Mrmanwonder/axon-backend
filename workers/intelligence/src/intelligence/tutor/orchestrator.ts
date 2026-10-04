@@ -16,7 +16,7 @@ export interface TutorRunTrace {
   traceId: string; intent: string; provider?: string; requestedModel?: string; servedModel?: string;
   thinkingLevel?: string; promptId?: string; promptHash?: string; schemaId?: string; schemaHash?: string;
   toolCalls: string[]; retrievalUsed: boolean; verificationStatus: string; repairAttempted: boolean; latencyMs?: number; error?: string;
-  inputTokens?: number; outputTokens?: number; transportSuccess?: boolean; schemaSuccess?: boolean; semanticValidationSuccess?: boolean;
+  inputTokens?: number; outputTokens?: number; usageIncomplete?: boolean; transportSuccess?: boolean; schemaSuccess?: boolean; semanticValidationSuccess?: boolean;
   verificationFailures?: string[]; groundingUsed?: boolean; answerStatus?: TutorResponse["status"];
   evidence?: Evidence[]; claims?: Claim[];
 }
@@ -93,6 +93,7 @@ export class TutorOrchestrator {
       return this.failure(traceId, "The reasoning service is temporarily unavailable. No unverified answer was shown.", [code]);
     }
     let totalLatencyMs = modelResponse.latencyMs;
+    let usageIncomplete = modelResponse.usage.inputTokens == null || modelResponse.usage.outputTokens == null;
     let inputTokens = modelResponse.usage.inputTokens ?? 0;
     let outputTokens = modelResponse.usage.outputTokens ?? 0;
     let reasoning: ReasoningResult = { status: "insufficient_evidence", intent, claims: [], conceptIds: [], teachingStrategy: "direct", uncertaintyReason: "Invalid structured model output." };
@@ -105,6 +106,7 @@ export class TutorOrchestrator {
       totalLatencyMs += verification.latencyMs;
       inputTokens += verification.inputTokens;
       outputTokens += verification.outputTokens;
+      usageIncomplete ||= verification.usageIncomplete;
       failures.push(...verification.failures);
     }
     let repaired = false;
@@ -115,9 +117,10 @@ export class TutorOrchestrator {
         modelResponse = await this.dependencies.provider.generate({ model: route.model, system: repair.system, task: `${repair.task}\n\nVERIFICATION FAILURES:\n${failures.join("\n")}`, user: request.message, schema: repair.schema, thinkingLevel: route.thinkingLevel, evidence: context, timeoutMs: route.timeoutMs });
       } catch (error) {
         const code = error instanceof ProviderError ? error.code : "MODEL_FAILURE";
-        this.emit({ traceId, intent, provider: route.provider, requestedModel: modelResponse.requestedModel, servedModel: modelResponse.servedModel, thinkingLevel: route.thinkingLevel, promptId: compiled.id, promptHash: compiled.promptHash, schemaId: compiled.schemaId, schemaHash: compiled.schemaHash, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, groundingUsed: retrievedEvidenceIds.size > 0, verificationStatus: "failed", verificationFailures: [...failures, code], repairAttempted: true, answerStatus: "controlled_failure", latencyMs: totalLatencyMs, error: code, evidence: context, claims: reasoning.claims });
+        this.emit({ traceId, intent, provider: route.provider, requestedModel: modelResponse.requestedModel, servedModel: modelResponse.servedModel, thinkingLevel: route.thinkingLevel, promptId: compiled.id, promptHash: compiled.promptHash, schemaId: compiled.schemaId, schemaHash: compiled.schemaHash, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, groundingUsed: retrievedEvidenceIds.size > 0, verificationStatus: "failed", verificationFailures: [...failures, code], repairAttempted: true, answerStatus: "controlled_failure", latencyMs: totalLatencyMs, inputTokens, outputTokens, usageIncomplete: true, error: code, evidence: context, claims: reasoning.claims });
         return this.failure(traceId, "The answer could not be repaired safely, so it was withheld.", [code], true);
       }
+      usageIncomplete ||= modelResponse.usage.inputTokens == null || modelResponse.usage.outputTokens == null;
       totalLatencyMs += modelResponse.latencyMs;
       inputTokens += modelResponse.usage.inputTokens ?? 0;
       outputTokens += modelResponse.usage.outputTokens ?? 0;
@@ -132,17 +135,18 @@ export class TutorOrchestrator {
         totalLatencyMs += verification.latencyMs;
         inputTokens += verification.inputTokens;
         outputTokens += verification.outputTokens;
-        failures.push(...verification.failures);
+        usageIncomplete ||= verification.usageIncomplete;
+      failures.push(...verification.failures);
       }
     }
     if (failures.length > 0) {
-      this.emit({ traceId, intent, provider: route.provider, requestedModel: modelResponse.requestedModel, servedModel: modelResponse.servedModel, thinkingLevel: route.thinkingLevel, promptId: compiled.id, promptHash: compiled.promptHash, schemaId: compiled.schemaId, schemaHash: compiled.schemaHash, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, groundingUsed: retrievedEvidenceIds.size > 0, verificationStatus: "failed", verificationFailures: failures, repairAttempted: repaired, answerStatus: "controlled_failure", latencyMs: totalLatencyMs, inputTokens, outputTokens, transportSuccess: true, schemaSuccess: !failures.some((failure) => failure.includes("INVALID_SCHEMA")), semanticValidationSuccess: false, error: failures.join("; "), evidence: context, claims: reasoning.claims });
+      this.emit({ traceId, intent, provider: route.provider, requestedModel: modelResponse.requestedModel, servedModel: modelResponse.servedModel, thinkingLevel: route.thinkingLevel, promptId: compiled.id, promptHash: compiled.promptHash, schemaId: compiled.schemaId, schemaHash: compiled.schemaHash, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, groundingUsed: retrievedEvidenceIds.size > 0, verificationStatus: "failed", verificationFailures: failures, repairAttempted: repaired, answerStatus: "controlled_failure", latencyMs: totalLatencyMs, inputTokens, outputTokens, usageIncomplete, transportSuccess: true, schemaSuccess: !failures.some((failure) => failure.includes("INVALID_SCHEMA")), semanticValidationSuccess: false, error: failures.join("; "), evidence: context, claims: reasoning.claims });
       return this.failure(traceId, "I don't have enough reliable information to answer that confidently.", failures, repaired);
     }
     const verifiedClaims = verifyClaims(reasoning.claims, context).claims;
     const verifiedReasoning: ReasoningResult = { ...reasoning, claims: verifiedClaims };
     const citations = context.filter((item) => retrievedEvidenceIds.has(item.id) && item.provenance.url).map((item) => ({ title: typeof item.value === "object" && item.value !== null && "title" in item.value ? String(item.value.title) : item.provenance.url ?? "Source", url: item.provenance.url ?? "" }));
-    this.emit({ traceId, intent, provider: route.provider, requestedModel: modelResponse.requestedModel, servedModel: modelResponse.servedModel, thinkingLevel: route.thinkingLevel, promptId: compiled.id, promptHash: compiled.promptHash, schemaId: compiled.schemaId, schemaHash: compiled.schemaHash, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, groundingUsed: retrievedEvidenceIds.size > 0, verificationStatus: "verified", verificationFailures: [], repairAttempted: repaired, answerStatus: verifiedReasoning.status, latencyMs: totalLatencyMs, inputTokens, outputTokens, transportSuccess: true, schemaSuccess: true, semanticValidationSuccess: true, evidence: context, claims: verifiedClaims });
+    this.emit({ traceId, intent, provider: route.provider, requestedModel: modelResponse.requestedModel, servedModel: modelResponse.servedModel, thinkingLevel: route.thinkingLevel, promptId: compiled.id, promptHash: compiled.promptHash, schemaId: compiled.schemaId, schemaHash: compiled.schemaHash, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, groundingUsed: retrievedEvidenceIds.size > 0, verificationStatus: "verified", verificationFailures: [], repairAttempted: repaired, answerStatus: verifiedReasoning.status, latencyMs: totalLatencyMs, inputTokens, outputTokens, usageIncomplete, transportSuccess: true, schemaSuccess: true, semanticValidationSuccess: true, evidence: context, claims: verifiedClaims });
     return { traceId, status: verifiedReasoning.status, answer: renderReasoning(verifiedReasoning, resolveTutorDepth(request)), citations, verification: { passed: true, repaired, failures: [] } };
   }
 
@@ -169,19 +173,20 @@ export class TutorOrchestrator {
 
   private requiresModelVerifier(risk: string): boolean { return risk === "R2" || risk === "R3" || risk === "R4"; }
 
-  private async modelVerify(request: TutorRequest, reasoning: ReasoningResult, evidence: readonly Evidence[], route: ReturnType<ModelRouter["route"]>): Promise<{ failures: string[]; latencyMs: number; inputTokens: number; outputTokens: number }> {
+  private async modelVerify(request: TutorRequest, reasoning: ReasoningResult, evidence: readonly Evidence[], route: ReturnType<ModelRouter["route"]>): Promise<{ failures: string[]; latencyMs: number; inputTokens: number; outputTokens: number; usageIncomplete: boolean }> {
     const verifier = await promptRegistry.compile("tutor.verifier.v2");
+    let response: ModelResponse | undefined;
     try {
-      const response = await this.dependencies.provider.generate({
+      response = await this.dependencies.provider.generate({
         model: route.model, system: verifier.system, task: verifier.task,
         user: `<ORIGINAL_REQUEST>\n${request.message}\n</ORIGINAL_REQUEST>\n<PROPOSED_REASONING>\n${JSON.stringify(reasoning)}\n</PROPOSED_REASONING>`,
         schema: verifier.schema, thinkingLevel: route.thinkingLevel, evidence, timeoutMs: route.timeoutMs
       });
       const result = parseSchema(VerificationResultSchema, response.output);
-      return { failures: result.passed ? [] : result.failures.map((failure) => `${failure.code}${failure.claimId ? ` ${failure.claimId}` : ""}: ${failure.detail}`), latencyMs: response.latencyMs, inputTokens: response.usage.inputTokens ?? 0, outputTokens: response.usage.outputTokens ?? 0 };
+      return { failures: result.passed ? [] : result.failures.map((failure) => `${failure.code}${failure.claimId ? ` ${failure.claimId}` : ""}: ${failure.detail}`), latencyMs: response.latencyMs, inputTokens: response.usage.inputTokens ?? 0, outputTokens: response.usage.outputTokens ?? 0, usageIncomplete: response.usage.inputTokens == null || response.usage.outputTokens == null };
     } catch (error) {
       const code = error instanceof ProviderError ? error.code : "VERIFICATION_FAILED";
-      return { failures: [`${code}: verifier did not produce a trustworthy verdict`], latencyMs: 0, inputTokens: 0, outputTokens: 0 };
+      return { failures: [`${code}: verifier did not produce a trustworthy verdict`], latencyMs: response?.latencyMs ?? 0, inputTokens: response?.usage.inputTokens ?? 0, outputTokens: response?.usage.outputTokens ?? 0, usageIncomplete: !response || response.usage.inputTokens == null || response.usage.outputTokens == null };
     }
   }
 }

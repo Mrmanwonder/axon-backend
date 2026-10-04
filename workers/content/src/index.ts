@@ -3,9 +3,11 @@ import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
 import { imageRef } from "@mastery/shared/r2.js";
 import { pageDimensions } from "@mastery/shared/page.js";
+import { planContentSources } from "@mastery/shared/content_sources.js";
 import { mapModelBoxToPage, frameForIndex, type ModelFrame } from "@mastery/shared/frames.js";
 import { bandForRegion } from "@mastery/shared/crop.js";
-import { mustData, mustMaybe } from "@mastery/shared/db.js";
+import { mustData, mustMaybe, mustOk, mustRpc } from "@mastery/shared/db.js";
+import { mapAnswerBlockToPages } from "@mastery/shared/answer_block_frames.js";
 import { SYSTEM, instruction, SCHEMA, validate } from "@mastery/shared/prompts/content.v1.js";
 import type { Env } from "@mastery/shared/env.js";
 
@@ -15,9 +17,10 @@ interface ContentMessage {
   _retries?: number;
 }
 
-async function advanceAndEnqueue(env: Env, sb: any, runId: string): Promise<void> {
-  const { data: advance } = await sb.rpc("advance_after_content", { p_run_id: runId });
-  if (advance?.advanced && advance?.enqueue_reconcile && env.RECONCILE_QUEUE) {
+export async function advanceAndEnqueue(env: Env, sb: any, runId: string): Promise<void> {
+  const advance = await mustRpc<any>(sb.rpc("advance_after_content", { p_run_id: runId }), "advance_after_content");
+  if (advance?.enqueue_reconcile) {
+    if (!env.RECONCILE_QUEUE) throw new Error("Reconciliation queue is not configured");
     await env.RECONCILE_QUEUE.send({ run_id: runId });
   }
 }
@@ -55,11 +58,11 @@ const handler = consumeQueue<ContentMessage>(
   async ({ env, sb, msg, attempt, beat }) => {
     const runId = msg.run_id;
     const regionId = msg.region_id;
-    const { data: region } = await sb
+    const region = await mustMaybe<any>(sb
       .from("question_region")
-      .select("id, paper_id, student_id, order_index, question_label, question_label_box, page_spans, extract_status, crop_key, cropmask_key")
+      .select("id, paper_id, student_id, order_index, question_label, question_label_box, page_spans, extract_status, crop_key, cropmask_key, confidence_signals")
       .eq("id", regionId)
-      .single();
+      .maybeSingle(), "content region read");
     if (!region) return { detail: { skipped: "no such question" } };
 
     if (region.extract_status === "done") {
@@ -67,17 +70,18 @@ const handler = consumeQueue<ContentMessage>(
       return { detail: { skipped: "already read" } };
     }
 
-    const { data: run } = await sb.from("extraction_run").select("status, route_override").eq("id", runId).single();
+    const run = await mustMaybe<any>(sb.from("extraction_run").select("status, route_override").eq("id", runId).maybeSingle(), "content run read");
     if (!run || ["failed", "rejected", "committed"].includes(run.status)) {
       return { detail: { skipped: run?.status ?? "no run" } };
     }
     const override = run.route_override;
 
-    await sb.from("question_region").update({ extract_status: "running" }).eq("id", regionId);
+    await mustOk(sb.from("question_region").update({ extract_status: "running" }).eq("id", regionId), "content running");
     await beat();
 
     const spans: Array<{ page: number }> = region.page_spans ?? [];
     if (!spans.length) throw new Error("a question with no page span has nothing to read");
+    const sourcePlan = planContentSources(spans, !!region.crop_key);
 
     // Every page this question touches, with the metadata needed to establish
     // its own dimensions. Fetched BEFORE the images because a frame cannot be
@@ -87,12 +91,14 @@ const handler = consumeQueue<ContentMessage>(
       sb.from("paper_page")
         .select("page_number, r2_bucket, r2_key, mask_key, layer_fallback, conditioning_meta, quality_signals")
         .eq("paper_id", region.paper_id)
-        .in("page_number", spans.map((s) => s.page))
+        .in("page_number", sourcePlan.pageNumbers)
         .order("page_number"),
       "paper_page read",
     ) as any[];
     const firstPage = pageRows.find((p) => p.page_number === spans[0].page) ?? null;
 
+    // A crop covers only the first page: multi-page regions must use all full
+    // pages so continuation working and marks remain visible (AXO-138).
     // Prefer a pre-cut crop (§8 of AXON_FIX_BRIEF.md) over sending the whole
     // page. A crop is only used where its band can be recomputed exactly —
     // `bandForRegion` is the same function the crop worker cut with, so the
@@ -100,7 +106,7 @@ const handler = consumeQueue<ContentMessage>(
     // way to map the model's coordinates back, and a crop whose provenance we
     // cannot express is worse than a full page: it is cheaper and wrong.
     const firstDims = firstPage ? pageDimensions(firstPage as any) : null;
-    const cropBand = region.crop_key && firstDims
+    const cropBand = sourcePlan.kind === "crop" && firstDims
       ? bandForRegion(spans as any, spans[0].page, firstDims.width, firstDims.height)
       : null;
 
@@ -199,7 +205,7 @@ const handler = consumeQueue<ContentMessage>(
       // an empty list is exactly the case where nothing the model returned can
       // be placed anywhere.
       if (!frames.length) {
-        await sb
+        await mustOk(sb
           .from("question_region")
           .update({
             extract_status: "done",
@@ -208,7 +214,7 @@ const handler = consumeQueue<ContentMessage>(
             confidence_signals: { unreadable_reason: "We could not work out the size of this page, so we cannot say where anything on it sits." },
             updated_at: new Date().toISOString(),
           })
-          .eq("id", regionId);
+          .eq("id", regionId), "content unreadable completion");
         await advanceAndEnqueue(env, sb, runId);
         return { detail: { unreadable: "no page dimensions" } };
       }
@@ -221,7 +227,7 @@ const handler = consumeQueue<ContentMessage>(
       const remark = field(parsed.teacher_remark, frames);
 
       if (parsed.unreadable) {
-        await sb
+        await mustOk(sb
           .from("question_region")
           .update({
             extract_status: "done",
@@ -230,7 +236,7 @@ const handler = consumeQueue<ContentMessage>(
             confidence_signals: { unreadable_reason: parsed.unreadable_reason },
             updated_at: new Date().toISOString(),
           })
-          .eq("id", regionId);
+          .eq("id", regionId), "content unreadable completion");
         await advanceAndEnqueue(env, sb, runId);
         return { detail: { unreadable: parsed.unreadable_reason } };
       }
@@ -250,7 +256,8 @@ const handler = consumeQueue<ContentMessage>(
           marks_available_box: available.box,
           teacher_remark: remark.value,
           teacher_remark_box: remark.box,
-          answer_block: (parsed as any).answer_block ?? null,
+          answer_block: mapAnswerBlockToPages((parsed as any).answer_block, answer.value as string | null, frames),
+          confidence_signals: { ...region.confidence_signals, recognition_confidence: parsed.recognition_confidence ?? null },
           // region_type is null on 28 of 76 live regions, so over a third of
           // them do not know whether they are maths or prose and nothing
           // downstream can decide how to typeset them. `unknown` is a value;
@@ -281,8 +288,8 @@ const handler = consumeQueue<ContentMessage>(
   },
   async ({ env, sb, msg }, error) => {
     const regionId = msg.region_id;
-    const { data: region } = await sb.from("question_region").select("confidence_signals").eq("id", regionId).maybeSingle();
-    await sb
+    const region = await mustMaybe<any>(sb.from("question_region").select("confidence_signals").eq("id", regionId).maybeSingle(), "content terminal region read");
+    await mustOk(sb
       .from("question_region")
       .update({
         extract_status: "failed",
@@ -296,7 +303,7 @@ const handler = consumeQueue<ContentMessage>(
         },
         updated_at: new Date().toISOString(),
       })
-      .eq("id", regionId);
+      .eq("id", regionId), "content terminal failure");
     await advanceAndEnqueue(env, sb, msg.run_id);
   }
 );

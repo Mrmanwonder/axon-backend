@@ -1,5 +1,5 @@
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
-import { mustOk } from "@mastery/shared/db.js";
+import { mustOk, mustData, mustMaybe, mustRpc } from "@mastery/shared/db.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { adjudicationTriggers, reconcile, type QuestionMarks } from "@mastery/shared/reconcile.js";
 import { assess, numberingSoundness, downgradeRecognition, type Recognition } from "@mastery/shared/confidence.js";
@@ -7,6 +7,10 @@ import { checkAnswer } from "@mastery/shared/arithmetic.js";
 import { checkLabels } from "@mastery/shared/labels.js";
 import { readAnswerBlock, checkableText } from "@mastery/shared/answer_block.js";
 import type { Env } from "@mastery/shared/env.js";
+
+export function recognitionFor(value: unknown): Recognition {
+  return value === "high" || value === "medium" || value === "low" ? value : null;
+}
 
 interface ReconcileMessage {
   run_id: string;
@@ -16,20 +20,25 @@ interface ReconcileMessage {
 const handler = consumeQueue<ReconcileMessage>(
   async ({ env, sb, msg }) => {
     const runId = msg.run_id;
-    const { data: run } = await sb.from("extraction_run").select("id, paper_id, student_id, status").eq("id", runId).single();
+    const run = await mustMaybe<any>(sb.from("extraction_run").select("id, paper_id, student_id, status").eq("id", runId).maybeSingle(), "reconcile run read");
     if (!run) return { detail: { skipped: "no such run" } };
     if (["failed", "rejected", "committed", "needs_review", "ready"].includes(run.status)) {
       return { detail: { skipped: run.status } };
     }
 
-    await sb.rpc("run_advance", { p_run_id: runId, p_to: "reconciliation" });
+    if (run.status === "adjudicating") {
+      if (!env.ADJUDICATE_QUEUE) throw new Error("Adjudication queue is not configured");
+      await env.ADJUDICATE_QUEUE.send({ run_id: runId });
+      return { detail: { resumed: "adjudication dispatch" } };
+    }
+    await mustRpc(sb.rpc("run_advance", { p_run_id: runId, p_to: "reconciliation" }), "run_advance(reconciliation)");
 
-    const { data: paper } = await sb.from("paper").select("reported_total, stated_maximum").eq("id", run.paper_id).single();
-    const { data: regions } = await sb
+    const paper = await mustMaybe<any>(sb.from("paper").select("reported_total, stated_maximum").eq("id", run.paper_id).maybeSingle(), "reconcile paper read");
+    const regions = await mustData<any[]>(sb
       .from("question_region")
       .select("id, order_index, question_label, marks_awarded, marks_available, confidence_tier, confidence_signals, extract_status, page_spans, student_answer, answer_block")
       .eq("run_id", runId)
-      .order("order_index");
+      .order("order_index"), "reconcile regions read");
     if (!regions?.length) {
       await failRun(sb, runId, "We could not find any questions on this paper. Try scanning it again in better light.", "reconcile_no_questions");
       return { detail: { failed: "no questions" } };
@@ -40,7 +49,7 @@ const handler = consumeQueue<ReconcileMessage>(
       label: r.question_label,
       awarded: r.marks_awarded === null ? null : Number(r.marks_awarded),
       available: r.marks_available === null ? null : Number(r.marks_available),
-      recognition: r.confidence_tier === "unreadable" ? "low" : "medium",
+      recognition: r.confidence_tier === "unreadable" ? "low" : recognitionFor(r.confidence_signals?.recognition_confidence),
     }));
 
     const result = reconcile(
@@ -80,11 +89,11 @@ const handler = consumeQueue<ReconcileMessage>(
     // not just whether the paper has any (AXON_FIX_BRIEF.md §6.3). A region
     // whose own pages never touched that fallback has no reason to be
     // downgraded for a page elsewhere in the booklet.
-    const { data: fallbackPages } = await sb
+    const fallbackPages = await mustData<any[]>(sb
       .from("paper_page")
       .select("page_number")
       .eq("paper_id", run.paper_id)
-      .not("layer_fallback", "is", null);
+      .not("layer_fallback", "is", null), "reconcile fallback pages read");
     const fallbackPageNumbers = new Set((fallbackPages ?? []).map((p: any) => p.page_number));
 
     // One RPC for every region on the run, not one UPDATE per region — a
@@ -123,7 +132,7 @@ const handler = consumeQueue<ReconcileMessage>(
         available: marks[i].available,
         unreadable: region.confidence_tier === "unreadable" || region.extract_status === "failed",
       });
-      return { id: region.id, tier, signals, needs_review: true };
+      return { id: region.id, tier, signals: { ...region.confidence_signals, ...signals }, needs_review: true };
     });
     const { error: confidenceError } = await sb.rpc("apply_region_confidence", { p_rows: confidenceRows });
     if (confidenceError) throw new Error("apply_region_confidence failed: " + confidenceError.message);
@@ -160,22 +169,23 @@ const handler = consumeQueue<ReconcileMessage>(
     // Adjudication runs on its own triggers, never because a total is missing.
     const triggers = adjudicationTriggers(result, marks, !labelCheck.ok);
     if (triggers.length > 0) {
-      await sb.rpc("run_advance", { p_run_id: runId, p_to: "adjudicating" });
-      if (env.ADJUDICATE_QUEUE) await env.ADJUDICATE_QUEUE.send({ run_id: runId });
+      await mustRpc(sb.rpc("run_advance", { p_run_id: runId, p_to: "adjudicating" }), "run_advance(adjudicating)");
+      if (!env.ADJUDICATE_QUEUE) throw new Error("Adjudication queue is not configured");
+      await env.ADJUDICATE_QUEUE.send({ run_id: runId });
       return { detail: { reconciled: result.reconciled, delta: result.delta, adjudicate: triggers } };
     }
 
-    await sb.rpc("run_advance", { p_run_id: runId, p_to: "needs_review", p_reason: result.message });
+    await mustRpc(sb.rpc("run_advance", { p_run_id: runId, p_to: "needs_review", p_reason: result.message }), "run_advance(needs_review)");
     return { detail: { reconciled: result.reconciled, unchecked, questions: regions.length } };
   },
   async ({ sb, msg }, error) => {
     const runId = msg.run_id;
     let pagesStored = false;
     if (runId) {
-      const { data: run } = await sb.from("extraction_run").select("paper_id").eq("id", runId).maybeSingle();
+      const run = await mustMaybe<any>(sb.from("extraction_run").select("paper_id").eq("id", runId).maybeSingle(), "reconcile terminal run read");
       if (run?.paper_id) {
-        const { count } = await sb.from("paper_page").select("id", { count: "exact", head: true }).eq("paper_id", run.paper_id).not("r2_key", "is", null);
-        pagesStored = (count ?? 0) > 0;
+        const pages = await mustData<any[]>(sb.from("paper_page").select("id").eq("paper_id", run.paper_id).not("r2_key", "is", null).limit(1), "reconcile terminal pages read");
+        pagesStored = pages.length > 0;
       }
     }
     await failRun(
