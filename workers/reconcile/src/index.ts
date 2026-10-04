@@ -1,3 +1,4 @@
+import { pipelineWrite } from "@mastery/shared/pipeline_write.js";
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
 import { mustOk, mustData, mustMaybe, mustRpc } from "@mastery/shared/db.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
@@ -31,7 +32,7 @@ const handler = consumeQueue<ReconcileMessage>(
       await env.ADJUDICATE_QUEUE.send({ run_id: runId });
       return { detail: { resumed: "adjudication dispatch" } };
     }
-    await mustRpc(sb.rpc("run_advance", { p_run_id: runId, p_to: "reconciliation" }), "run_advance(reconciliation)");
+    if (!await pipelineWrite(sb, runId, "reconcile_start")) return { detail: { skipped: "stale reconciliation" } };
 
     const paper = await mustMaybe<any>(sb.from("paper").select("reported_total, stated_maximum").eq("id", run.paper_id).maybeSingle(), "reconcile paper read");
     const regions = await mustData<any[]>(sb
@@ -134,8 +135,6 @@ const handler = consumeQueue<ReconcileMessage>(
       });
       return { id: region.id, tier, signals: { ...region.confidence_signals, ...signals }, needs_review: true };
     });
-    const { error: confidenceError } = await sb.rpc("apply_region_confidence", { p_rows: confidenceRows });
-    if (confidenceError) throw new Error("apply_region_confidence failed: " + confidenceError.message);
 
     // A failed write here used to be ignored: the run moved on with a stale or missing
     // reconciliation. Throwing lets the queue retry the stage and the terminal handler classify it.
@@ -144,38 +143,23 @@ const handler = consumeQueue<ReconcileMessage>(
     // "false": there is no mismatch, only nothing to compare against. Its total is the sum of the
     // teacher marks Axon read, labelled as such, and partial when a mark could not be read.
     const unchecked = result.reconciled === null;
-    await mustOk(
-      sb.from("extraction_run").update({
-        reconciled: result.reconciled,
-        reconcile_delta: result.delta,
-        status_reason_code: result.added_up ? "no_printed_total" : null,
-      }).eq("id", runId),
-      "reconcile: write run result",
-    );
-    await mustOk(
-      sb
-        .from("paper")
-        .update({
-          total_awarded: result.sum_awarded,
-          total_available: result.sum_available || null,
-          reconciled: result.reconciled,
-          total_basis: result.added_up ? "added_up" : "printed",
-          total_partial: result.partial,
-        })
-        .eq("id", run.paper_id),
-      "reconcile: write paper totals",
-    );
-
-    // Adjudication runs on its own triggers, never because a total is missing.
     const triggers = adjudicationTriggers(result, marks, !labelCheck.ok);
+    if (!await pipelineWrite(sb, runId, "reconcile_result", {
+      confidence: confidenceRows,
+      run_result: { reconciled: result.reconciled, reconcile_delta: result.delta,
+        status_reason_code: result.added_up ? "no_printed_total" : null },
+      paper_result: { total_awarded: result.sum_awarded, total_available: result.sum_available || null,
+        reconciled: result.reconciled, total_basis: result.added_up ? "added_up" : "printed",
+        total_partial: result.partial },
+      to: triggers.length > 0 ? "adjudicating" : "needs_review", reason: result.message,
+    })) return { detail: { skipped: "stale reconciliation result" } };
+
     if (triggers.length > 0) {
-      await mustRpc(sb.rpc("run_advance", { p_run_id: runId, p_to: "adjudicating" }), "run_advance(adjudicating)");
       if (!env.ADJUDICATE_QUEUE) throw new Error("Adjudication queue is not configured");
       await env.ADJUDICATE_QUEUE.send({ run_id: runId });
       return { detail: { reconciled: result.reconciled, delta: result.delta, adjudicate: triggers } };
     }
 
-    await mustRpc(sb.rpc("run_advance", { p_run_id: runId, p_to: "needs_review", p_reason: result.message }), "run_advance(needs_review)");
     return { detail: { reconciled: result.reconciled, unchecked, questions: regions.length } };
   },
   async ({ sb, msg }, error) => {

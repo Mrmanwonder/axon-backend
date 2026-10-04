@@ -1,3 +1,4 @@
+import { pipelineWrite } from "@mastery/shared/pipeline_write.js";
 import { callModel } from "@mastery/shared/model-client.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
@@ -69,7 +70,8 @@ async function enqueueFromAdvance(env: Env, runId: string, advance: AdvanceResul
       pageIds,
       (pageId) => ({ body: { run_id: runId, page_id: pageId } }),
     );
-  } else if (regionIds.length && env.CONTENT_QUEUE) {
+  } else if (regionIds.length) {
+    if (!env.CONTENT_QUEUE) throw new Error("Content queue is not configured");
     await chunkedSendBatch(
       env.CONTENT_QUEUE,
       regionIds,
@@ -77,7 +79,8 @@ async function enqueueFromAdvance(env: Env, runId: string, advance: AdvanceResul
     );
   }
 
-  if (advance.enqueue_reconcile && env.RECONCILE_QUEUE) {
+  if (advance.enqueue_reconcile) {
+    if (!env.RECONCILE_QUEUE) throw new Error("Reconcile queue is not configured");
     await env.RECONCILE_QUEUE.send({ run_id: runId });
   }
 }
@@ -99,13 +102,13 @@ const handler = consumeQueue<StructureMessage>(
       // second pass over an already-structured page dead-ends the run
       // instead of moving it forward. See AXON_FIX_BRIEF.md §3.2.
       const adv0 = await mustRpc(sb.rpc("advance_after_structure", { p_run_id: runId }), "advance_after_structure");
-      if (adv0?.advanced) await enqueueFromAdvance(env, runId, adv0);
+      await enqueueFromAdvance(env, runId, adv0 ?? {});
       return { detail: { skipped: "already done" } };
     }
 
     const override = run.route_override;
 
-    await mustOk(sb.from("paper_page").update({ structure_status: "running" }).eq("id", pageId), "structure_status=running");
+    if (!await pipelineWrite(sb, runId, "structure", { page_id: pageId, patch: { structure_status: "running" } })) return { detail: { skipped: "stale structure work" } };
     await beat();
 
     const countResult = await sb.from("paper_page").select("id", { count: "exact", head: true }).eq("paper_id", page.paper_id);
@@ -134,16 +137,10 @@ const handler = consumeQueue<StructureMessage>(
     });
 
     if (!parsed.is_graded_exam_paper) {
-      await mustOk(sb.from("page_unreadable").insert({
-        paper_id: page.paper_id,
-        student_id: page.student_id,
-        page_number: page.page_number,
-        storage_path: page.r2_key,
-        reason: parsed.not_a_paper_reason ?? "This page does not look like part of a marked exam paper.",
-      }), "record unreadable page");
-      await mustOk(sb.from("paper_page").update({ structure_status: "unreadable" }).eq("id", pageId), "structure_status=unreadable");
+      if (!await pipelineWrite(sb, runId, "structure", { page_id: pageId, patch: { structure_status: "unreadable" },
+        unreadable_reason: parsed.not_a_paper_reason ?? "This page does not look like part of a marked exam paper." })) return { detail: { skipped: "stale structure result" } };
       const advance2 = await mustRpc(sb.rpc("advance_after_structure", { p_run_id: runId }), "advance_after_structure");
-      if (advance2?.advanced) await enqueueFromAdvance(env, runId, advance2);
+      await enqueueFromAdvance(env, runId, advance2 ?? {});
       return { detail: { unreadable: true } };
     }
 
@@ -155,16 +152,10 @@ const handler = consumeQueue<StructureMessage>(
     // over. See @mastery/shared/page.ts.
     const dims = pageDimensions(page as any);
     if (!dims) {
-      await mustOk(sb.from("page_unreadable").insert({
-        paper_id: page.paper_id,
-        student_id: page.student_id,
-        page_number: page.page_number,
-        storage_path: page.r2_key,
-        reason: UNPLACEABLE_PAGE_REASON,
-      }), "record unreadable page");
-      await mustOk(sb.from("paper_page").update({ structure_status: "unreadable" }).eq("id", pageId), "structure_status=unreadable");
+      if (!await pipelineWrite(sb, runId, "structure", { page_id: pageId, patch: { structure_status: "unreadable" },
+        unreadable_reason: UNPLACEABLE_PAGE_REASON })) return { detail: { skipped: "stale structure result" } };
       const advanceNoDims = await mustRpc(sb.rpc("advance_after_structure", { p_run_id: runId }), "advance_after_structure");
-      if (advanceNoDims?.advanced) await enqueueFromAdvance(env, runId, advanceNoDims);
+      await enqueueFromAdvance(env, runId, advanceNoDims ?? {});
       return { detail: { unreadable: "no page dimensions" } };
     }
     const { width, height } = dims;
@@ -259,10 +250,9 @@ const handler = consumeQueue<StructureMessage>(
 
     // After the writes above have all landed, never before: `done` is a claim
     // that this page's questions and marks are in the database.
-    await mustOk(sb.from("page_unreadable").delete().eq("paper_id", page.paper_id).eq("student_id", page.student_id).eq("page_number", page.page_number), "retire recovered page unreadability");
-    await mustOk(sb.from("paper_page").update({ structure_status: "done" }).eq("id", pageId), "structure_status=done");
+    if (!await pipelineWrite(sb, runId, "structure", { page_id: pageId, patch: { structure_status: "done" } })) return { detail: { skipped: "stale structure result" } };
     const advance = await mustRpc(sb.rpc("advance_after_structure", { p_run_id: runId }), "advance_after_structure") as any;
-    if (advance?.advanced) await enqueueFromAdvance(env, runId, advance);
+    await enqueueFromAdvance(env, runId, advance ?? {});
 
     return { detail: { regions: created.length, marks: marks.length } };
   },
@@ -274,16 +264,10 @@ const handler = consumeQueue<StructureMessage>(
     const pageId = msg.page_id;
     const page = await mustMaybe<{ paper_id: string; student_id: string; page_number: number; r2_key: string }>(sb.from("paper_page").select("paper_id, student_id, page_number, r2_key").eq("id", pageId).maybeSingle(), "structure failure page read");
     if (page) {
-      await mustOk(sb.from("page_unreadable").insert({
-        paper_id: page.paper_id,
-        student_id: page.student_id,
-        page_number: page.page_number,
-        storage_path: page.r2_key,
-        reason: structureFailureReason(error),
-      }), "record unreadable page");
-      await mustOk(sb.from("paper_page").update({ structure_status: "failed" }).eq("id", pageId), "structure_status=failed");
+      if (!await pipelineWrite(sb, msg.run_id, "structure", { page_id: pageId, patch: { structure_status: "failed" },
+        unreadable_reason: structureFailureReason(error) })) return;
       const advance = await mustRpc(sb.rpc("advance_after_structure", { p_run_id: msg.run_id }), "advance_after_structure");
-      if (advance?.advanced) await enqueueFromAdvance(env, msg.run_id, advance);
+      await enqueueFromAdvance(env, msg.run_id, advance ?? {});
     } else {
       let pagesStored = false;
       if (msg.run_id) {

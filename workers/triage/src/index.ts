@@ -1,3 +1,4 @@
+import { pipelineWrite } from "@mastery/shared/pipeline_write.js";
 import { callModel } from "@mastery/shared/model-client.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
@@ -140,19 +141,9 @@ const handler = consumeQueue<TriageMessage>(
         ...(parsed.ink_colour !== "red" ? { status_reason: null } : {}),
       })
       .eq("id", runId);
-    if (parsed.ink_colour !== "red") {
-      await sb.from("paper_page").update({ layer_fallback: "non_red_marking" }).eq("paper_id", run.paper_id).is("layer_fallback", null);
-    }
-
-    await sb.rpc("run_advance", { p_run_id: runId, p_to: "structure" });
-    // Reset every page's structure_status to pending before fan-out — a
-    // second run over the same paper otherwise finds every page already
-    // "done" from the first run and skips them all. See AXON_FIX_BRIEF.md §3.2.
-    // `crop_status` goes with it for exactly the same reason: the crop stage
-    // has the same "already done, advance and skip" re-entry path, so leaving
-    // it terminal would make a second run's cropping a no-op that reused the
-    // first run's crops — cut against the first run's boxes.
-    await sb.from("paper_page").update({ structure_status: "pending", crop_status: "pending" }).eq("paper_id", run.paper_id);
+    if (!await pipelineWrite(sb, runId, "triage", {
+      fallback: parsed.ink_colour !== "red" ? "non_red_marking" : null,
+    })) return { detail: { skipped: "stale triage result" } };
     const { data: allPages } = await sb.from("paper_page").select("id").eq("paper_id", run.paper_id).not("r2_key", "is", null);
     if (env.STRUCTURE_QUEUE && allPages?.length) {
       await chunkedSendBatch(

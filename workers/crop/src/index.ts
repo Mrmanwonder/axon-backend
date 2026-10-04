@@ -29,6 +29,8 @@
 // are therefore decoded one after the other and never held at once, and a page
 // larger than MAX_PIXELS is skipped rather than attempted.
 
+import { mustRpc } from "@mastery/shared/db.js";
+import { pipelineWrite } from "@mastery/shared/pipeline_write.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
 import { objectKey } from "@mastery/shared/r2.js";
 import { pageDimensions } from "@mastery/shared/page.js";
@@ -75,18 +77,20 @@ interface CropPlan {
 }
 
 async function finish(env: Env, sb: any, runId: string, pageId: string, status: string, detail: Record<string, unknown>) {
-  await sb.from("paper_page").update({ crop_status: status }).eq("id", pageId);
-  const { data: advance } = await sb.rpc("advance_after_crop", { p_run_id: runId });
-  if (advance?.advanced) {
+  await pipelineWrite(sb, runId, "crop", { page_id: pageId, patch: { crop_status: status } });
+  const advance = await mustRpc(sb.rpc("advance_after_crop", { p_run_id: runId }), "advance_after_crop") as any;
+  if (advance) {
     const regionIds: string[] = advance.enqueue_content ?? [];
-    if (env.CONTENT_QUEUE && regionIds.length) {
+    if (regionIds.length) {
+      if (!env.CONTENT_QUEUE) throw new Error("Content queue is not configured");
       await chunkedSendBatch(
         env.CONTENT_QUEUE,
         regionIds,
         (regionId) => ({ body: { run_id: runId, region_id: regionId } }),
       );
     }
-    if (advance.enqueue_reconcile && env.RECONCILE_QUEUE) {
+    if (advance.enqueue_reconcile) {
+      if (!env.RECONCILE_QUEUE) throw new Error("Reconcile queue is not configured");
       await env.RECONCILE_QUEUE.send({ run_id: runId });
     }
   }
@@ -148,7 +152,7 @@ const handler = consumeQueue<CropMessage>(
       return { detail: { skipped: run?.status ?? "no run" } };
     }
 
-    await sb.from("paper_page").update({ crop_status: "running" }).eq("id", pageId);
+    if (!await pipelineWrite(sb, runId, "crop", { page_id: pageId, patch: { crop_status: "running" } })) return { detail: { skipped: "stale crop work" } };
     await beat();
 
     const dims = pageDimensions(page as any);

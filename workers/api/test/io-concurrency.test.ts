@@ -7,6 +7,7 @@ const fixture = vi.hoisted(() => ({
   headObject: vi.fn(),
   signAssetUrl: vi.fn(),
   insert: vi.fn(),
+  cleanupInsert: vi.fn(),
   update: vi.fn(),
   pages: [] as any[],
   ledger: null as any[] | null,
@@ -45,11 +46,12 @@ vi.mock("@mastery/shared/http.js", () => {
 
 vi.mock("@mastery/shared/r2.js", () => ({
   presignPut: fixture.presignPut,
-  headObject: fixture.headObject,
+  sealUpload: fixture.headObject,
   signAssetUrl: fixture.signAssetUrl,
   verifyAssetSignature: vi.fn(),
   objectKey: ({ studentId, paperId, kind, name, extension }: any) =>
     `${studentId}/${paperId}/${kind}/${name}.${extension}`,
+  stagingKey: (key: string) => key + ".pending",
   BUCKET_FOR: {
     upload: "originals",
     raw: "originals",
@@ -107,6 +109,7 @@ function userClient() {
 
 function adminClient() {
   const from = vi.fn((table: string) => {
+    if (table === "r2_deletion") return { insert: fixture.cleanupInsert };
     if (table !== "upload") throw new Error(`unexpected admin table ${table}`);
     return {
       insert: fixture.insert,
@@ -161,6 +164,7 @@ beforeEach(() => {
   fixture.dbActive = fixture.dbMax = 0;
   fixture.signActive = fixture.signMax = 0;
 
+  fixture.cleanupInsert.mockResolvedValue({ error: null });
   fixture.clientFor.mockReturnValue(userClient());
   fixture.serviceClient.mockReturnValue(adminClient());
 
@@ -414,4 +418,17 @@ describe("AXO-170/172 storage authority", () => {
     expect(response.status).toBe(200);
     expect(fixture.insert.mock.calls[0]![0]).toHaveLength(2);
   });
+});
+
+test("issued PUT capabilities get cleanup after their expiry, and cleanup failure withholds URLs", async () => {
+  const before = Date.now();
+  const response = await worker.fetch(request("/upload-intent", { student_id: STUDENT, paper_id: PAPER, objects: [uploadObject(1)] }), {} as any, {} as any);
+  expect(response.status).toBe(200);
+  const row = fixture.cleanupInsert.mock.calls[0][0][0];
+  expect(row.key).toBe(uploadClaim(1).key + ".pending");
+  expect(new Date(row.not_before).getTime()).toBeGreaterThanOrEqual(before + 20 * 60 * 1000);
+  fixture.cleanupInsert.mockResolvedValueOnce({ error: { message: "unavailable" } });
+  const failed = await worker.fetch(request("/upload-intent", { student_id: STUDENT, paper_id: PAPER, objects: [uploadObject(2)] }), {} as any, {} as any);
+  expect(failed.status).toBe(503);
+  expect(await failed.json()).not.toHaveProperty("objects");
 });

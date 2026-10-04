@@ -1,5 +1,5 @@
 import { CORS, corsFor, withCors, json, failure, clientFor, readJson, serviceClient } from "@mastery/shared/http.js";
-import { presignPut, headObject, signAssetUrl, verifyAssetSignature, objectKey, BUCKET_FOR, type BucketKind } from "@mastery/shared/r2.js";
+import { presignPut, sealUpload, signAssetUrl, verifyAssetSignature, objectKey, stagingKey, BUCKET_FOR, type BucketKind } from "@mastery/shared/r2.js";
 import { CAPTURE, PIPELINE_VERSION, SAFE_OBJECT_NAME } from "@mastery/shared/contract.js";
 import type { Env } from "@mastery/shared/env.js";
 import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
@@ -412,7 +412,7 @@ async function paperRetry(req: Request, env: Env): Promise<Response> {
     if (!page.r2_key.startsWith(`${paper.student_id}/${paper.id}/`)) {
       return json({ retry: "not_retryable", reason: "stored_pages_unavailable" }, 409);
     }
-    let head: Awaited<ReturnType<typeof headObject>>;
+    let head: Awaited<ReturnType<typeof sealUpload>>;
     try {
       head = await headObject(env, bucket, page.r2_key);
     } catch {
@@ -550,6 +550,14 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
     for (const row of rows ?? []) ledgerByKey.set(row.r2_key, row.id);
   }
 
+  // A reused URL can recreate staging bytes until expiry. Always clean them after
+  // the capability is dead, including abandoned/rejected uploads and erasure races.
+  const cleanupAt = new Date(Date.now() + 20 * 60 * 1000).toISOString();
+  const { error: cleanupError } = await admin.from("r2_deletion").insert(
+    prepared.map(({ bucket, key }) => ({ bucket, key: stagingKey(key), not_before: cleanupAt }))
+  );
+  if (cleanupError) return failure("We could not prepare upload cleanup. Try again.", 503);
+
   const minted = prepared.map(({ object, objectName, bucket, key }, index) => ({
     kind: object.kind,
     name: objectName,
@@ -602,7 +610,7 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
   };
   const checked = await mapLimit<any, CheckedUpload>(validClaims, IO_CONCURRENCY, async (claim) => {
     try {
-      const head = await headObject(env, claim.bucket, claim.key);
+      const head = await sealUpload(env, claim.bucket, claim.key, claim.expectedBytes, MAX_BYTES);
       if (!head) return { claim, head: null, reason: "that file did not arrive" };
       if (!Number.isSafeInteger(head.bytes) || head.bytes <= 0 || head.bytes > MAX_BYTES) {
         return { claim, head, reason: "that file is too large or has an invalid size" };

@@ -69,13 +69,54 @@ function signer(env: Env): AwsClient {
 
 /** A presigned PUT URL the client uploads directly to R2 with, bypassing the Worker for the bytes themselves. */
 export async function presignPut(env: Env, bucket: BucketKind, key: string, contentType: string, ttlSeconds = PUT_TTL_SECONDS): Promise<string> {
-  const url = new URL(objectUrl(env, bucket, key));
+  const url = new URL(objectUrl(env, bucket, stagingKey(key)));
   url.searchParams.set("X-Amz-Expires", String(ttlSeconds));
   const signed = await signer(env).sign(
     new Request(url, { method: "PUT", headers: { "Content-Type": contentType } }),
     { aws: { signQuery: true, allHeaders: false } } as any
   );
   return signed.url;
+}
+
+/** Browser PUT capabilities target staging objects only, never consumable keys. */
+export function stagingKey(key: string): string { return key + ".pending"; }
+
+/**
+ * Validate the metadata and body from one GET, then conditionally create the
+ * immutable canonical object. A reused PUT URL can only replace staging bytes.
+ */
+export async function sealUpload(env: Env, bucket: BucketKind, key: string, expectedBytes: number, maxBytes: number): Promise<HeadResult | null> {
+  const b = binding(env, bucket);
+  const pending = stagingKey(key);
+  const validateSize = (size: number) => {
+    if (!Number.isSafeInteger(size) || size <= 0 || size > maxBytes || size !== expectedBytes) {
+      throw new Error("The uploaded file is too large or arrived incomplete");
+    }
+  };
+  // Idempotent confirmation retries never replace the canonical object.
+  const existing = await b.head(key);
+  if (existing) {
+    validateSize(existing.size);
+    await b.delete(pending);
+    return { bytes: existing.size, etag: existing.etag, contentType: existing.httpMetadata?.contentType ?? null };
+  }
+  const object = await b.get(pending);
+  if (!object) return null;
+  try {
+    validateSize(object.size);
+    await b.put(key, object.body, {
+      onlyIf: { etagDoesNotMatch: "*" },
+      httpMetadata: object.httpMetadata,
+    });
+    // Concurrent confirmations may race, but only one can create this key.
+    const canonical = await b.head(key);
+    if (!canonical) throw new Error("The uploaded file could not be sealed");
+    validateSize(canonical.size);
+    return { bytes: canonical.size, etag: canonical.etag, contentType: canonical.httpMetadata?.contentType ?? null };
+  } finally {
+    // Rejects are cleaned too; prefix erasure also includes this suffix.
+    await b.delete(pending);
+  }
 }
 
 export interface HeadResult {
