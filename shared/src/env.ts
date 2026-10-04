@@ -5,6 +5,10 @@
 // a binding still type-checks; the guards at each call site (`if (env.X)`,
 // `if (!key) throw ...`) are what actually enforce presence at runtime.
 export interface Env {
+  // Upload rollout defaults disabled; originals never exceed batch rollout.
+  UPLOAD_BATCH_PERCENT?: string;
+  UPLOAD_ORIGINALS_PERCENT?: string;
+
   // Supabase
   SUPABASE_URL?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;

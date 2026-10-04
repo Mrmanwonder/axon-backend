@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const fixture = vi.hoisted(() => ({
   clientFor: vi.fn(),
+  rpc: vi.fn(),
+  requestedKeys: [] as string[],
+  paperOwned: true,
   serviceClient: vi.fn(),
   presignPut: vi.fn(),
   headObject: vi.fn(),
@@ -60,6 +63,7 @@ vi.mock("@mastery/shared/r2.js", () => ({
     page: "derived",
     crop: "derived",
     mask: "derived",
+    thumb: "derived",
   },
 }));
 
@@ -86,13 +90,14 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 
 function userClient() {
   return {
+    auth: { getUser: vi.fn(async () => ({ data: { user: { id: "owner" } }, error: null })) },
     from: vi.fn((table: string) => {
       if (table === "paper") {
         const builder: any = {};
         builder.select = vi.fn(() => builder);
         builder.eq = vi.fn(() => builder);
         builder.maybeSingle = vi.fn(async () => ({
-          data: { id: PAPER, student_id: STUDENT },
+          data: fixture.paperOwned ? { id: PAPER, student_id: STUDENT } : null,
           error: null,
         }));
         return builder;
@@ -117,12 +122,15 @@ function adminClient() {
       insert: fixture.insert,
       update: fixture.update,
       select: () => {
-        const b: any = { eq: () => b, then: (yes: any) => Promise.resolve({ data: fixture.ledger ?? Array.from({ length: 60 }, (_, i) => ({ r2_bucket: "originals", r2_key: uploadClaim(i + 1).key, bytes: 100 })), error: null }).then(yes) };
+        const rows = () => fixture.ledger ?? Array.from({ length: 60 }, (_, i) => ({ r2_bucket: "originals", r2_key: uploadClaim(i + 1).key, bytes: 100 }));
+        const b: any = { eq: () => b, in: (_column: string, keys: string[]) => { fixture.requestedKeys = keys; return b; },
+          maybeSingle: async () => ({ data: rows()[0] ?? null, error: null }),
+          then: (yes: any) => Promise.resolve({ data: rows(), error: null }).then(yes) };
         return b;
       },
     };
   });
-  return { from };
+  return { from, rpc: fixture.rpc };
 }
 
 function request(path: string, body: unknown) {
@@ -158,6 +166,8 @@ function uploadClaim(i: number) {
 beforeEach(() => {
   vi.clearAllMocks();
   fixture.pages = [];
+  fixture.requestedKeys=[]; fixture.paperOwned=true;
+  fixture.rpc.mockResolvedValue({data:{attached:[{page_number:1,key:STUDENT+'/'+PAPER+'/raw/p1-original-x.jpg'}]},error:null});
   fixture.ledger = null;
   fixture.dbUpdateErrorKey = null;
   fixture.headErrorKey = null;
@@ -451,4 +461,58 @@ test("erasure during promotion removes the orphan canonical object", async () =>
   expect(response.status).toBe(500);
   expect(fixture.deleteObject).toHaveBeenCalledWith(expect.anything(), "originals", uploadClaim(1).key);
   expect(fixture.deleteObject).toHaveBeenCalledWith(expect.anything(), "originals", uploadClaim(1).key + ".pending");
+});
+
+describe("AXO-188 upload recovery authority",()=>{
+  test("confirmation reads only the requested issued keys and rejects duplicate claims before R2",async()=>{
+    const claims=[uploadClaim(1),uploadClaim(2)];
+    const response=await worker.fetch(request("/upload-complete",{paper_id:PAPER,uploads:claims}),{} as any);
+    expect(response.status).toBe(200);expect(fixture.requestedKeys).toEqual(claims.map(c=>c.key));
+    fixture.headObject.mockClear();
+    const duplicate=await worker.fetch(request("/upload-complete",{paper_id:PAPER,uploads:[claims[0],claims[0]]}),{} as any);
+    expect(duplicate.status).toBe(400);expect(fixture.headObject).not.toHaveBeenCalled();
+  });
+  test("rollout fails closed and originals cannot exceed the batch cohort",async()=>{
+    const off=await worker.fetch(request("/upload-policy",{}),{} as any);expect(await off.json()).toEqual({batch_percent:0,originals_percent:0});
+    const clipped=await worker.fetch(request("/upload-policy",{}),{UPLOAD_BATCH_PERCENT:"5",UPLOAD_ORIGINALS_PERCENT:"100"} as any);
+    expect(await clipped.json()).toEqual({batch_percent:5,originals_percent:5});
+    const invalid=await worker.fetch(request("/upload-policy",{}),{UPLOAD_BATCH_PERCENT:"NaN",UPLOAD_ORIGINALS_PERCENT:"100"} as any);
+    expect(await invalid.json()).toEqual({batch_percent:0,originals_percent:0});
+  });
+  test("legacy grouped page/raw intents get a server-issued capture binding",async()=>{
+    const response=await worker.fetch(request("/upload-intent",{student_id:STUDENT,paper_id:PAPER,objects:[
+      uploadObject(1,{kind:"page",name:"p1",page_number:1,page_revision:"revision"}),
+      uploadObject(1,{kind:"raw",name:"p1-original",page_number:1,page_revision:"revision"}),
+    ]}),{} as any);
+    expect(response.status).toBe(200);
+    const rows=fixture.insert.mock.calls[0][0];
+    expect(rows[1].page_key).toBe(rows[0].r2_key);expect(rows[1].asset_kind).toBe("raw");expect(rows[1].page_revision).toBe("revision");
+  });
+  test("malformed capture metadata and unbound raw uploads are rejected before capabilities",async()=>{
+    for(const overrides of [{kind:"raw",name:"p1-original",page_number:1,page_revision:"revision"},
+      {kind:"page",name:"p2",page_number:1,page_revision:"revision"},{kind:"raw",name:"p1-original",page_number:1,page_revision:"../bad"}]){
+      const response=await worker.fetch(request("/upload-intent",{student_id:STUDENT,paper_id:PAPER,objects:[uploadObject(1,overrides)]}),{} as any);
+      expect(response.status).toBeGreaterThanOrEqual(400);
+    }
+    expect(fixture.insert).not.toHaveBeenCalled();expect(fixture.presignPut).not.toHaveBeenCalled();
+  });
+  test("original attachment uses user paper scope before service RPC and propagates rejection",async()=>{
+    const body={student_id:STUDENT,paper_id:PAPER,pages:[{page_number:1,page_revision:"revision",
+      page_key:STUDENT+"/"+PAPER+"/page/p1-x.jpg",original_key:STUDENT+"/"+PAPER+"/raw/p1-original-x.jpg"}]};
+    fixture.paperOwned=false;
+    expect((await worker.fetch(request("/paper-originals",body),{} as any)).status).toBe(403);
+    expect(fixture.rpc).not.toHaveBeenCalled();
+    fixture.paperOwned=true;
+    expect((await worker.fetch(request("/paper-originals",body),{} as any)).status).toBe(200);
+    expect(fixture.rpc).toHaveBeenCalledWith("attach_paper_originals",{p_student_id:STUDENT,p_paper_id:PAPER,p_pages:body.pages});
+    fixture.rpc.mockResolvedValue({error:{code:"42501"},data:null});
+    expect((await worker.fetch(request("/paper-originals",body),{} as any)).status).toBe(409);
+  });
+  test("foreign keys and duplicate pages never reach original attachment RPC",async()=>{
+    const page={page_number:1,page_revision:"revision",page_key:"other/"+PAPER+"/page/p1-x.jpg",original_key:STUDENT+"/"+PAPER+"/raw/p1-original-x.jpg"};
+    expect((await worker.fetch(request("/paper-originals",{student_id:STUDENT,paper_id:PAPER,pages:[page]}),{} as any)).status).toBe(400);
+    page.page_key=STUDENT+"/"+PAPER+"/page/p1-x.jpg";
+    expect((await worker.fetch(request("/paper-originals",{student_id:STUDENT,paper_id:PAPER,pages:[page,page]}),{} as any)).status).toBe(400);
+    expect(fixture.rpc).not.toHaveBeenCalled();
+  });
 });

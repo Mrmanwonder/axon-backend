@@ -29,3 +29,8 @@ service = "axon-intelligence"
 # R2_BUCKET_DERIVED, R2_BUCKET_ORIGINALS, R2_ENDPOINT, R2_SECRET_ACCESS_KEY,
 # SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL,
 # AXON_INTERNAL_TOKEN
+
+# AXO-188: promote only after measured validation; either value 0 rolls back.
+[vars]
+UPLOAD_BATCH_PERCENT = "0"
+UPLOAD_ORIGINALS_PERCENT = "0"
