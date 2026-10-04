@@ -66,15 +66,15 @@ export function assess(input: AssessInput): AssessResult {
     // 'medium' passes. A pass here is not a claim the reading is right — it is a
     // claim that nothing about the recognition itself was alarming, and the
     // other three signals are what turn that into confidence.
-    recognition: input.recognition === "high" || input.recognition === "medium",
+    recognition: input.recognition === null ? "unknown" : input.recognition === "high" || input.recognition === "medium",
     structural: input.numberingSound,
     arithmetic: input.arithmeticOk,
     plausibility: plausible(input.awarded, input.available),
   };
-  if (input.unreadable || input.recognition === null) {
+  if (input.unreadable) {
     return { tier: "unreadable", signals };
   }
-  if (input.recognition === "low") return { tier: "unsure", signals };
+  if (input.recognition === "low" || input.recognition === null) return { tier: "unsure", signals };
 
   // A signal that is explicitly false blocks confidence. `unknown` does not:
   // it is the absence of a check, not the failure of one, and an answer with no

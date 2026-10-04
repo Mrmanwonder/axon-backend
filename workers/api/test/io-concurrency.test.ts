@@ -7,8 +7,11 @@ const fixture = vi.hoisted(() => ({
   headObject: vi.fn(),
   signAssetUrl: vi.fn(),
   insert: vi.fn(),
+  cleanupInsert: vi.fn(),
+  deleteObject: vi.fn(),
   update: vi.fn(),
   pages: [] as any[],
+  ledger: null as any[] | null,
   dbUpdateErrorKey: null as string | null,
   headErrorKey: null as string | null,
   presignActive: 0,
@@ -44,11 +47,13 @@ vi.mock("@mastery/shared/http.js", () => {
 
 vi.mock("@mastery/shared/r2.js", () => ({
   presignPut: fixture.presignPut,
-  headObject: fixture.headObject,
+  sealUpload: fixture.headObject,
   signAssetUrl: fixture.signAssetUrl,
   verifyAssetSignature: vi.fn(),
   objectKey: ({ studentId, paperId, kind, name, extension }: any) =>
     `${studentId}/${paperId}/${kind}/${name}.${extension}`,
+  deleteObject: fixture.deleteObject,
+  stagingKey: (key: string) => key + ".pending",
   BUCKET_FOR: {
     upload: "originals",
     raw: "originals",
@@ -106,10 +111,15 @@ function userClient() {
 
 function adminClient() {
   const from = vi.fn((table: string) => {
+    if (table === "r2_deletion") return { insert: fixture.cleanupInsert };
     if (table !== "upload") throw new Error(`unexpected admin table ${table}`);
     return {
       insert: fixture.insert,
       update: fixture.update,
+      select: () => {
+        const b: any = { eq: () => b, then: (yes: any) => Promise.resolve({ data: fixture.ledger ?? Array.from({ length: 60 }, (_, i) => ({ r2_bucket: "originals", r2_key: uploadClaim(i + 1).key, bytes: 100 })), error: null }).then(yes) };
+        return b;
+      },
     };
   });
   return { from };
@@ -148,6 +158,7 @@ function uploadClaim(i: number) {
 beforeEach(() => {
   vi.clearAllMocks();
   fixture.pages = [];
+  fixture.ledger = null;
   fixture.dbUpdateErrorKey = null;
   fixture.headErrorKey = null;
   fixture.presignActive = fixture.presignMax = 0;
@@ -155,6 +166,8 @@ beforeEach(() => {
   fixture.dbActive = fixture.dbMax = 0;
   fixture.signActive = fixture.signMax = 0;
 
+  fixture.cleanupInsert.mockResolvedValue({ error: null });
+  fixture.deleteObject.mockResolvedValue(undefined);
   fixture.clientFor.mockReturnValue(userClient());
   fixture.serviceClient.mockReturnValue(adminClient());
 
@@ -191,22 +204,15 @@ beforeEach(() => {
   }));
 
   fixture.update.mockImplementation((_values: unknown) => {
-    let eqCount = 0;
+    let key = "";
     const builder: any = {};
-    builder.eq = vi.fn((_column: string, value: string) => {
-      eqCount++;
-      if (eqCount === 1) return builder;
-      return (async () => {
-        fixture.dbActive++;
-        fixture.dbMax = Math.max(fixture.dbMax, fixture.dbActive);
-        await sleep(5);
-        fixture.dbActive--;
-        return {
-          error: fixture.dbUpdateErrorKey === value
-            ? { message: "database update failed" }
-            : null,
-        };
-      })();
+    builder.eq = vi.fn((column: string, value: string) => { if (column === "r2_key") key = value; return builder; });
+    builder.select = vi.fn(async () => {
+      fixture.dbActive++;
+      fixture.dbMax = Math.max(fixture.dbMax, fixture.dbActive);
+      await sleep(5);
+      fixture.dbActive--;
+      return { data: [{ id: "upload" }], error: fixture.dbUpdateErrorKey === key ? { message: "database update failed" } : null };
     });
     return builder;
   });
@@ -325,8 +331,10 @@ describe("AXO-110 bounded API/R2 I/O", () => {
     fixture.pages = Array.from({ length: 24 }, (_, i) => ({
       page_number: i + 1,
       r2_bucket: "derived",
-      r2_key: `page-${i + 1}`,
-      mask_key: `mask-${i + 1}`,
+      student_id: STUDENT,
+      paper_id: PAPER,
+      r2_key: `${STUDENT}/${PAPER}/page/${i + 1}`,
+      mask_key: `${STUDENT}/${PAPER}/mask/${i + 1}`,
     }));
 
     const response = await worker.fetch(request("/page-asset-urls", {
@@ -379,4 +387,68 @@ describe("AXO-110 bounded API/R2 I/O", () => {
     }
     console.info("[AXO-110 controlled I/O benchmark]", JSON.stringify(results));
   });
+});
+
+describe("AXO-170/172 storage authority", () => {
+  test.each([undefined, 0, -1, 1.5, 25 * 1024 * 1024 + 1])("rejects invalid declared size %s before issuing authority", async bytes => {
+    const response = await worker.fetch(request("/upload-intent", { student_id: STUDENT, paper_id: PAPER, objects: [uploadObject(1, { bytes })] }), {} as any);
+    expect(response.status).toBe(400);
+    expect(fixture.insert).not.toHaveBeenCalled();
+    expect(fixture.presignPut).not.toHaveBeenCalled();
+  });
+  test("rejects an oversized measured object even when the client omits its byte claim", async () => {
+    fixture.headObject.mockResolvedValue({ bytes: 25 * 1024 * 1024 + 1, etag: "oversized" });
+    const { bytes: _bytes, ...claim } = uploadClaim(1);
+    const response = await worker.fetch(request("/upload-complete", { paper_id: PAPER, uploads: [claim] }), {} as any);
+    expect(response.status).toBe(409);
+    expect(fixture.update).not.toHaveBeenCalled();
+    expect(await response.json()).toMatchObject({ confirmed: [] });
+  });
+  test("requires a server-issued intent before checking an object", async () => {
+    fixture.ledger = [];
+    const response = await worker.fetch(request("/upload-complete", { paper_id: PAPER, uploads: [uploadClaim(1)] }), {} as any);
+    expect(response.status).toBe(409);
+    expect(fixture.headObject).not.toHaveBeenCalled();
+  });
+  test("refuses to sign a victim key stored on an otherwise visible page", async () => {
+    fixture.pages = [{ page_number: 1, student_id: STUDENT, paper_id: PAPER, r2_bucket: "derived", r2_key: "victim/paper/page.jpg", mask_key: null }];
+    const response = await worker.fetch(request("/page-asset-urls", { paper_id: PAPER, page_numbers: [1] }), {} as any);
+    expect(response.status).toBe(403);
+    expect(fixture.signAssetUrl).not.toHaveBeenCalled();
+  });
+  test("creates ledger entries for derived pages and masks as well as originals", async () => {
+    const response = await worker.fetch(request("/upload-intent", { student_id: STUDENT, paper_id: PAPER, objects: [uploadObject(1, { kind: "page" }), uploadObject(2, { kind: "mask", content_type: "image/png" })] }), {} as any);
+    expect(response.status).toBe(200);
+    expect(fixture.insert.mock.calls[0]![0]).toHaveLength(2);
+  });
+});
+
+test("issued PUT capabilities get cleanup after their expiry, and cleanup failure withholds URLs", async () => {
+  const before = Date.now();
+  const response = await worker.fetch(request("/upload-intent", { student_id: STUDENT, paper_id: PAPER, objects: [uploadObject(1)] }), {} as any, {} as any);
+  expect(response.status).toBe(200);
+  const row = fixture.cleanupInsert.mock.calls[0][0][0];
+  expect(row.key).toBe(uploadClaim(1).key + ".pending");
+  expect(new Date(row.not_before).getTime()).toBeGreaterThanOrEqual(before + 20 * 60 * 1000);
+  fixture.cleanupInsert.mockResolvedValueOnce({ error: { message: "unavailable" } });
+  const failed = await worker.fetch(request("/upload-intent", { student_id: STUDENT, paper_id: PAPER, objects: [uploadObject(2)] }), {} as any, {} as any);
+  expect(failed.status).toBe(503);
+  expect(await failed.json()).not.toHaveProperty("objects");
+});
+
+test("canonical cleanup remains armed for unconfirmed upload intents", async () => {
+  const response = await worker.fetch(request("/upload-intent", { student_id: STUDENT, paper_id: PAPER, objects: [uploadObject(1)] }), {} as any, {} as any);
+  expect(response.status).toBe(200);
+  const rows = fixture.cleanupInsert.mock.calls[0][0];
+  expect(rows[1]).toMatchObject({ key: uploadClaim(1).key, unconfirmed_upload_id: "upload-0" });
+});
+test("erasure during promotion removes the orphan canonical object", async () => {
+  fixture.update.mockImplementation(() => {
+    const b: any = { eq: () => b, select: async () => ({ data: [], error: null }) };
+    return b;
+  });
+  const response = await worker.fetch(request("/upload-complete", { paper_id: PAPER, uploads: [uploadClaim(1)] }), {} as any, {} as any);
+  expect(response.status).toBe(500);
+  expect(fixture.deleteObject).toHaveBeenCalledWith(expect.anything(), "originals", uploadClaim(1).key);
+  expect(fixture.deleteObject).toHaveBeenCalledWith(expect.anything(), "originals", uploadClaim(1).key + ".pending");
 });

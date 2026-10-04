@@ -83,3 +83,9 @@ test("numberingSoundness: an unreadable label (null) is never sound, and breaks 
   // number, and 3 is neither equal to 1 nor one more than it.
   assert.deepEqual(numberingSoundness(["1", null, "3"]), [true, false, false]);
 });
+
+test("missing historical recognition remains unknown and requires review", () => {
+  const result = assess({ recognition: null, numberingSound: true, arithmeticOk: true, awarded: 3, available: 4, unreadable: false });
+  assert.equal(result.tier, "unsure");
+  assert.equal(result.signals.recognition, "unknown");
+});

@@ -1,3 +1,5 @@
+import { mustData, mustMaybe } from "@mastery/shared/db.js";
+import { pipelineWrite } from "@mastery/shared/pipeline_write.js";
 import { callModel } from "@mastery/shared/model-client.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
@@ -35,29 +37,40 @@ function samplePages(pages: Page[], limit = PAGES_TO_LOOK_AT): Page[] {
   return sampled;
 }
 
+export async function enqueueStructure(env: Env, sb: any, runId: string, paperId: string): Promise<number> {
+  const pages = await mustData<any[]>(sb.from("paper_page").select("id").eq("paper_id", paperId)
+    .in("structure_status", ["pending","running"]).not("r2_key","is",null), "triage structure dispatch pages");
+  if (pages.length) {
+    if (!env.STRUCTURE_QUEUE) throw new Error("Structure queue is not configured");
+    await chunkedSendBatch(env.STRUCTURE_QUEUE, pages, page => ({ body: { run_id: runId, page_id: page.id } }));
+  }
+  return pages.length;
+}
+
 const handler = consumeQueue<TriageMessage>(
   async ({ env, sb, msg, attempt, beat }) => {
     const runId = msg.run_id;
-    const { data: run } = await sb
-      .from("extraction_run")
-      .select("id, paper_id, student_id, status, route_override")
-      .eq("id", runId)
-      .single();
+    const run = await mustMaybe<any>(sb.from("extraction_run")
+      .select("id, paper_id, student_id, status, route_override").eq("id", runId).maybeSingle(), "triage run read");
     if (!run) return { detail: { skipped: "no such run" } };
     // Accepts both "queued" and "triaging": a retryable error used to advance
     // the run to "triaging" before the model call, so a retry after that
     // point permanently found the run in the wrong status and was skipped
     // forever. See AXON_FIX_BRIEF.md §3.1.
+    if (run.status === "structure") {
+      await enqueueStructure(env, sb, runId, run.paper_id);
+      return { detail: { resumed: "structure dispatch" } };
+    }
     if (!["queued", "triaging"].includes(run.status)) return { detail: { skipped: run.status } };
     const override = run.route_override;
 
-    const { data: pages } = await sb
+    const pages = await mustData<any[]>(sb
       .from("paper_page")
       .select("page_number, r2_bucket, r2_key, thumb_key, quality_verdict, quality_signals")
       .eq("paper_id", run.paper_id)
       .not("r2_key", "is", null)
       .order("page_number")
-      .limit(CAPTURE.MAX_PAGES);
+      .limit(CAPTURE.MAX_PAGES), "triage pages read");
     if (!pages?.length) {
       await failRun(sb, runId, "We could not find the pages for this paper. Try scanning it again.", "triage_pages_missing");
       return { detail: { failed: "no pages" } };
@@ -65,11 +78,11 @@ const handler = consumeQueue<TriageMessage>(
     const sampledPages = samplePages(pages as Page[]);
     if (sampledPages.every((p: Page) => p.quality_verdict === "fail")) {
       const message = qualityFailureMessage(sampledPages) ?? "These pages did not come out clearly enough to read. Please retake them and try again.";
-      await sb.rpc("run_advance", { p_run_id: runId, p_to: "rejected", p_reason: message });
+      await pipelineWrite(sb, runId, "triage_reject", { reason: message });
       return { detail: { rejected: "quality", pages: pages.length } };
     }
 
-    await sb.rpc("run_advance", { p_run_id: runId, p_to: "triaging" });
+    if (!await pipelineWrite(sb, runId, "triage_start")) return { detail: { skipped: "stale triage work" } };
     await beat();
 
     // The thumbnail, where there is one. The question at this stage is "is this
@@ -109,7 +122,7 @@ const handler = consumeQueue<TriageMessage>(
     if (parsed.classification !== "graded_exam") {
       const isUncertainReject = parsed.classification === "not_schoolwork" && parsed.confidence === "low";
       const reason = (isUncertainReject && qualityFailureMessage(sampledPages)) || REJECTION_REASON[parsed.classification];
-      await sb.rpc("run_advance", { p_run_id: runId, p_to: "rejected", p_reason: reason });
+      await pipelineWrite(sb, runId, "triage_reject", { reason });
       return { detail: { rejected: parsed.classification } };
     }
 
@@ -120,6 +133,7 @@ const handler = consumeQueue<TriageMessage>(
           studentId: run.student_id,
           paperId: run.paper_id,
           candidate: parsed.assessment_identity,
+          persist: false,
         });
       } catch (error) {
         // Identity lookup is enrichment, never a reason to lose a scan. A
@@ -129,38 +143,13 @@ const handler = consumeQueue<TriageMessage>(
       }
     }
 
-    await sb
-      .from("extraction_run")
-      .update({
-        tier_routing: {
-          triage: parsed,
-          assessment_identity_id: resolvedAssessment?.id ?? null,
-          assessment_identity_status: resolvedAssessment ? "exact" : "unresolved",
-        },
-        ...(parsed.ink_colour !== "red" ? { status_reason: null } : {}),
-      })
-      .eq("id", runId);
-    if (parsed.ink_colour !== "red") {
-      await sb.from("paper_page").update({ layer_fallback: "non_red_marking" }).eq("paper_id", run.paper_id).is("layer_fallback", null);
-    }
-
-    await sb.rpc("run_advance", { p_run_id: runId, p_to: "structure" });
-    // Reset every page's structure_status to pending before fan-out — a
-    // second run over the same paper otherwise finds every page already
-    // "done" from the first run and skips them all. See AXON_FIX_BRIEF.md §3.2.
-    // `crop_status` goes with it for exactly the same reason: the crop stage
-    // has the same "already done, advance and skip" re-entry path, so leaving
-    // it terminal would make a second run's cropping a no-op that reused the
-    // first run's crops — cut against the first run's boxes.
-    await sb.from("paper_page").update({ structure_status: "pending", crop_status: "pending" }).eq("paper_id", run.paper_id);
-    const { data: allPages } = await sb.from("paper_page").select("id").eq("paper_id", run.paper_id).not("r2_key", "is", null);
-    if (env.STRUCTURE_QUEUE && allPages?.length) {
-      await chunkedSendBatch(
-        env.STRUCTURE_QUEUE,
-        allPages,
-        (page: { id: string }) => ({ body: { run_id: runId, page_id: page.id } }),
-      );
-    }
+    if (!await pipelineWrite(sb, runId, "triage", {
+      fallback: parsed.ink_colour !== "red" ? "non_red_marking" : null,
+      assessment_identity_id: resolvedAssessment?.id ?? null,
+      tier_routing: { triage: parsed, assessment_identity_id: resolvedAssessment?.id ?? null,
+        assessment_identity_status: resolvedAssessment ? "exact" : "unresolved" },
+    })) return { detail: { skipped: "stale triage result" } };
+    const pagesDispatched = await enqueueStructure(env, sb, runId, run.paper_id);
 
     // Recorded so §7.7's "triage latency drops to single-digit seconds" can be
     // read straight off the data: `model_call.latency_ms` alone cannot say
@@ -168,7 +157,7 @@ const handler = consumeQueue<TriageMessage>(
     return {
       detail: {
         classification: parsed.classification,
-        pages: allPages?.length ?? 0,
+        pages: pagesDispatched,
         looked_at: sampledPages.length,
         on_thumbnails: onThumbs,
         assessment_identity: resolvedAssessment?.id ?? null,

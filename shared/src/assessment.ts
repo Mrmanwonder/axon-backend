@@ -216,7 +216,7 @@ export function identityMatchesCandidate(
 
 export async function resolveAssessmentIdentity(
   sb: any,
-  args: { studentId: string; paperId: string; candidate: AssessmentCandidate },
+  args: { studentId: string; paperId: string; candidate: AssessmentCandidate; persist?: boolean },
 ): Promise<ResolvedAssessment | null> {
   const { candidate } = args;
   if (!candidateIsResolvable(candidate)) return null;
@@ -263,6 +263,7 @@ export async function resolveAssessmentIdentity(
   if (exact.length !== 1) return null;
 
   const resolved = exact[0];
+  if (args.persist === false) return resolved;
   const { error: paperError } = await sb.from("paper")
     .update({ assessment_identity_id: resolved.id })
     .eq("id", args.paperId)

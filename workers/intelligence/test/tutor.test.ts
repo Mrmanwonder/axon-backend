@@ -145,3 +145,36 @@ describe("TutorOrchestrator", () => {
     expect(normalizeInboundEvidence(forged).every((item) => item.verification === "unverified" && item.authority === "low")).toBe(true);
   });
 });
+
+describe("AXO-180 paid usage on failure", () => {
+  it("retains successful reasoning usage when the repair transport fails", async () => {
+    let calls = 0;
+    const provider: AIProvider = {
+      id: "gemini-zdr",
+      async generate(request) {
+        if (calls++ > 0) throw new Error("repair transport failed");
+        return { requestedModel: request.model, servedModel: request.model, output: {}, usage: { inputTokens: 101, outputTokens: 23 }, latencyMs: 17 };
+      },
+    };
+    const traces: any[] = [];
+    const response = await new TutorOrchestrator({ provider, trace: trace => traces.push(trace) }).respond({ studentId: "s", message: "Explain mitosis" });
+    expect(response.status).toBe("controlled_failure");
+    expect(traces.at(-1)).toMatchObject({ inputTokens: 101, outputTokens: 23, latencyMs: 17, usageIncomplete: true });
+  });
+  it("retains verifier usage when its paid response fails schema validation", async () => {
+    let calls = 0;
+    const provider: AIProvider = {
+      id: "gemini-zdr",
+      async generate(request) {
+        const output = calls++ === 0
+          ? supported({ id: "current", text: "The current rule is X.", type: "retrieved", evidenceIds: ["official"], risk: "critical", verificationStatus: "pending" })
+          : {};
+        return { requestedModel: request.model, servedModel: request.model, output, usage: { inputTokens: 11, outputTokens: 7 }, latencyMs: 13 };
+      },
+    };
+    const traces: any[] = [];
+    await new TutorOrchestrator({ provider, retrieval: new StubRetrieval(), trace: trace => traces.push(trace) }).respond({ studentId: "s", message: "What is the current exam rule?", retrievalContext: "CBSE Senior Secondary Class XII Physics 042" });
+    expect(calls).toBe(3);
+    expect(traces.at(-1)).toMatchObject({ inputTokens: 33, outputTokens: 21, latencyMs: 39, usageIncomplete: false });
+  });
+});

@@ -149,3 +149,17 @@ describe("Worker", () => {
     expect(trace).toEqual({ verification_status: "controlled_failure", error: "NO_COMPLIANT_PROVIDER" });
   });
 });
+
+describe("AXO-173 public requests do not initialize registries", () => {
+  it("leaves registry tables empty for health, unauthorized and unknown requests", async () => {
+    for (const table of ["ai_deployment", "ai_config_revision", "concept_taxonomy", "prompt_artifact", "eval_suite", "stable_knowledge"]) {
+      // Count existing fixtures rather than assuming a particular test order.
+      const before = await env.DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first<{ count: number }>();
+      await exports.default.fetch(new Request("https://axon.test/health"));
+      await exports.default.fetch(new Request("https://axon.test/v1/tutor", { method: "POST" }));
+      await exports.default.fetch(new Request("https://axon.test/unknown"));
+      const after = await env.DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first<{ count: number }>();
+      expect(after?.count).toBe(before?.count);
+    }
+  });
+});
