@@ -50,6 +50,10 @@ export default {
           return respond(await paperSubmit(req, env));
         case "/paper-retry":
           return respond(await paperRetry(req, env));
+        case "/upload-policy":
+          return respond(await uploadPolicy(req, env));
+        case "/paper-originals":
+          return respond(await paperOriginals(req, env));
         case "/upload-intent":
           return respond(await uploadIntent(req, env));
         case "/upload-complete":
@@ -466,6 +470,43 @@ export function ownedObjectKey(key: unknown, studentId: string, paperId: string)
     && !/(?:^|\/)\.{1,2}(?:\/|$)/.test(key) && !key.includes("%") && !key.includes("\\");
 }
 
+async function uploadPolicy(req: Request, env: Env): Promise<Response> {
+  const user = clientFor(req, env);
+  if (!user) return failure("Sign in first.", 401);
+  const { data, error } = await user.auth.getUser();
+  if (error || !data.user) return failure("Sign in first.", 401);
+  const percent = (value: string | undefined) => {
+    const n = Number(value ?? 0);
+    return Number.isFinite(n) && n >= 0 && n <= 100 ? n : 0;
+  };
+  const batch = percent(env.UPLOAD_BATCH_PERCENT);
+  return json({ batch_percent: batch, originals_percent: Math.min(batch, percent(env.UPLOAD_ORIGINALS_PERCENT)) });
+}
+async function paperOriginals(req: Request, env: Env): Promise<Response> {
+  const user = clientFor(req, env);
+  if (!user) return failure("Sign in first.", 401);
+  const body = await readJson<any>(req);
+  if (!body?.student_id || !body.paper_id || !Array.isArray(body.pages) || !body.pages.length || body.pages.length > CAPTURE.MAX_PAGES) return failure("Which originals?");
+  const { data: paper } = await user.from("paper").select("id,student_id")
+    .eq("id", body.paper_id).eq("student_id", body.student_id).maybeSingle();
+  if (!paper) return failure("That paper is not yours.", 403);
+  const numbers = new Set();
+  for (const page of body.pages) {
+    if (!Number.isInteger(page?.page_number) || page.page_number < 1 || page.page_number > CAPTURE.MAX_PAGES ||
+        numbers.has(page.page_number) || typeof page.page_revision !== "string" ||
+        !/^[A-Za-z0-9-]{1,80}$/.test(page.page_revision) ||
+        !ownedObjectKey(page.page_key, paper.student_id, paper.id) ||
+        !ownedObjectKey(page.original_key, paper.student_id, paper.id)) return failure("Invalid original attachment.", 400);
+    numbers.add(page.page_number);
+  }
+  // RLS selects caller scope; service-only RPC locks and revalidates the current
+  // manifest, confirmed issued capability and immutable original association.
+  const { data, error } = await serviceClient(env).rpc("attach_paper_originals", {
+    p_student_id: paper.student_id, p_paper_id: paper.id, p_pages: body.pages,
+  });
+  if (error) return failure("Those originals could not be attached. Keep the draft and retry.", 409);
+  return json(data);
+}
 async function uploadIntent(req: Request, env: Env): Promise<Response> {
   const user = clientFor(req, env);
   if (!user) return failure("Sign in first.", 401);
@@ -484,12 +525,15 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
     extension: string;
     bucket: BucketKind;
     key: string;
+    pageKey: string | null;
   };
 
   // Validate every object before any database side effect or signed URL work.
   // A bad object late in the request therefore cannot leave partial ledger rows.
   const prepared: PreparedUpload[] = [];
+  const identities = new Set<string>();
   for (const object of body.objects) {
+    if (!object || typeof object !== "object" || Array.isArray(object)) return failure("Invalid upload object.");
     const extension = CAPTURE.UPLOAD_EXTENSIONS[object.content_type as keyof typeof CAPTURE.UPLOAD_EXTENSIONS];
     if (!extension) return failure(`We cannot take a ${object.content_type} file.`);
     if (!Number.isSafeInteger(object.bytes) || object.bytes <= 0 || object.bytes > MAX_BYTES) return failure("One of those files is too large to upload.");
@@ -503,6 +547,19 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
       return failure("One of those files has an invalid upload name.");
     }
 
+    if (object.page_number !== undefined || object.page_revision !== undefined || object.page_key !== undefined) {
+      const suffix = object.kind === "page" ? "" : object.kind === "raw" ? "-original" : "-" + object.kind;
+      if (!["page", "mask", "thumb", "raw"].includes(object.kind) ||
+          !Number.isInteger(object.page_number) || object.page_number < 1 || object.page_number > CAPTURE.MAX_PAGES ||
+          typeof object.page_revision !== "string" || !/^[A-Za-z0-9-]{1,80}$/.test(object.page_revision) ||
+          objectName !== "p" + object.page_number + suffix ||
+          (object.page_key !== undefined && (object.kind !== "raw" || !ownedObjectKey(object.page_key, body.student_id, body.paper_id)))) {
+        return failure("Invalid page upload metadata.");
+      }
+    }
+    const identity = object.kind + ":" + objectName;
+    if (identities.has(identity)) return failure("Duplicate upload object.");
+    identities.add(identity);
     const key = objectKey({
       studentId: body.student_id,
       paperId: body.paper_id,
@@ -510,9 +567,29 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
       name: objectName,
       extension,
     });
-    prepared.push({ object, objectName, extension, bucket, key });
+    prepared.push({ object, objectName, extension, bucket, key, pageKey: null });
   }
 
+  const admin = serviceClient(env);
+  for (const item of prepared.filter(p => p.object.kind === "raw" && p.object.page_revision)) {
+    const supplied = item.object.page_key;
+    if (supplied) {
+      const { data: pageIntent, error } = await admin.from("upload")
+        .select("r2_key,asset_kind,page_number,page_revision").eq("paper_id", body.paper_id).eq("student_id", body.student_id)
+        .eq("r2_bucket", "derived").eq("r2_key", supplied).eq("confirmed", true)
+        .maybeSingle();
+      const captureMatches = pageIntent && (pageIntent.asset_kind === "page" && pageIntent.page_number === item.object.page_number && pageIntent.page_revision === item.object.page_revision ||
+        pageIntent.asset_kind == null && item.object.page_revision === "legacy-" + item.object.page_number &&
+        supplied.startsWith(body.student_id + "/" + body.paper_id + "/page/p" + item.object.page_number + "-"));
+      if (error || !captureMatches) return failure("Original does not match a confirmed page.", 409);
+      item.pageKey = supplied;
+    } else {
+      const paired = prepared.find(p => p.object.kind === "page" && p.object.page_number === item.object.page_number &&
+        p.object.page_revision === item.object.page_revision);
+      if (!paired) return failure("Original needs its page upload binding.", 409);
+      item.pageKey = paired.key;
+    }
+  }
   let signedUrls: string[];
   try {
     signedUrls = await mapLimit(prepared, IO_CONCURRENCY, ({ object, bucket, key }) =>
@@ -522,9 +599,8 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
     return failure("We could not prepare those files for upload. Nothing was uploaded yet.", 503, String(cause));
   }
 
-  const admin = serviceClient(env);
   const ledgerRows = prepared
-    .map(({ object, bucket, key }) => ({
+    .map(({ object, bucket, key, pageKey }) => ({
       paper_id: body.paper_id,
       student_id: body.student_id,
       kind: object.content_type === "application/pdf" ? "pdf" : "image",
@@ -532,6 +608,7 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
       r2_key: key,
       content_type: object.content_type,
       bytes: object.bytes,
+      ...(object.page_revision ? { asset_kind: object.kind, page_number: object.page_number, page_revision: object.page_revision, page_key: pageKey } : {}),
     }));
 
   const ledgerByKey = new Map<string, string>();
@@ -582,9 +659,12 @@ async function uploadComplete(req: Request, env: Env): Promise<Response> {
   const { data: paper } = await user.from("paper").select("id, student_id").eq("id", body.paper_id).maybeSingle();
   if (!paper) return failure("That paper is not yours.", 403);
 
+  if (body.uploads.some((claim: any) => !claim || typeof claim.key !== "string") ||
+      new Set(body.uploads.map((claim: any) => claim.key)).size !== body.uploads.length) return failure("Invalid or duplicate upload confirmation.");
   const admin = serviceClient(env);
   const { data: ledger, error: ledgerError } = await admin.from("upload")
-    .select("r2_bucket,r2_key,bytes").eq("paper_id", paper.id).eq("student_id", paper.student_id);
+    .select("r2_bucket,r2_key,bytes").eq("paper_id", paper.id).eq("student_id", paper.student_id)
+    .in("r2_key", body.uploads.map((claim: any) => claim.key));
   if (ledgerError) return failure("We could not check the upload ledger. Try again.", 503);
   const missing: Array<{ key: string; reason: string }> = [];
   const validClaims: any[] = [];
