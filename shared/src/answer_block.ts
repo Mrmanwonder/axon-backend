@@ -72,13 +72,13 @@ function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
-function readBbox(v: unknown): Bbox | null {
+function readBbox(v: unknown, pagePixels = false): Bbox | null {
   if (!v || typeof v !== "object") return null;
   const b = v as Record<string, unknown>;
   const x = num(b.x), y = num(b.y), w = num(b.w), h = num(b.h);
   if (x === null || y === null || w === null || h === null) return null;
   const sourcePage = num(b.page);
-  if (sourcePage !== null && Number.isInteger(sourcePage) && sourcePage > 0) return { x, y, w, h, page: sourcePage };
+  if (pagePixels && sourcePage !== null && Number.isInteger(sourcePage) && sourcePage > 0) return { x, y, w, h, page: sourcePage };
   const page = num(b.page_index);
   return page === null ? { x, y, w, h } : { x, y, w, h, page_index: page };
 }
@@ -130,7 +130,7 @@ export function readAnswerBlock(raw: unknown, rawTextFallback: string | null): A
         latex: type === "math" || type === "binary" || type === "numeral" ? latex : null,
         text,
         annotations,
-        bbox: readBbox(s.bbox),
+        bbox: readBbox(s.bbox, o.source_space === "page_pixels_v1"),
         confidence: confidence === null ? null : Math.min(1, Math.max(0, confidence)),
       });
     }

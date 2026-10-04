@@ -680,7 +680,7 @@ async function pageAssetUrls(req: Request, env: Env): Promise<Response> {
     // outer page concurrency is bounded so a large booklet cannot create a burst.
     const [url, maskUrl] = await Promise.all([
       page.r2_key ? signAssetUrl(env, bucket, page.r2_key, undefined, assetOrigin) : Promise.resolve(null),
-      page.mask_key ? signAssetUrl(env, bucket, page.mask_key, undefined, assetOrigin) : Promise.resolve(null),
+      page.mask_key ? signAssetUrl(env, "derived", page.mask_key, undefined, assetOrigin) : Promise.resolve(null),
     ]);
     return [page.page_number, { url, mask_url: maskUrl }] as const;
   });
