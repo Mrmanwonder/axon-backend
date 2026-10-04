@@ -516,3 +516,14 @@ describe("AXO-188 upload recovery authority",()=>{
     expect(fixture.rpc).not.toHaveBeenCalled();
   });
 });
+
+test("legacy confirmed page can bind a missing original without granting arbitrary revision aliases",async()=>{
+  const key=STUDENT+"/"+PAPER+"/page/p1-old.jpg";
+  fixture.ledger=[{r2_key:key,asset_kind:null}];
+  const body={student_id:STUDENT,paper_id:PAPER,objects:[uploadObject(1,{kind:"raw",name:"p1-original",page_number:1,page_revision:"legacy-1",page_key:key})]};
+  expect((await worker.fetch(request("/upload-intent",body),{} as any)).status).toBe(200);
+  expect(fixture.insert.mock.calls[0][0][0].page_key).toBe(key);
+  fixture.insert.mockClear();body.objects[0].page_revision="new-capture";
+  expect((await worker.fetch(request("/upload-intent",body),{} as any)).status).toBe(409);
+  expect(fixture.insert).not.toHaveBeenCalled();
+});

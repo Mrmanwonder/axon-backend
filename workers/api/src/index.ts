@@ -575,11 +575,13 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
     const supplied = item.object.page_key;
     if (supplied) {
       const { data: pageIntent, error } = await admin.from("upload")
-        .select("r2_key").eq("paper_id", body.paper_id).eq("student_id", body.student_id)
+        .select("r2_key,asset_kind,page_number,page_revision").eq("paper_id", body.paper_id).eq("student_id", body.student_id)
         .eq("r2_bucket", "derived").eq("r2_key", supplied).eq("confirmed", true)
-        .eq("asset_kind", "page").eq("page_number", item.object.page_number)
-        .eq("page_revision", item.object.page_revision).maybeSingle();
-      if (error || !pageIntent) return failure("Original does not match a confirmed page.", 409);
+        .maybeSingle();
+      const captureMatches = pageIntent && (pageIntent.asset_kind === "page" && pageIntent.page_number === item.object.page_number && pageIntent.page_revision === item.object.page_revision ||
+        pageIntent.asset_kind == null && item.object.page_revision === "legacy-" + item.object.page_number &&
+        supplied.startsWith(body.student_id + "/" + body.paper_id + "/page/p" + item.object.page_number + "-"));
+      if (error || !captureMatches) return failure("Original does not match a confirmed page.", 409);
       item.pageKey = supplied;
     } else {
       const paired = prepared.find(p => p.object.kind === "page" && p.object.page_number === item.object.page_number &&
