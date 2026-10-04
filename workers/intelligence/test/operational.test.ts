@@ -48,7 +48,7 @@ describe("operational pipeline", () => {
   });
 
   it("persists immutable prompt and route artifacts", async () => {
-    await exports.default.fetch(new Request("https://axon.test/health"));
+    await exports.default.fetch(new Request("https://axon.test/v1/admin/provider-health", { headers: { authorization: "Bearer test-admin-token" } }));
     const prompts = await env.DB.prepare("SELECT COUNT(*) AS count FROM prompt_artifact").first<{ count: number }>();
     const routes = await env.DB.prepare("SELECT COUNT(*) AS count FROM ai_route WHERE config_revision = 'v3.default'").first<{ count: number }>();
     const models = await env.DB.prepare("SELECT DISTINCT model FROM ai_route WHERE config_revision = 'v3.default'").all<{ model: string }>();
