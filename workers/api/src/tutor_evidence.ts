@@ -111,7 +111,7 @@ export function regionsToEvidence(rows: RegionRow[], paperId: string): TutorEvid
 type Client = { from: (table: string) => any };
 
 export type EvidenceResult =
-  | { ok: true; evidence: TutorEvidence[] }
+  | { ok: true; evidence: TutorEvidence[]; regions: RegionRow[] }
   | { ok: false; status: number; message: string };
 
 export async function loadPaperEvidence(
@@ -133,7 +133,7 @@ export async function loadPaperEvidence(
     // orchestrator's own insufficient-evidence path rather than an error.
     return args.questionId
       ? { ok: false, status: 403, message: "That question is not available for this student." }
-      : { ok: true, evidence: [] };
+      : { ok: true, evidence: [], regions: [] };
   }
 
   let query = user
@@ -149,5 +149,8 @@ export async function loadPaperEvidence(
   if (args.questionId && !rows.length) {
     return { ok: false, status: 403, message: "That question is not available for this student." };
   }
-  return { ok: true, evidence: regionsToEvidence(rows, args.paperId) };
+  // The rows go back too: grounding (tutor_grounding.ts) keys scheme and
+  // syllabus evidence to exactly these regions and no others.
+  const kept = rows.slice(0, MAX_REGIONS).filter((row) => row.confidence_tier !== "unreadable");
+  return { ok: true, evidence: regionsToEvidence(rows, args.paperId), regions: kept };
 }

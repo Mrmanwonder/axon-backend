@@ -5,6 +5,7 @@ import { CAPTURE, PIPELINE_VERSION, SAFE_OBJECT_NAME } from "@mastery/shared/con
 import type { Env } from "@mastery/shared/env.js";
 import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
 import { loadPaperEvidence, type TutorEvidence } from "./tutor_evidence.js";
+import { loadSchemeGrounding, loadSyllabusGrounding, type GroundingEvidence } from "./tutor_grounding.js";
 import { CallbackRejected, configuredProvider, statusForRefusal } from "./guardian_verification.js";
 
 const MAX_BYTES = 25 * 1024 * 1024;
@@ -200,7 +201,7 @@ async function tutor(req: Request, env: Env): Promise<Response> {
 
   // Paper evidence comes from the database under this session's own scope,
   // never from the request body (AXO-36).
-  let evidence: TutorEvidence[] = [];
+  let evidence: Array<TutorEvidence | GroundingEvidence> = [];
   if (paper) {
     const loaded = await loadPaperEvidence(user, {
       studentId: student.id,
@@ -208,7 +209,18 @@ async function tutor(req: Request, env: Env): Promise<Response> {
       ...(typeof body.questionId === "string" ? { questionId: body.questionId } : {}),
     });
     if (!loaded.ok) return failure(loaded.message, loaded.status);
-    evidence = loaded.evidence;
+    // Verified reference material for exactly these regions: the official
+    // scheme only when the paper is bound to a ready, reproduction-permitted
+    // assessment; syllabus objectives only from verified syllabi. Either may be
+    // empty; neither failing ever blocks the answer (AXO-36 / AXO-12).
+    const scope = { studentId: student.id, paperId: paper.id, regions: loaded.regions };
+    let admin: ReturnType<typeof serviceClient> | null = null;
+    try { admin = serviceClient(env) ?? null; } catch { admin = null; }
+    const [scheme, syllabus] = await Promise.all([
+      loadSchemeGrounding(admin, scope),
+      loadSyllabusGrounding(user, scope),
+    ]);
+    evidence = [...loaded.evidence, ...scheme, ...syllabus];
   }
 
   // Build public research context exclusively from authenticated database
