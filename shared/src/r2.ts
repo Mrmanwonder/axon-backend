@@ -85,8 +85,8 @@ export function stagingKey(key: string): string { return key + ".pending"; }
  * Validate the staging object, then conditionally create the immutable
  * canonical object. The common first-confirmation path deliberately avoids
  * HEAD requests: R2 PUT already returns the created object's metadata. A HEAD
- * is only needed for idempotent retries (no staging object) or a concurrent
- * confirmation that wins the conditional create race.
+ * is only needed for idempotent retries, suspicious replay bytes, or a
+ * concurrent confirmation that wins the conditional create race.
  */
 export async function sealUpload(env: Env, bucket: BucketKind, key: string, expectedBytes: number, maxBytes: number): Promise<HeadResult | null> {
   const b = binding(env, bucket);
@@ -108,7 +108,19 @@ export async function sealUpload(env: Env, bucket: BucketKind, key: string, expe
   }
 
   try {
-    validateSize(object.size);
+    try {
+      validateSize(object.size);
+    } catch (stagingError) {
+      // A PUT capability can be reused after a successful seal. Bad replay
+      // bytes must never make an already-confirmed immutable object look lost.
+      // This exceptional path pays for one HEAD; normal first confirmation
+      // still performs no HEAD at all.
+      const existing = await b.head(key);
+      if (!existing) throw stagingError;
+      validateSize(existing.size);
+      return { bytes: existing.size, etag: existing.etag, contentType: existing.httpMetadata?.contentType ?? null };
+    }
+
     const created = await b.put(key, object.body, {
       onlyIf: { etagDoesNotMatch: "*" },
       httpMetadata: object.httpMetadata,
