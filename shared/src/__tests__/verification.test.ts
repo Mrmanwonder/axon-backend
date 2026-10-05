@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readSignals, tierFrom, mayReasonOverWorking, transcriptionIsAuthoritative, needsReread } from "../signals.js";
-import { canonicalLabel, checkLabels, adjudicationBlocksCommit } from "../labels.js";
+import { canonicalLabel, checkLabels, adjudicationBlocksCommit, duplicateIndexes, placedLabels } from "../labels.js";
 
 // ── signals: unknown is real, and no signal authorises another ───────────────
 
@@ -78,6 +78,26 @@ test("two regions claiming the same part fails the set", () => {
 
 test("a clean label set passes", () => {
   assert.equal(checkLabels(["c", "d(i)", "d(ii)", "e", "2a", "a", "b"]).ok, true);
+});
+
+test("a bare part continues the question printed above it, so later (c)s do not collide", () => {
+  // Owner's run c5bc874b, 5 Oct 2026: the labels as read, in order.
+  const labels = ["1(a)", "1(b)", "1(c)", "2(a)", "2(b)", "(c)", "4(a)", "(b)", null, "(b)", "(c)",
+    "5(a)", "5(b)", "(c)", "6(a)", "(b)", "(c)", "7(a)", "7(b)"];
+  assert.deepEqual(placedLabels(labels).slice(3, 8), ["2a", "2b", "2c", "4a", "4b"]);
+  const r = checkLabels(labels);
+  assert.equal(r.ok, true, "a second (b) that does not move forward starts an unnumbered question, it is not 4(b) again");
+  assert.equal(duplicateIndexes(r).size, 0);
+});
+
+test("a real repeat is still caught after placement, and only its own regions are marked", () => {
+  const r = checkLabels(["3(a)", "(b)", "3(b)", "4(a)"]);
+  assert.equal(r.ok, false);
+  assert.deepEqual([...duplicateIndexes(r)].sort(), [1, 2]);
+});
+
+test("a bare roman sub-part sits under its letter", () => {
+  assert.deepEqual(placedLabels(["2(d)(i)", "(ii)", "(iii)"]), ["2d(i)", "2d(ii)", "2d(iii)"]);
 });
 
 test("one unreadable label is reported but does not fail the paper", () => {

@@ -72,11 +72,11 @@ export interface LabelCheck {
 export function checkLabels(labels: (string | null | undefined)[]): LabelCheck {
   const seen = new Map<string, number[]>();
   const problems: LabelProblem[] = [];
+  const keys = placedLabels(labels);
 
-  labels.forEach((raw, i) => {
-    const key = canonicalLabel(raw);
+  keys.forEach((key, i) => {
     if (key === null) {
-      problems.push({ kind: "unreadable", label: String(raw ?? ""), at: [i] });
+      problems.push({ kind: "unreadable", label: String(labels[i] ?? ""), at: [i] });
       return;
     }
     const at = seen.get(key);
@@ -88,6 +88,52 @@ export function checkLabels(labels: (string | null | undefined)[]): LabelCheck {
   }
 
   return { ok: !problems.some((p) => p.kind === "duplicate"), problems };
+}
+
+/** Every region index that sits in a duplicate pair: the regions whose marks may be on the wrong part. */
+export function duplicateIndexes(check: LabelCheck): Set<number> {
+  return new Set(check.problems.filter((p) => p.kind === "duplicate").flatMap((p) => p.at));
+}
+
+/**
+ * Canonical labels in document order, with a bare part placed under the
+ * question it continues.
+ *
+ * Cambridge prints the number once: `2(a)` and `2(b)`, then `(c)` on the next
+ * page. Read as text, every later `(c)` on the paper collides with that one,
+ * and on 5 Oct 2026 that made all nineteen regions of a cleanly read paper
+ * structurally unsound (owner's run c5bc874b). A bare part continues the
+ * current question only when it moves forward (a letter after the last one,
+ * or a sub-part under the same letter). A part that does not move forward
+ * starts an unnumbered question and stays bare, so a genuine repeat is still
+ * caught rather than explained away.
+ */
+export function placedLabels(labels: (string | null | undefined)[]): (string | null)[] {
+  let num: string | null = null;
+  let letter: string | null = null;
+  return labels.map((raw) => {
+    const key = canonicalLabel(raw);
+    if (key === null) return null;
+    const bareRoman = key.match(/^\(([ivx]+)\)$/);
+    if (bareRoman) return num !== null && letter !== null ? `${num}${letter}(${bareRoman[1]})` : key;
+    const m = key.match(/^(\d+)?([a-z])?(\([ivx]+\))?$/);
+    if (!m) return key;
+    const [, n, l, roman] = m;
+    if (n) {
+      num = n;
+      letter = l ?? null;
+      return key;
+    }
+    if (!l) return key;
+    const forward = letter === null ? l === "a" || num !== null : roman ? l >= letter : l > letter;
+    if (num !== null && forward) {
+      letter = l;
+      return `${num}${l}${roman ?? ""}`;
+    }
+    num = null;
+    letter = l;
+    return key;
+  });
 }
 
 /**

@@ -5,7 +5,7 @@ import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { adjudicationTriggers, reconcile, type QuestionMarks } from "@mastery/shared/reconcile.js";
 import { assess, numberingSoundness, downgradeRecognition, type Recognition } from "@mastery/shared/confidence.js";
 import { checkAnswer } from "@mastery/shared/arithmetic.js";
-import { checkLabels } from "@mastery/shared/labels.js";
+import { checkLabels, duplicateIndexes } from "@mastery/shared/labels.js";
 import { readAnswerBlock, checkableText } from "@mastery/shared/answer_block.js";
 import type { Env } from "@mastery/shared/env.js";
 
@@ -68,6 +68,7 @@ const handler = consumeQueue<ReconcileMessage>(
     // same part, which is why this compares canonical forms: production holds
     // both spellings for one question, so a string comparison sees no clash.
     const labelCheck = checkLabels(regions.map((r: any) => r.question_label));
+    const duplicates = duplicateIndexes(labelCheck);
     if (!labelCheck.ok) {
       console.info("duplicate question labels on this run", runId,
         labelCheck.problems.filter((p) => p.kind === "duplicate").map((p) => p.label).join(","));
@@ -127,7 +128,11 @@ const handler = consumeQueue<ReconcileMessage>(
         // A duplicated label is a structural failure of the whole set, so every
         // region on the run carries it: the marks may be on the wrong question
         // and there is no way to tell which one from here.
-        numberingSound: (sound[i] ?? false) && labelCheck.ok,
+        // A duplicated part is a structural failure of the regions that share
+        // it, not of every question on the paper: the other parts' marks are
+        // where they were read (owner, 5 Oct 2026: nineteen correct readings
+        // all unsure because two "(b)"s collided).
+        numberingSound: (sound[i] ?? false) && !duplicates.has(i),
         arithmeticOk: arithmetic[i],
         awarded: marks[i].awarded,
         available: marks[i].available,

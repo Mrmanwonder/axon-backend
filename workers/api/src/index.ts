@@ -1,3 +1,4 @@
+import { REJECTION_REASON as TRIAGE_REJECTION_REASON } from "@mastery/shared/prompts/triage.v1.js";
 import { CORS, corsFor, withCors, json, failure, clientFor, readJson, serviceClient } from "@mastery/shared/http.js";
 import { presignPut, headObject, sealUpload, signAssetUrl, verifyAssetSignature, objectKey, stagingKey, deleteObject, BUCKET_FOR, type BucketKind } from "@mastery/shared/r2.js";
 import { CAPTURE, PIPELINE_VERSION, SAFE_OBJECT_NAME } from "@mastery/shared/contract.js";
@@ -357,6 +358,10 @@ async function paperSubmit(req: Request, env: Env): Promise<Response> {
 }
 
 
+const UNMARKED_REASONS = new Set(
+  [TRIAGE_REJECTION_REASON.ungraded_paper, TRIAGE_REJECTION_REASON.blank_paper].filter((r): r is string => !!r),
+);
+
 async function paperRetry(req: Request, env: Env): Promise<Response> {
   const user = clientFor(req, env);
   if (!user) return failure("Sign in first.", 401);
@@ -373,17 +378,23 @@ async function paperRetry(req: Request, env: Env): Promise<Response> {
 
   const { data: latest, error: runError } = await user
     .from("extraction_run")
-    .select("id,status,started_at")
+    .select("id,status,status_reason,started_at")
     .eq("paper_id", paper.id)
     .order("started_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (runError) return failure("We could not check that paper's reading status.", 500, runError.message);
   if (!latest) return json({ retry: "not_retryable", reason: "no_failed_run" }, 409);
-  if (latest.status === "rejected") {
+  // A paper refused as unmarked (or blank) can be read again when the student
+  // says it is marked: the first look can miss light or small marking, and the
+  // student holding the paper is the authority on it (owner, 5 Oct 2026). Any
+  // other refusal stays final.
+  const markedOverride = body.marked === true && latest.status === "rejected"
+    && UNMARKED_REASONS.has(String(latest.status_reason ?? ""));
+  if (latest.status === "rejected" && !markedOverride) {
     return json({ retry: "not_retryable", reason: "rejected" }, 409);
   }
-  if (latest.status !== "failed") {
+  if (latest.status !== "failed" && !markedOverride) {
     if (latest.status === "queued" && env.TRIAGE_QUEUE) {
       try { await env.TRIAGE_QUEUE.send({ run_id: latest.id }); } catch { /* durable queued row remains recoverable */ }
     }
@@ -444,6 +455,13 @@ async function paperRetry(req: Request, env: Env): Promise<Response> {
 
   const runId = data.run_id;
   const admin = serviceClient(env);
+  if (markedOverride && data.run_created) {
+    // Read by mastery-triage before it decides; an unknown key is ignored by
+    // the model router, which only reads its own fields from this column.
+    const { error: overrideError } = await admin.from("extraction_run")
+      .update({ route_override: { student_says_marked: true } }).eq("id", runId);
+    if (overrideError) return failure("We could not restart that paper. Nothing was lost — try again.", 500, overrideError.message);
+  }
   const { data: run } = await admin.from("extraction_run").select("status").eq("id", runId).single();
   let queued = false;
   if (run?.status === "queued" && env.TRIAGE_QUEUE) {
