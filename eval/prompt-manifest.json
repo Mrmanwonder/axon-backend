@@ -29,6 +29,10 @@
       "sha256": "41188b0cf86e1f4c64bd6240627d5996b519e858a52f5b569dad4bba39b1ad9e",
       "eval_run": "baseline-2026-10-02"
     },
+    "shared/src/prompts/topic_tag.v1.ts": {
+      "sha256": "5cf9ca29e1eb78cea93803a5edbcf39af5af81c7d86ae4ed2ecceb3e5593fe82",
+      "eval_run": "7ca49ba7-6f11-4d11-b212-416d7d1987d1"
+    },
     "shared/src/prompts/triage.v1.ts": {
       "sha256": "d1834e77eae2001d9965e36f5e41388a4ae4b75d26ca98f80bd9d65346fdc791",
       "eval_run": "baseline-2026-10-02"

@@ -1,0 +1,41 @@
+{
+  "id": "7ca49ba7-6f11-4d11-b212-416d7d1987d1",
+  "kind": "eval",
+  "passed": true,
+  "stage": "topic_tag",
+  "run_at": "2026-10-05",
+  "golden_set_version": "topic-tag-synthetic-v1",
+  "golden_set_source": "Axon-Site evals/golden/topic-tag-v1.json (public.eval_case, stage topic_tag)",
+  "candidate_key": "prod-3.8-flash-medium",
+  "candidate_models": ["gemini-3.8-flash"],
+  "thinking_level": "medium",
+  "max_tokens": 2048,
+  "prompt_files": ["shared/src/prompts/topic_tag.v1.ts"],
+  "syllabi": ["cambridge 9709", "cambridge 9231", "cambridge 9702", "cambridge 9618"],
+  "cases": 50,
+  "real_cases": 45,
+  "control_cases": 5,
+  "metrics": {
+    "schema_valid": "50/50",
+    "primary_hit": "45/45",
+    "strong_tags": 57,
+    "wrong_strong_tags": 0,
+    "strong_precision": 1.0,
+    "controls_without_strong_tag": "5/5",
+    "abstained_on_real_cases": 0,
+    "model_calls": 50,
+    "failed_calls": 0,
+    "latency_ms_p50": 2366,
+    "latency_ms_p95": 4566,
+    "cost_usd_total": 0.362779
+  },
+  "thresholds": {
+    "schema_valid_min": 0.98,
+    "primary_hit_min": 0.80,
+    "strong_precision_min": 0.85,
+    "strong_tags_on_controls_max": 0
+  },
+  "human_labelled_extraction": false,
+  "release_gate_extraction": false,
+  "notes": "Topic tagging only; no extraction stage is gated. Questions are invented (no board question text). Expected labels are drafts written by Claude and await owner confirmation; the database row public.eval_run 7ca49ba7-6f11-4d11-b212-416d7d1987d1 holds per-case outputs in public.eval_case_result."
+}
