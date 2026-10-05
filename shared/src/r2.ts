@@ -82,8 +82,11 @@ export async function presignPut(env: Env, bucket: BucketKind, key: string, cont
 export function stagingKey(key: string): string { return key + ".pending"; }
 
 /**
- * Validate the metadata and body from one GET, then conditionally create the
- * immutable canonical object. A reused PUT URL can only replace staging bytes.
+ * Validate the staging object, then conditionally create the immutable
+ * canonical object. The common first-confirmation path deliberately avoids
+ * HEAD requests: R2 PUT already returns the created object's metadata. A HEAD
+ * is only needed for idempotent retries, suspicious replay bytes, or a
+ * concurrent confirmation that wins the conditional create race.
  */
 export async function sealUpload(env: Env, bucket: BucketKind, key: string, expectedBytes: number, maxBytes: number): Promise<HeadResult | null> {
   const b = binding(env, bucket);
@@ -93,22 +96,42 @@ export async function sealUpload(env: Env, bucket: BucketKind, key: string, expe
       throw new Error("The uploaded file is too large or arrived incomplete");
     }
   };
-  // Idempotent confirmation retries never replace the canonical object.
-  const existing = await b.head(key);
-  if (existing) {
+
+  const object = await b.get(pending);
+  if (!object) {
+    // Idempotent confirmation retry: staging was already consumed. A single
+    // canonical HEAD proves the exact immutable object that was sealed before.
+    const existing = await b.head(key);
+    if (!existing) return null;
     validateSize(existing.size);
-    await b.delete(pending);
     return { bytes: existing.size, etag: existing.etag, contentType: existing.httpMetadata?.contentType ?? null };
   }
-  const object = await b.get(pending);
-  if (!object) return null;
+
   try {
-    validateSize(object.size);
-    await b.put(key, object.body, {
+    try {
+      validateSize(object.size);
+    } catch (stagingError) {
+      // A PUT capability can be reused after a successful seal. Bad replay
+      // bytes must never make an already-confirmed immutable object look lost.
+      // This exceptional path pays for one HEAD; normal first confirmation
+      // still performs no HEAD at all.
+      const existing = await b.head(key);
+      if (!existing) throw stagingError;
+      validateSize(existing.size);
+      return { bytes: existing.size, etag: existing.etag, contentType: existing.httpMetadata?.contentType ?? null };
+    }
+
+    const created = await b.put(key, object.body, {
       onlyIf: { etagDoesNotMatch: "*" },
       httpMetadata: object.httpMetadata,
     });
-    // Concurrent confirmations may race, but only one can create this key.
+    if (created) {
+      validateSize(created.size);
+      return { bytes: created.size, etag: created.etag, contentType: created.httpMetadata?.contentType ?? null };
+    }
+
+    // Concurrent confirmations may race, but only one can create this key. If
+    // our conditional write lost, verify the winner rather than retransmitting.
     const canonical = await b.head(key);
     if (!canonical) throw new Error("The uploaded file could not be sealed");
     validateSize(canonical.size);
