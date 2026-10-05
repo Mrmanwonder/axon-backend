@@ -25,6 +25,8 @@ export interface Env {
 
   // Live web grounding for Gemini custom tools. Secrets are bound per Worker.
   TAVILY_API_KEY?: string;
+  // Second live-web engine beside Tavily (search + page scrape).
+  FIRECRAWL_API_KEY?: string;
   // Where the sweep worker posts spend alerts (AXO-124). Unset: alerts wait in cost_alert.
   ALERT_WEBHOOK_URL?: string;
   // Optional Tavily project identifier for usage attribution.

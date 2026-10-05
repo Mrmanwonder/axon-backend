@@ -10,7 +10,7 @@
   // owner, never by this repo's tooling.
   //
   // Secrets, set with `wrangler secret put` (never committed): GOOGLE_API_KEY, AXON_INTERNAL_TOKEN,
-  // AXON_ADMIN_TOKEN, AXON_PSEUDONYM_KEY, SUPABASE_SECRET_KEY; optional TAVILY_API_KEY.
+  // AXON_ADMIN_TOKEN, AXON_PSEUDONYM_KEY, SUPABASE_SECRET_KEY; optional TAVILY_API_KEY, FIRECRAWL_API_KEY.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "axon-intelligence",
   "main": "src/index.ts",
