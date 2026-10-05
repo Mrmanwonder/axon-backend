@@ -852,7 +852,14 @@ async function reviewComplete(req: Request, env: Env): Promise<Response> {
       (regionId) => ({ body: { run_id: body.run_id, region_id: regionId } }),
     );
   }
-  return json({ run_id: body.run_id, explaining: begin?.queued ?? 0 });
+  // An unmarked Cambridge paper accepted for a scheme check (owner decision,
+  // 6 Oct 2026): one message checks the whole paper, fetching its scheme once.
+  const { data: routed } = await admin.from("extraction_run").select("tier_routing").eq("id", body.run_id).maybeSingle();
+  const schemeCheck = !!(routed as any)?.tier_routing?.scheme_check;
+  if (schemeCheck && env.EXPLAIN_QUEUE) {
+    await env.EXPLAIN_QUEUE.send({ scheme_check: { run_id: body.run_id } });
+  }
+  return json({ run_id: body.run_id, explaining: begin?.queued ?? 0, checking: schemeCheck });
 }
 
 // AXO-124: the student's "try again" on a question whose explanation failed. Ownership is checked
