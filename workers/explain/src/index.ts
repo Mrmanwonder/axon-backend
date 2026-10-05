@@ -23,6 +23,7 @@ import type { Env } from "@mastery/shared/env.js";
 import { runExplainEvalCase, type EvalExplainMessage } from "@mastery/shared/eval/explain-run.js";
 import { tagRegion, failTopicTag, type TopicTagMessage } from "@mastery/shared/topic_tag.js";
 import { runTopicTagEvalCase, type EvalTopicTagMessage } from "@mastery/shared/eval/topic-tag-run.js";
+import { runSchemeCheck, failSchemeCheck, type SchemeCheckMessage } from "@mastery/shared/scheme_check.js";
 
 interface PipelineExplainMessage {
   run_id: string;
@@ -35,7 +36,9 @@ interface PipelineExplainMessage {
 // A topic_tag message (syllabus heatmap) is queued by the sweep. It shares this
 // queue and worker because this worker holds the model key; it never touches
 // explain_status.
-type ExplainMessage = PipelineExplainMessage | EvalExplainMessage | TopicTagMessage | EvalTopicTagMessage;
+// A scheme_check message checks one whole unmarked Cambridge paper (owner
+// decision, 6 Oct 2026); it writes paper_check/region_check only.
+type ExplainMessage = PipelineExplainMessage | EvalExplainMessage | TopicTagMessage | EvalTopicTagMessage | SchemeCheckMessage;
 
 // Tier 2 is used only after exact assessment identity + exact question-label
 // resolution against an authorized stored official scheme. Any unresolved Tier
@@ -44,6 +47,9 @@ const handler = consumeQueue<ExplainMessage>(
   async ({ env, sb, msg, attempt, beat }) => {
     if ("eval" in msg) return { detail: await runExplainEvalCase({ env, sb, message: msg.eval }) };
     if ("eval_topic_tag" in msg) return { detail: await runTopicTagEvalCase({ env, sb, message: msg.eval_topic_tag }) };
+    if ("scheme_check" in msg) {
+      return { detail: await runSchemeCheck({ env, sb, runId: msg.scheme_check.run_id, attempt }) };
+    }
     if ("topic_tag" in msg) {
       return { detail: await tagRegion({ env, sb, regionId: msg.topic_tag.region_id, documentId: msg.topic_tag.document_id, attempt }) };
     }
@@ -349,6 +355,7 @@ const handler = consumeQueue<ExplainMessage>(
     // A failed eval message has no region to fail; the eval case result records its own failure.
     if ("eval" in msg || "eval_topic_tag" in msg) return;
     if ("topic_tag" in msg) { await failTopicTag(sb, msg, error); return; }
+    if ("scheme_check" in msg) { await failSchemeCheck(sb, msg, error); return; }
     await mustOk(
       sb.from("question_region")
         .update({ explain_status: "failed", explain_failure_reason: failureCodeFor("explain", error) })

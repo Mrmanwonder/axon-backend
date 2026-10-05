@@ -1,4 +1,5 @@
-import { mustData, mustMaybe } from "@mastery/shared/db.js";
+import { mustData, mustMaybe, mustOk } from "@mastery/shared/db.js";
+import { cambridgeSchemeRef, locateScheme } from "@mastery/shared/cambridge_scheme.js";
 import { pipelineWrite } from "@mastery/shared/pipeline_write.js";
 import { callModel } from "@mastery/shared/model-client.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
@@ -147,7 +148,21 @@ const handler = consumeQueue<TriageMessage>(
       parsed = { ...parsed, classification: "graded_exam" };
     }
 
-    if (parsed.classification !== "graded_exam") {
+    // Owner decision (6 Oct 2026): an UNMARKED Cambridge past paper whose
+    // exact code is printed is checked against that paper's own mark scheme
+    // instead of being refused. Only when the code resolves to one scheme file
+    // and a copy of that exact file can be located; otherwise the usual refusal.
+    let schemeCheck: { ref: NonNullable<ReturnType<typeof cambridgeSchemeRef>>; candidates: string[] } | null = null;
+    if (parsed.classification === "ungraded_paper") {
+      const ref = cambridgeSchemeRef(parsed.assessment_identity);
+      if (ref) {
+        const candidates = await locateScheme(env, ref);
+        if (candidates.length) schemeCheck = { ref, candidates };
+        else console.info("unmarked Cambridge paper: no scheme copy located", ref.filename);
+      }
+    }
+
+    if (parsed.classification !== "graded_exam" && !schemeCheck) {
       const isUncertainReject = parsed.classification === "not_schoolwork" && parsed.confidence === "low";
       const reason = (isUncertainReject && qualityFailureMessage(sampledPages)) || REJECTION_REASON[parsed.classification];
       await pipelineWrite(sb, runId, "triage_reject", { reason });
@@ -175,8 +190,16 @@ const handler = consumeQueue<TriageMessage>(
       fallback: parsed.ink_colour !== "red" ? "non_red_marking" : null,
       assessment_identity_id: resolvedAssessment?.id ?? null,
       tier_routing: { triage: parsed, assessment_identity_id: resolvedAssessment?.id ?? null,
-        assessment_identity_status: resolvedAssessment ? "exact" : "unresolved" },
+        assessment_identity_status: resolvedAssessment ? "exact" : "unresolved",
+        ...(schemeCheck ? { scheme_check: schemeCheck } : {}) },
     })) return { detail: { skipped: "stale triage result" } };
+    if (schemeCheck) {
+      // Filename only; the scheme itself is never stored.
+      await mustOk(sb.from("paper_check").upsert({
+        run_id: runId, paper_id: run.paper_id, student_id: run.student_id,
+        paper_label: schemeCheck.ref.label, scheme_ref: schemeCheck.ref.filename, status: "queued",
+      }, { onConflict: "run_id" }), "paper_check insert");
+    }
     const pagesDispatched = await enqueueStructure(env, sb, runId, run.paper_id);
 
     // Recorded so §7.7's "triage latency drops to single-digit seconds" can be
@@ -191,6 +214,7 @@ const handler = consumeQueue<TriageMessage>(
         second_look: secondLook,
         student_says_marked: studentSaysMarked,
         assessment_identity: resolvedAssessment?.id ?? null,
+        scheme_check: schemeCheck?.ref.filename ?? null,
       },
     };
   },
