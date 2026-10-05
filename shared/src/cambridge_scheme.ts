@@ -106,24 +106,8 @@ async function postJson(url: string, key: string, body: unknown, timeoutMs: numb
   }
 }
 
-/**
- * Candidate URLs for exactly this file, best first. Both engines search the
- * quoted filename in parallel; only URLs whose path ends in that exact filename
- * survive. A bestexamhelp URL is also derived from the subject slug other
- * mirrors use, since that host serves the raw PDF.
- */
-export async function locateScheme(env: Env, ref: SchemeRef): Promise<string[]> {
-  const query = `"${ref.filename}"`;
-  const [fc, tv] = await Promise.all([
-    env.FIRECRAWL_API_KEY ? postJson(`${FIRECRAWL_API}/search`, env.FIRECRAWL_API_KEY, { query, limit: 10, sources: ["web"] }, SEARCH_TIMEOUT_MS) : null,
-    env.TAVILY_API_KEY ? postJson(`${TAVILY_API}/search`, env.TAVILY_API_KEY, { query, max_results: 10, search_depth: "basic", include_raw_content: false }, SEARCH_TIMEOUT_MS) : null,
-  ]);
-  const urls: string[] = [];
-  for (const row of [...(fc?.data?.web ?? []), ...(tv?.results ?? [])]) {
-    const url = publicWebUrl(row?.url);
-    if (url) urls.push(url);
-  }
-
+function candidatesFrom(rawUrls: unknown[], ref: SchemeRef): string[] {
+  const urls = rawUrls.map((u) => publicWebUrl(u)).filter((u): u is string => !!u);
   const exact = urls.filter((u) => endsWithFile(u, ref.filename));
   const derived: string[] = [];
   for (const u of urls) {
@@ -145,6 +129,27 @@ export async function locateScheme(env: Env, ref: SchemeRef): Promise<string[]> 
   return [...new Set(ordered)].slice(0, 4);
 }
 
+/**
+ * Candidate URLs for exactly this file, best first. One engine at a time
+ * (owner, 6 Oct 2026): Tavily searches the quoted filename; Firecrawl is asked
+ * only if Tavily finds no copy. Only URLs whose path ends in that exact
+ * filename survive; a bestexamhelp URL is also derived from the subject slug
+ * other mirrors use, since that host serves the raw PDF.
+ */
+export async function locateScheme(env: Env, ref: SchemeRef): Promise<string[]> {
+  const query = `"${ref.filename}"`;
+  if (env.TAVILY_API_KEY) {
+    const tv = await postJson(`${TAVILY_API}/search`, env.TAVILY_API_KEY, { query, max_results: 10, search_depth: "basic", include_raw_content: false }, SEARCH_TIMEOUT_MS);
+    const found = candidatesFrom((tv?.results ?? []).map((r: any) => r?.url), ref);
+    if (found.length) return found;
+  }
+  if (env.FIRECRAWL_API_KEY) {
+    const fc = await postJson(`${FIRECRAWL_API}/search`, env.FIRECRAWL_API_KEY, { query, limit: 10, sources: ["web"] }, SEARCH_TIMEOUT_MS);
+    return candidatesFrom((fc?.data?.web ?? []).map((r: any) => r?.url), ref);
+  }
+  return [];
+}
+
 /** The PDF's own text must name this exact paper before it is trusted. */
 export function documentMatches(markdown: string, ref: SchemeRef): boolean {
   const text = markdown.replace(/\s+/g, " ");
@@ -163,19 +168,35 @@ export interface FetchedScheme { ref: SchemeRef; markdown: string; sourceHost: s
  * cache (maxAge) serves repeat reads, so Axon keeps no copy.
  */
 export async function fetchCambridgeScheme(env: Env, ref: SchemeRef, candidates?: string[]): Promise<FetchedScheme | null> {
-  if (!env.FIRECRAWL_API_KEY) return null;
+  if (!env.FIRECRAWL_API_KEY && !env.TAVILY_API_KEY) return null;
   const urls = candidates ?? await locateScheme(env, ref);
   for (const url of urls) {
+    const markdown = await readSchemePdf(env, url);
+    if (!markdown || !documentMatches(markdown, ref)) continue;
+    return { ref, markdown, sourceHost: new URL(url).hostname };
+  }
+  return null;
+}
+
+/**
+ * Read one scheme PDF as text. One engine at a time: Firecrawl first here,
+ * because its PDF parser keeps the scheme's table rows (the per-question
+ * split depends on them); Tavily extract only if Firecrawl cannot read it.
+ */
+async function readSchemePdf(env: Env, url: string): Promise<string | null> {
+  if (env.FIRECRAWL_API_KEY) {
     const res = await postJson(`${FIRECRAWL_API}/scrape`, env.FIRECRAWL_API_KEY, {
       url, formats: ["markdown"], parsers: ["pdf"], onlyMainContent: false,
       maxAge: 7 * 24 * 3600 * 1000, timeout: SCRAPE_TIMEOUT_MS,
     }, SCRAPE_TIMEOUT_MS + 5_000);
     const markdown: unknown = res?.data?.markdown;
     const type = String(res?.data?.metadata?.contentType ?? "");
-    if (typeof markdown !== "string" || !markdown.trim()) continue;
-    if (type && !type.includes("pdf")) continue;
-    if (!documentMatches(markdown, ref)) continue;
-    return { ref, markdown, sourceHost: new URL(url).hostname };
+    if (typeof markdown === "string" && markdown.trim() && (!type || type.includes("pdf"))) return markdown;
+  }
+  if (env.TAVILY_API_KEY) {
+    const res = await postJson(`${TAVILY_API}/extract`, env.TAVILY_API_KEY, { urls: [url], extract_depth: "advanced", format: "markdown" }, SCRAPE_TIMEOUT_MS);
+    const text: unknown = res?.results?.[0]?.raw_content;
+    if (typeof text === "string" && text.trim()) return text;
   }
   return null;
 }
@@ -200,7 +221,8 @@ export function schemeSections(markdown: string): Map<number, string> {
   let highest = 0;
   const startOf = (line: string): number | null => {
     const cell = line.replace(/^\s*\|?\s*/, "").replace(/\*\*/g, "");
-    const m = cell.match(/^(\d{1,2})(?:\s*\(\s*[a-z]{1,4}\s*\))*\s*(?:\||$|\s{2,})/i);
+    const m = cell.match(/^(\d{1,2})(?:\s*\(\s*[a-z]{1,4}\s*\))*\s*(?:\||$|\s{2,})/i)
+      ?? cell.match(/^(\d{1,2})(?:\s*\(\s*[a-z]{1,4}\s*\))+\s/i);
     return m ? Number(m[1]) : null;
   };
   for (const line of lines) {

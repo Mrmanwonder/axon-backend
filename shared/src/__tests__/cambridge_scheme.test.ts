@@ -71,19 +71,42 @@ test("sections split on question rows and ignore the preamble", () => {
   assert.equal(topLevelNumber("(b)"), null);
 });
 
-test("locate keeps only URLs for the exact file and prefers the raw-PDF mirror", async () => {
-  globalThis.fetch = (async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input).includes("firecrawl")
-    ? { data: { web: [
-        { url: "https://pastpapers.co/caie/a-level/mathematics-further-9231/2025-oct-nov/9231_w25_ms_11.pdf" },
-        { url: "https://example.org/9231_w25_ms_12.pdf" },
-        { url: "https://studyhatch.com/Past-Papers/Subject?code=9231" },
-      ] } }
-    : { results: [{ url: "https://bestexamhelp.com/exam/cambridge-international-a-level/mathematics-further-9231/2025/9231_w25_ms_11.pdf" }] }),
-    { status: 200 })) as typeof fetch;
+test("locate asks Tavily first and stops when it finds the exact file", async () => {
+  const hosts: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    hosts.push(new URL(String(input)).hostname);
+    return new Response(JSON.stringify({ results: [
+      { url: "https://bestexamhelp.com/exam/cambridge-international-a-level/mathematics-further-9231/2025/9231_w25_ms_11.pdf" },
+      { url: "https://example.org/9231_w25_ms_12.pdf" },
+    ] }), { status: 200 });
+  }) as typeof fetch;
   const urls = await locateScheme({ FIRECRAWL_API_KEY: "f", TAVILY_API_KEY: "t" } as any, cambridgeSchemeRef(id())!);
-  assert.equal(urls[0], "https://bestexamhelp.com/exam/cambridge-international-a-level/mathematics-further-9231/2025/9231_w25_ms_11.pdf");
-  assert.ok(urls.includes("https://pastpapers.co/caie/a-level/mathematics-further-9231/2025-oct-nov/9231_w25_ms_11.pdf"));
-  assert.ok(!urls.some((u) => u.includes("_ms_12")));
+  assert.deepEqual(hosts, ["api.tavily.com"]);
+  assert.deepEqual(urls, ["https://bestexamhelp.com/exam/cambridge-international-a-level/mathematics-further-9231/2025/9231_w25_ms_11.pdf"]);
+});
+
+test("locate falls back to Firecrawl, keeps only the exact file and derives the raw-PDF mirror", async () => {
+  const hosts: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    hosts.push(new URL(String(input)).hostname);
+    return new Response(JSON.stringify(String(input).includes("firecrawl")
+      ? { data: { web: [
+          { url: "https://pastpapers.co/caie/a-level/mathematics-further-9231/2025-oct-nov/9231_w25_ms_11.pdf" },
+          { url: "https://example.org/9231_w25_ms_12.pdf" },
+        ] } }
+      : { results: [] }), { status: 200 });
+  }) as typeof fetch;
+  const urls = await locateScheme({ FIRECRAWL_API_KEY: "f", TAVILY_API_KEY: "t" } as any, cambridgeSchemeRef(id())!);
+  assert.deepEqual(hosts, ["api.tavily.com", "api.firecrawl.dev"]);
+  assert.deepEqual(urls, [
+    "https://bestexamhelp.com/exam/cambridge-international-a-level/mathematics-further-9231/2025/9231_w25_ms_11.pdf",
+    "https://pastpapers.co/caie/a-level/mathematics-further-9231/2025-oct-nov/9231_w25_ms_11.pdf",
+  ]);
+});
+
+test("plain-text scheme rows (Tavily extract) still split by question", () => {
+  const s = schemeSections(["1(a) x = 2 B1", "1(b) y M1", "2(a) z B1"].join("\n"));
+  assert.deepEqual([...s.keys()], [1, 2]);
 });
 
 const scheme = "| 2(a) | Differentiates using the product rule and simplifies to the stated form | M1 | Allow sign errors in the second term |";
