@@ -1,7 +1,7 @@
 import { runAcademicTools } from "../../academic/tools";
 import { resolveStableKnowledge } from "../../academic/stable-knowledge";
 import { assembleContext } from "../context";
-import { detectContradictions, detectEvidenceConflicts, verifyClaims } from "../claims/verifier";
+import { detectContradictions, detectEvidenceConflicts, isVerifiedReference, verifyClaims } from "../claims/verifier";
 import { renderReasoning } from "../pedagogy/renderer";
 import { ModelRouter, classifyRisk } from "../routing/router";
 import { NoCompliantProviderError } from "../routing/privacy";
@@ -145,7 +145,10 @@ export class TutorOrchestrator {
     }
     const verifiedClaims = verifyClaims(reasoning.claims, context).claims;
     const verifiedReasoning: ReasoningResult = { ...reasoning, claims: verifiedClaims };
-    const citations = context.filter((item) => retrievedEvidenceIds.has(item.id) && item.provenance.url).map((item) => ({ title: typeof item.value === "object" && item.value !== null && "title" in item.value ? String(item.value.title) : item.provenance.url ?? "Source", url: item.provenance.url ?? "" }));
+    const citations = [
+      ...context.filter((item) => retrievedEvidenceIds.has(item.id) && item.provenance.url).map((item) => ({ title: typeof item.value === "object" && item.value !== null && "title" in item.value ? String(item.value.title) : item.provenance.url ?? "Source", url: item.provenance.url ?? "" })),
+      ...referenceCitations(verifiedClaims, context),
+    ];
     this.emit({ traceId, intent, provider: route.provider, requestedModel: modelResponse.requestedModel, servedModel: modelResponse.servedModel, thinkingLevel: route.thinkingLevel, promptId: compiled.id, promptHash: compiled.promptHash, schemaId: compiled.schemaId, schemaHash: compiled.schemaHash, toolCalls: this.toolNames(decisions), retrievalUsed: decisions.retrieval, groundingUsed: retrievedEvidenceIds.size > 0, verificationStatus: "verified", verificationFailures: [], repairAttempted: repaired, answerStatus: verifiedReasoning.status, latencyMs: totalLatencyMs, inputTokens, outputTokens, usageIncomplete, transportSuccess: true, schemaSuccess: true, semanticValidationSuccess: true, evidence: context, claims: verifiedClaims });
     return { traceId, status: verifiedReasoning.status, answer: renderReasoning(verifiedReasoning, resolveTutorDepth(request)), citations, verification: { passed: true, repaired, failures: [] } };
   }
@@ -189,6 +192,32 @@ export class TutorOrchestrator {
       return { failures: [`${code}: verifier did not produce a trustworthy verdict`], latencyMs: response?.latencyMs ?? 0, inputTokens: response?.usage.inputTokens ?? 0, outputTokens: response?.usage.outputTokens ?? 0, usageIncomplete: !response || response.usage.inputTokens == null || response.usage.outputTokens == null };
     }
   }
+}
+
+/**
+ * Verified scheme/syllabus records the answer actually relied on, shown to the
+ * student as sources. Only records a verified claim cites, each once, so a
+ * citation always means "this answer used this exact document version".
+ */
+export function referenceCitations(claims: readonly Claim[], context: readonly Evidence[]): TutorResponse["citations"] {
+  const cited = new Set(claims.filter((claim) => claim.verificationStatus === "verified").flatMap((claim) => claim.evidenceIds));
+  const out: TutorResponse["citations"] = [];
+  const seen = new Set<string>();
+  for (const item of context) {
+    if (!cited.has(item.id) || !isVerifiedReference(item) || !item.provenance.url) continue;
+    const value = (typeof item.value === "object" && item.value !== null ? item.value : {}) as Record<string, unknown>;
+    const text = (key: string): string => typeof value[key] === "string" ? value[key].trim() : "";
+    const title = value["kind"] === "official_marking_scheme"
+      ? `Official marking scheme · ${text("schemeSource")} ${text("schemeVersion")}`.trim()
+      : value["kind"] === "syllabus_objective"
+        ? `Syllabus ${text("syllabus")} · ${text("code")}`.trim()
+        : "Verified source";
+    const key = `${title}|${item.provenance.url}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ title, url: item.provenance.url });
+  }
+  return out;
 }
 
 export function hintPolicyFailures(result: ReasoningResult): string[] {
