@@ -30,7 +30,9 @@ service = "axon-intelligence"
 # SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL,
 # AXON_INTERNAL_TOKEN
 
-# AXO-188: promote only after measured validation; either value 0 rolls back.
+# AXO-188: batch uploads (windows, 3 parallel PUTs) and originals after submit.
+# Turned on for everyone at the owner's request on 5 Oct 2026, after the legacy
+# path took about 2 minutes for a 12-page paper (AXO-196). Either value 0 rolls back.
 [vars]
-UPLOAD_BATCH_PERCENT = "0"
-UPLOAD_ORIGINALS_PERCENT = "0"
+UPLOAD_BATCH_PERCENT = "100"
+UPLOAD_ORIGINALS_PERCENT = "100"
