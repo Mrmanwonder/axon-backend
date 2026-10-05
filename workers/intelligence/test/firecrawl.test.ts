@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CombinedRetrievalService, FirecrawlRetrievalService } from "../src/providers/firecrawl";
+import { FallbackRetrievalService, FirecrawlRetrievalService } from "../src/providers/firecrawl";
 import type { Evidence } from "../src/schemas";
 import type { RetrievalService } from "../src/intelligence/retrieval/types";
 
@@ -40,25 +40,29 @@ const ev = (url: string, authority: Evidence["authority"]): Evidence => ({
 });
 const svc = (impl: () => Promise<Evidence[]>): RetrievalService => ({ retrieve: impl });
 
-describe("CombinedRetrievalService", () => {
-  it("merges both engines by URL and keeps the higher-authority copy", async () => {
-    const combined = new CombinedRetrievalService([
-      svc(async () => [ev("https://a.org/x", "derived"), ev("https://b.gov/y", "primary")]),
-      svc(async () => [ev("https://a.org/x/", "secondary"), ev("https://c.edu/z", "secondary")]),
-    ]);
-    const out = await combined.retrieve({ query: "q", purpose: "current_fact", maxSources: 5 });
-    expect(out.map((e) => [e.provenance.url, e.authority])).toEqual([
-      ["https://b.gov/y", "primary"], ["https://a.org/x/", "secondary"], ["https://c.edu/z", "secondary"],
-    ]);
+describe("FallbackRetrievalService", () => {
+  it("uses only the first engine when it answers", async () => {
+    const second = vi.fn(async () => [ev("https://c.edu/z", "secondary")]);
+    const out = await new FallbackRetrievalService([svc(async () => [ev("https://b.gov/y", "primary")]), svc(second)]).retrieve({ query: "q", purpose: "current_fact" });
+    expect(out.map((e) => e.provenance.url)).toEqual(["https://b.gov/y"]);
+    expect(second).not.toHaveBeenCalled();
   });
 
-  it("one engine failing still answers from the other", async () => {
-    const combined = new CombinedRetrievalService([svc(async () => { throw new Error("RETRIEVAL_FAILURE tavily 503"); }), svc(async () => [ev("https://b.gov/y", "primary")])]);
-    expect(await combined.retrieve({ query: "q", purpose: "current_fact" })).toHaveLength(1);
+  it("falls back when the first engine fails", async () => {
+    const out = await new FallbackRetrievalService([svc(async () => { throw new Error("RETRIEVAL_FAILURE tavily 503"); }), svc(async () => [ev("https://b.gov/y", "primary")])]).retrieve({ query: "q", purpose: "current_fact" });
+    expect(out).toHaveLength(1);
   });
 
-  it("all engines failing is reported, never papered over", async () => {
-    const combined = new CombinedRetrievalService([svc(async () => { throw new Error("RETRIEVAL_FAILURE a"); }), svc(async () => { throw new Error("RETRIEVAL_FAILURE b"); })]);
-    await expect(combined.retrieve({ query: "q", purpose: "current_fact" })).rejects.toThrow("RETRIEVAL_FAILURE a");
+  it("falls back when the first engine returns nothing usable", async () => {
+    const out = await new FallbackRetrievalService([
+      svc(async () => [ev("https://bestexamhelp.com/x/9231_w25_ms_11.pdf", "derived")]),
+      svc(async () => [ev("https://c.edu/z", "secondary")]),
+    ]).retrieve({ query: "q", purpose: "current_fact" });
+    expect(out.map((e) => e.provenance.url)).toEqual(["https://c.edu/z"]);
+  });
+
+  it("every engine failing is reported, never papered over", async () => {
+    const all = new FallbackRetrievalService([svc(async () => { throw new Error("RETRIEVAL_FAILURE a"); }), svc(async () => { throw new Error("RETRIEVAL_FAILURE b"); })]);
+    await expect(all.retrieve({ query: "q", purpose: "current_fact" })).rejects.toThrow("RETRIEVAL_FAILURE a");
   });
 });

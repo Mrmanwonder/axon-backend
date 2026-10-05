@@ -10,7 +10,7 @@
 // restricted to URLs returned by a preceding search in the same model call.
 
 import type { Env } from "./env.js";
-import { firecrawlScrape, firecrawlSearch, isRestrictedSchemeUrl, mergeWebResults, type WebResult } from "./web_sources.js";
+import { firecrawlScrape, firecrawlSearch, isRestrictedSchemeUrl, type WebResult } from "./web_sources.js";
 
 const TAVILY_API = "https://api.tavily.com";
 const MAX_SEARCH_RESULTS = 5;
@@ -248,9 +248,9 @@ async function tavilySearch(env: Env, query: string, timeRange: string | undefin
 }
 
 /**
- * Tavily and Firecrawl run in parallel on the same server-authored query; the
- * merged list is deduplicated, interleaved and filtered for restricted scheme
- * sources. Either engine alone is enough; both failing is the only error.
+ * One engine at a time (owner, 6 Oct 2026): Tavily answers; Firecrawl is asked
+ * only when Tavily is unconfigured, fails, or returns nothing usable after the
+ * scheme filter. Both missing or failing is the only error.
  */
 async function search(env: Env, args: Json, searchContext: string): Promise<Json> {
   const query = normaliseSearchContext(searchContext);
@@ -261,15 +261,13 @@ async function search(env: Env, args: Json, searchContext: string): Promise<Json
     ? String(args.time_range)
     : undefined;
 
-  const [fromTavily, fromFirecrawl] = await Promise.all([
-    tavilySearch(env, query, timeRange),
-    env.FIRECRAWL_API_KEY
-      ? firecrawlSearch(env, query, { limit: MAX_SEARCH_RESULTS, timeRange, publicUrl: publicWebUrl })
-      : Promise.resolve([] as WebResult[]),
-  ]);
-  const results = mergeWebResults(fromTavily.results, fromFirecrawl, MAX_SEARCH_RESULTS);
-  if (!results.length && fromTavily.error && !fromFirecrawl.length) return { error: fromTavily.error };
-  return { results };
+  const primary = await tavilySearch(env, query, timeRange);
+  if (primary.results.length) return { results: primary.results.slice(0, MAX_SEARCH_RESULTS), engine: "tavily" };
+  const fallback: WebResult[] = env.FIRECRAWL_API_KEY
+    ? await firecrawlSearch(env, query, { limit: MAX_SEARCH_RESULTS, timeRange, publicUrl: publicWebUrl })
+    : [];
+  if (fallback.length) return { results: fallback.slice(0, MAX_SEARCH_RESULTS), engine: "firecrawl" };
+  return primary.error ? { error: primary.error } : { results: [] };
 }
 
 async function extract(env: Env, args: Json, allowedUrls: Iterable<string>): Promise<Json> {
