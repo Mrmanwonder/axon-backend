@@ -3,6 +3,7 @@ import { deleteObject, deletePrefix, type BucketKind } from "@mastery/shared/r2.
 import type { Env } from "@mastery/shared/env.js";
 import { deliverCostAlerts, type CostAlertRow } from "@mastery/shared/cost_alerts.js";
 import { runTutorPurges } from "@mastery/shared/tutor_purge.js";
+import { queueTopicTagWork } from "@mastery/shared/topic_tag.js";
 
 const KEYS_PER_TICK = 200;
 const CLAIMS_PER_TICK = 20;
@@ -73,6 +74,26 @@ export default {
       );
     } catch (cause) {
       console.error("tutor purge failed", String(cause).slice(0, 200));
+    }
+
+    // Syllabus topic tags for the heatmap: any committed question on a paper
+    // with a subject and a loaded syllabus that has not been tagged against it.
+    if (env.EXPLAIN_QUEUE) {
+      try {
+        const queued = await queueTopicTagWork({
+          async claim(limit) {
+            const { data, error } = await sb.rpc("claim_topic_tag_work", { p_limit: limit });
+            if (error) throw new Error(error.message);
+            return (data ?? []) as Array<{ region_id: string; document_id: string }>;
+          },
+          async send(messages) {
+            await env.EXPLAIN_QUEUE!.sendBatch(messages.map((body) => ({ body })));
+          },
+        });
+        if (queued) console.info("topic tags queued", queued);
+      } catch (cause) {
+        console.error("topic tag queueing failed", String(cause).slice(0, 200));
+      }
     }
 
     const { data: claims, error: claimError } = await sb.rpc("claim_deletions", { p_limit: CLAIMS_PER_TICK });
