@@ -51,7 +51,7 @@
     },
     "shared/src/prompts/topic_tag.v1.ts": {
       "sha256": "5cf9ca29e1eb78cea93803a5edbcf39af5af81c7d86ae4ed2ecceb3e5593fe82",
-      "eval_run": "baseline-2026-10-02"
+      "eval_run": "e45f9a23-4562-4321-9876-123456789abc"
     }
   }
 }
