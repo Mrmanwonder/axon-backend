@@ -62,28 +62,26 @@ export class FirecrawlRetrievalService implements RetrievalService {
 }
 
 /**
- * Runs every configured engine in parallel and merges by URL, keeping the
- * higher-authority copy. One engine failing is tolerated; all failing throws
- * the first error, so "no reliable source" is still reported, never guessed.
+ * One engine at a time (owner, 6 Oct 2026). The first service answers; the
+ * next is tried only when it throws or returns no usable evidence. A later
+ * engine never runs alongside an earlier one. If every engine fails, the
+ * first error is reported, so "no reliable source" is still said, never guessed.
  */
-export class CombinedRetrievalService implements RetrievalService {
+export class FallbackRetrievalService implements RetrievalService {
   constructor(readonly services: readonly RetrievalService[]) {}
 
   async retrieve(request: RetrievalRequest): Promise<Evidence[]> {
-    const settled = await Promise.allSettled(this.services.map((service) => service.retrieve(request)));
-    const ok = settled.flatMap((item) => item.status === "fulfilled" ? [item.value] : []);
-    if (!ok.length) {
-      const first = settled.find((item): item is PromiseRejectedResult => item.status === "rejected");
-      throw first?.reason instanceof Error ? first.reason : new Error("RETRIEVAL_FAILURE");
+    let firstError: unknown = null;
+    for (const service of this.services) {
+      try {
+        const evidence = (await service.retrieve(request))
+          .filter((item) => !item.provenance.url || !isRestrictedSchemeUrl(item.provenance.url));
+        if (evidence.length) return evidence;
+      } catch (error) {
+        firstError ??= error;
+      }
     }
-    const byUrl = new Map<string, Evidence>();
-    for (const item of ok.flat()) {
-      if (item.provenance.url && isRestrictedSchemeUrl(item.provenance.url)) continue;
-      const key = (item.provenance.url ?? item.id).replace(/\/$/, "").toLowerCase();
-      const existing = byUrl.get(key);
-      if (!existing || RANK[item.authority] > RANK[existing.authority]) byUrl.set(key, item);
-    }
-    const maximum = Math.max(1, Math.min(20, request.maxSources ?? 5));
-    return [...byUrl.values()].sort((a, b) => RANK[b.authority] - RANK[a.authority]).slice(0, maximum);
+    if (firstError) throw firstError instanceof Error ? firstError : new Error("RETRIEVAL_FAILURE");
+    return [];
   }
 }

@@ -43,26 +43,38 @@ test("firecrawl search filters scheme mirrors and reads v2 data.web", async () =
   assert.deepEqual(rows.map((r) => r.url), ["https://en.wikipedia.org/wiki/Matrix"]);
 });
 
-test("web_search queries both engines in parallel and merges them", async () => {
+test("web_search uses Tavily alone when it answers", async () => {
   const hosts: string[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
-    const url = String(input);
-    hosts.push(new URL(url).hostname);
-    if (url.includes("tavily")) return new Response(JSON.stringify({ results: [
+    hosts.push(new URL(String(input)).hostname);
+    return new Response(JSON.stringify({ results: [
       { url: "https://t.org/a", title: "T", content: "t" },
       { url: "https://bestexamhelp.com/9231_w25_ms_11.pdf", title: "MS", content: "ms" },
     ] }), { status: 200 });
-    return new Response(JSON.stringify({ success: true, data: { web: [{ url: "https://f.org/b", title: "F", description: "f" }] } }), { status: 200 });
   }) as typeof fetch;
   const out = await runTavilyTool({ TAVILY_API_KEY: "t", FIRECRAWL_API_KEY: "f" } as any,
     { function: { name: "web_search", arguments: "{}" } }, { searchContext: "Mathematics matrices" });
-  assert.deepEqual(hosts.sort(), ["api.firecrawl.dev", "api.tavily.com"]);
-  assert.deepEqual(out.sources, ["https://t.org/a", "https://f.org/b"]);
+  assert.deepEqual(hosts, ["api.tavily.com"]);
+  assert.deepEqual(out.sources, ["https://t.org/a"]);
 });
 
-test("web_search still works when only one engine is configured or one fails", async () => {
+test("web_search falls back to Firecrawl only when Tavily fails", async () => {
+  const hosts: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    hosts.push(new URL(String(input)).hostname);
+    return String(input).includes("tavily")
+      ? new Response("down", { status: 503 })
+      : new Response(JSON.stringify({ data: { web: [{ url: "https://f.org/b", title: "F", description: "f" }] } }), { status: 200 });
+  }) as typeof fetch;
+  const out = await runTavilyTool({ TAVILY_API_KEY: "t", FIRECRAWL_API_KEY: "f" } as any,
+    { function: { name: "web_search", arguments: "{}" } }, { searchContext: "Physics waves" });
+  assert.deepEqual(hosts, ["api.tavily.com", "api.firecrawl.dev"]);
+  assert.deepEqual(out.sources, ["https://f.org/b"]);
+});
+
+test("web_search falls back when Tavily's only results are filtered out", async () => {
   globalThis.fetch = (async (input: RequestInfo | URL) => String(input).includes("tavily")
-    ? new Response("down", { status: 503 })
+    ? new Response(JSON.stringify({ results: [{ url: "https://bestexamhelp.com/9231_w25_ms_11.pdf", title: "MS", content: "ms" }] }), { status: 200 })
     : new Response(JSON.stringify({ data: { web: [{ url: "https://f.org/b", title: "F", description: "f" }] } }), { status: 200 })) as typeof fetch;
   const out = await runTavilyTool({ TAVILY_API_KEY: "t", FIRECRAWL_API_KEY: "f" } as any,
     { function: { name: "web_search", arguments: "{}" } }, { searchContext: "Physics waves" });
