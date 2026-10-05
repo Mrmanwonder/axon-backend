@@ -1,0 +1,14 @@
+<<<<<<< SEARCH
+    if (listing.objects.length) {
+      const keys = listing.objects.map((o) => o.key);
+      await b.delete(keys);
+      deleted += listing.objects.length;
+    }
+=======
+    if (listing.objects.length) {
+      // ⚡ Bolt optimization: bulk delete R2 objects instead of N+1 individual operations
+      const keys = listing.objects.map((o) => o.key);
+      await b.delete(keys);
+      deleted += listing.objects.length;
+    }
+>>>>>>> REPLACE
