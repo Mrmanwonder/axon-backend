@@ -214,8 +214,20 @@ export function topLevelNumber(label: unknown): number | null {
  * preamble (generic marking principles) is dropped. Returns a map from the
  * question number to its text.
  */
+/**
+ * Index of the first answer-table header ("Question | Answer | Marks"). A
+ * Cambridge scheme opens with numbered generic marking principles laid out as
+ * table rows "| 1 |", "| 2 |"... which look exactly like question rows, so the
+ * question table is only read from its own header onwards.
+ */
+export function firstAnswerTable(lines: string[]): number {
+  return lines.findIndex((l) => /^\W*question\W+answer\W+marks/i.test(l.replace(/\*\*/g, "")));
+}
+
 export function schemeSections(markdown: string): Map<number, string> {
-  const lines = markdown.split(/\r?\n/);
+  const all = markdown.split(/\r?\n/);
+  const header = firstAnswerTable(all);
+  const lines = header >= 0 ? all.slice(header) : all;
   const sections = new Map<number, string[]>();
   let current: number | null = null;
   let highest = 0;
@@ -273,8 +285,8 @@ export function headerMatches(reference: string | null, ref: SchemeRef): boolean
 /** The scheme's opening notes (mark types, abbreviations), capped. */
 export function schemePreamble(markdown: string, max = 3_000): string | null {
   const lines = markdown.split(/\r?\n/);
-  const firstRow = lines.findIndex((l) => /^\s*\|?\s*\**1(?:\s*\(\s*[a-z]{1,4}\s*\))*\s*(?:\||$)/i.test(l));
-  const head = (firstRow > 0 ? lines.slice(0, firstRow) : lines.slice(0, 60)).join("\n");
+  const header = firstAnswerTable(lines);
+  const head = (header > 0 ? lines.slice(0, header) : lines.slice(0, 120)).join("\n");
   const at = head.search(/abbreviation|mark scheme notes|types of mark|\bM marks?\b/i);
   if (at < 0) return null;
   const notes = head.slice(at);

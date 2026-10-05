@@ -127,3 +127,24 @@ test("can_check false carries a reason and no estimate", () => {
   const r = validate({ can_check: false, reason: "Answer unreadable." }, { scheme, marksAvailable: 3 });
   assert.deepEqual([r.canCheck, r.estimatedMarks, r.reason], [false, null, "Answer unreadable."]);
 });
+
+test("numbered marking principles before the answer table are not mistaken for questions", () => {
+  // The layout of a real 9231/11 scheme: principles 1-6 as table rows, then
+  // the answer table with its header (content replaced with X).
+  const md = [
+    "## Generic Marking Principles",
+    "| 1 | X | X |", "| 2 | X | X |", "| 3 | X | X |", "| 4 | X | X |", "| 5 | X | X |", "| 6 | X | X |",
+    "Abbreviations: X",
+    "| Question | Answer | Marks | Guidance |", "|---|---|---|---|",
+    "| 1(a) | X | B1 | X |", "| 1(b) | X | M1 | X |", "| 1(c) | X | A1 | X |",
+    "| Question | Answer | Marks | Guidance |",
+    "| 2(a) | X | B1 | X |", "| 2(d) | X | B1 | X |",
+    "| 3 | X | M1 | X |", "| 3 | X | A1 | X |",
+    "| 4(a) | X | B1 | X |", "| 7(e) | X | B1 | X |",
+  ].join("\n");
+  const s = schemeSections(md);
+  assert.deepEqual([...s.keys()], [1, 2, 3, 4]);
+  assert.match(s.get(1)!, /1\(a\)[\s\S]*1\(c\)/);
+  assert.doesNotMatch(s.get(1)!, /\| 6 \|/);
+  assert.match(s.get(3)!, /M1[\s\S]*A1/);
+});
