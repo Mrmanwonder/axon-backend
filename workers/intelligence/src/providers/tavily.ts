@@ -2,6 +2,7 @@ import type { Evidence } from "../schemas";
 import type { RetrievalRequest, RetrievalService } from "../intelligence/retrieval/types";
 import { readBoundedJsonBody } from "../shared/bounded-json";
 import { minimizePublicRetrievalQuery, oneWayHash } from "../intelligence/security/privacy";
+import { isRestrictedSchemeUrl } from "@mastery/shared/web_sources.js";
 
 interface TavilySearchResult { url: string; title?: string; content?: string; score?: number; published_date?: string }
 interface TavilySearchResponse { results?: TavilySearchResult[] }
@@ -114,7 +115,8 @@ export class TavilyRetrievalService implements RetrievalService {
     const candidates = (search.results ?? [])
       .map((item) => {
         const url = publicRetrievalUrl(item.url);
-        return url ? { ...item, url } : null;
+        // Hard rule 2: no board mark scheme from the open web, ever.
+        return url && !isRestrictedSchemeUrl(url) ? { ...item, url } : null;
       })
       .filter((item): item is TavilySearchResult => item !== null && (item.score ?? 0) >= 0.35)
       .filter((item) => !request.requiredFreshness || Boolean(item.published_date && Date.parse(item.published_date) >= Date.parse(request.requiredFreshness)))

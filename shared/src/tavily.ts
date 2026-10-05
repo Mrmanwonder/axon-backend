@@ -10,6 +10,7 @@
 // restricted to URLs returned by a preceding search in the same model call.
 
 import type { Env } from "./env.js";
+import { firecrawlScrape, firecrawlSearch, isRestrictedSchemeUrl, mergeWebResults, type WebResult } from "./web_sources.js";
 
 const TAVILY_API = "https://api.tavily.com";
 const MAX_SEARCH_RESULTS = 5;
@@ -223,14 +224,8 @@ async function tavily(env: Env, path: "/search" | "/extract", body: Json): Promi
   }
 }
 
-async function search(env: Env, args: Json, searchContext: string): Promise<Json> {
-  const query = normaliseSearchContext(searchContext);
-  if (!query) return { error: "Live web search has no approved public search context." };
-
-  const timeRange = ["day", "week", "month", "year"].includes(String(args.time_range))
-    ? String(args.time_range)
-    : undefined;
-
+async function tavilySearch(env: Env, query: string, timeRange: string | undefined): Promise<{ results: WebResult[]; error?: string }> {
+  if (!env.TAVILY_API_KEY) return { results: [] };
   const raw = await tavily(env, "/search", {
     query,
     max_results: MAX_SEARCH_RESULTS,
@@ -240,44 +235,69 @@ async function search(env: Env, args: Json, searchContext: string): Promise<Json
     include_raw_content: false,
     ...(timeRange ? { time_range: timeRange } : {}),
   });
-  if (raw.error) return raw;
-
-  const results = Array.isArray(raw.results) ? raw.results : [];
+  if (raw.error) return { results: [], error: String(raw.error) };
+  const rows = Array.isArray(raw.results) ? raw.results : [];
   return {
-    results: results.slice(0, MAX_SEARCH_RESULTS).map((item) => {
+    results: rows.flatMap((item) => {
       const row = item && typeof item === "object" ? item as Json : {};
-      return {
-        title: cleanText(row.title, 240),
-        url: publicWebUrl(row.url),
-        content: cleanText(row.content),
-      };
-    }).filter((item) => item.url),
+      const url = publicWebUrl(row.url);
+      if (!url || isRestrictedSchemeUrl(url)) return [];
+      return [{ title: cleanText(row.title, 240), url, content: cleanText(row.content) }];
+    }),
   };
 }
 
+/**
+ * Tavily and Firecrawl run in parallel on the same server-authored query; the
+ * merged list is deduplicated, interleaved and filtered for restricted scheme
+ * sources. Either engine alone is enough; both failing is the only error.
+ */
+async function search(env: Env, args: Json, searchContext: string): Promise<Json> {
+  const query = normaliseSearchContext(searchContext);
+  if (!query) return { error: "Live web search has no approved public search context." };
+  if (!env.TAVILY_API_KEY && !env.FIRECRAWL_API_KEY) return { error: "Live web search is not configured for this worker." };
+
+  const timeRange = ["day", "week", "month", "year"].includes(String(args.time_range))
+    ? String(args.time_range)
+    : undefined;
+
+  const [fromTavily, fromFirecrawl] = await Promise.all([
+    tavilySearch(env, query, timeRange),
+    env.FIRECRAWL_API_KEY
+      ? firecrawlSearch(env, query, { limit: MAX_SEARCH_RESULTS, timeRange, publicUrl: publicWebUrl })
+      : Promise.resolve([] as WebResult[]),
+  ]);
+  const results = mergeWebResults(fromTavily.results, fromFirecrawl, MAX_SEARCH_RESULTS);
+  if (!results.length && fromTavily.error && !fromFirecrawl.length) return { error: fromTavily.error };
+  return { results };
+}
+
 async function extract(env: Env, args: Json, allowedUrls: Iterable<string>): Promise<Json> {
-  const urls = filterExtractUrls(args.urls, allowedUrls);
+  const urls = filterExtractUrls(args.urls, allowedUrls).filter((url) => !isRestrictedSchemeUrl(url));
   if (!urls.length) {
     return { error: "web_extract only accepts public URLs returned by web_search in this same call." };
   }
 
-  const raw = await tavily(env, "/extract", {
-    urls,
-    extract_depth: "basic",
-    format: "markdown",
-  });
-  if (raw.error) return raw;
-
-  const results = Array.isArray(raw.results) ? raw.results : [];
-  return {
-    results: results.slice(0, 3).map((item) => {
+  const got = new Map<string, string>();
+  if (env.TAVILY_API_KEY) {
+    const raw = await tavily(env, "/extract", { urls, extract_depth: "basic", format: "markdown" });
+    const rows = !raw.error && Array.isArray(raw.results) ? raw.results : [];
+    for (const item of rows.slice(0, 3)) {
       const row = item && typeof item === "object" ? item as Json : {};
-      return {
-        url: publicWebUrl(row.url),
-        content: cleanText(row.raw_content ?? row.content, 4_000),
-      };
-    }).filter((item) => item.url),
-  };
+      const url = publicWebUrl(row.url);
+      const content = cleanText(row.raw_content ?? row.content, 4_000);
+      if (url && urls.includes(url) && content) got.set(url, content);
+    }
+  }
+  // Whatever Tavily could not read (PDFs, script-heavy pages, failures),
+  // Firecrawl scrapes. Same URL allow-list; nothing new is opened.
+  const missing = urls.filter((url) => !got.has(url));
+  if (missing.length && env.FIRECRAWL_API_KEY) {
+    const scraped = await Promise.all(missing.map(async (url) => [url, await firecrawlScrape(env, url)] as const));
+    for (const [url, content] of scraped) if (content) got.set(url, content);
+  }
+  if (!got.size) return { error: "Neither web engine could read those pages." };
+  return { results: [...got].map(([url, content]) => ({ url, content })) };
 }
 
 export async function runTavilyTool(

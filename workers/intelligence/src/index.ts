@@ -2,6 +2,7 @@ import { parseSchema, CorrectionEventSchema, TutorRequestSchema } from "./schema
 import { parsePurgeRequest, purgeTutorDataForPapers } from "./intelligence/security/purge";
 import { GeminiProvider } from "./providers/gemini";
 import { TavilyRetrievalService } from "./providers/tavily";
+import { CombinedRetrievalService, FirecrawlRetrievalService } from "./providers/firecrawl";
 import { TutorOrchestrator } from "./intelligence/tutor/orchestrator";
 import { ingestPaperPage, processPaperBatch, type PaperJob } from "./document/ingest";
 import { providerIsAvailable, recordConceptTaxonomy, recordDeploymentProvenance, recordProviderObservation, recordRuntimeArtifacts, writeTutorAudit } from "./intelligence/telemetry/repository";
@@ -78,7 +79,13 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
   if (request.method === "POST" && url.pathname === "/v1/tutor") {
     const input = parseSchema(TutorRequestSchema, await readBoundedJson(request));
     const provider = new GeminiProvider(env, String(env.GEMINI_PRIVACY_MODE) === "zdr" ? "zdr" : "unverified");
-    const retrieval = env.TAVILY_API_KEY ? new TavilyRetrievalService(env.TAVILY_API_KEY, env.TAVILY_API_BASE, env.PIPELINE_CACHE) : undefined;
+    // Tavily and Firecrawl together: both queried in parallel, merged by URL,
+    // highest authority kept. Either alone still works.
+    const engines = [
+      ...(env.TAVILY_API_KEY ? [new TavilyRetrievalService(env.TAVILY_API_KEY, env.TAVILY_API_BASE, env.PIPELINE_CACHE)] : []),
+      ...(env.FIRECRAWL_API_KEY ? [new FirecrawlRetrievalService(env.FIRECRAWL_API_KEY)] : []),
+    ];
+    const retrieval = engines.length > 1 ? new CombinedRetrievalService(engines) : engines[0];
     const orchestrator = new TutorOrchestrator({
       provider,
       ...(retrieval ? { retrieval } : {}),
@@ -256,7 +263,7 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     const checks = {
       geminiZdr: String(env.GEMINI_PRIVACY_MODE) === "zdr",
       visionZdr: String(env.AXON_VISION_PRIVACY_MODE) === "zdr" && visionServiceReady,
-      retrievalConfigured: Boolean(env.TAVILY_API_KEY),
+      retrievalConfigured: Boolean(env.TAVILY_API_KEY || env.FIRECRAWL_API_KEY),
       retrievalProbePassed: retrievalProbe?.passed === 1,
       visionProbePassed: visionProbe?.passed === 1,
       pseudonymizationConfigured: Boolean(env.AXON_PSEUDONYM_KEY),
