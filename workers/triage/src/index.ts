@@ -11,6 +11,8 @@ import type { Env } from "@mastery/shared/env.js";
 import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
 
 const PAGES_TO_LOOK_AT = 6;
+/** Verdicts that refuse a paper for having no marking (or no answers) on it. */
+const UNMARKED = new Set(["ungraded_paper", "blank_paper"]);
 
 interface TriageMessage {
   run_id: string;
@@ -103,13 +105,13 @@ const handler = consumeQueue<TriageMessage>(
     );
     const onThumbs = sampledPages.filter((p: Page) => !!p.thumb_key).length;
 
-    const { parsed } = await callModel({
+    const ask = (imgs: typeof images) => callModel({
       env,
       sb,
       stage: "triage",
       system: SYSTEM,
       instruction: instruction(sampledPages.length),
-      images,
+      images: imgs,
       schema: SCHEMA,
       validate,
       runId,
@@ -119,11 +121,37 @@ const handler = consumeQueue<TriageMessage>(
       routeOverride: override,
     });
 
+    let { parsed } = await ask(images);
+    let secondLook = false;
+
+    // "No marking" is the one verdict that throws a marked paper away, and the
+    // first look is at 512 px thumbnails, where a small tick or a pencil mark
+    // is a few pixels (owner, 5 Oct 2026: a marked 12-page past paper refused
+    // as unmarked). Before refusing for want of marking, look again at the
+    // pages themselves, at full detail. Same prompt, same question: only the
+    // resolution changes, and only the second answer stands.
+    if (UNMARKED.has(parsed.classification) && onThumbs > 0) {
+      const full = await Promise.all(
+        sampledPages.map((p: Page) => imageRef(env, (p.r2_bucket as any) ?? "derived", p.r2_key, "high"))
+      );
+      ({ parsed } = await ask(full));
+      secondLook = true;
+    }
+
+    // The student told us this paper is marked, after it was refused as
+    // unmarked. They are the authority on their own paper; the later stages
+    // read only the marking that is actually there, and a question with no
+    // readable mark is shown as unmarked, never guessed.
+    const studentSaysMarked = (override as any)?.student_says_marked === true;
+    if (UNMARKED.has(parsed.classification) && studentSaysMarked) {
+      parsed = { ...parsed, classification: "graded_exam" };
+    }
+
     if (parsed.classification !== "graded_exam") {
       const isUncertainReject = parsed.classification === "not_schoolwork" && parsed.confidence === "low";
       const reason = (isUncertainReject && qualityFailureMessage(sampledPages)) || REJECTION_REASON[parsed.classification];
       await pipelineWrite(sb, runId, "triage_reject", { reason });
-      return { detail: { rejected: parsed.classification } };
+      return { detail: { rejected: parsed.classification, second_look: secondLook } };
     }
 
     let resolvedAssessment = null;
@@ -160,6 +188,8 @@ const handler = consumeQueue<TriageMessage>(
         pages: pagesDispatched,
         looked_at: sampledPages.length,
         on_thumbnails: onThumbs,
+        second_look: secondLook,
+        student_says_marked: studentSaysMarked,
         assessment_identity: resolvedAssessment?.id ?? null,
       },
     };
