@@ -61,8 +61,26 @@ export function seriesLetter(session: unknown): "m" | "s" | "w" | null {
  * The one scheme filename this printed header points to, or null if any part
  * is missing or ambiguous. Never guesses a component or series.
  */
+/** A full printed reference such as "9231/11/O/N/25" (the footer of every Cambridge page). */
+export function refFromPrintedReference(text: unknown): SchemeRef | null {
+  if (typeof text !== "string") return null;
+  const m = text.toUpperCase().replace(/\s+/g, "").match(/(\d{4})\/(\d{2})\/(O\/N|M\/J|F\/M)\/(\d{2})(?!\d)/);
+  if (!m) return null;
+  const [, code, component, sessionCode, yy] = m;
+  const series = sessionCode === "O/N" ? "w" : sessionCode === "M/J" ? "s" : "m";
+  const year = 2000 + Number(yy);
+  return { code: code!, component: component!, series, year, filename: `${code}_${series}${yy}_ms_${component}.pdf`, label: `${code}/${component}/${sessionCode}/${yy}` };
+}
+
 export function cambridgeSchemeRef(identity: CambridgeIdentity | null | undefined): SchemeRef | null {
-  if (!identity || identity.confidence === "low") return null;
+  if (!identity) return null;
+  // The footer reference is unambiguous on its own: code, component, series
+  // and year in one printed string.
+  for (const field of [identity.paper_code, identity.component_code, identity.session]) {
+    const printed = refFromPrintedReference(field);
+    if (printed && (!identity.subject_code || digits(identity.subject_code) === printed.code)) return printed;
+  }
+  if (identity.confidence === "low") return null;
   const code = digits(identity.subject_code);
   if (!/^\d{4}$/.test(code)) return null;
 
