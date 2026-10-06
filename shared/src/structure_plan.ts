@@ -43,6 +43,26 @@ export function uniqueLabelKey(label: string | null | undefined): string | null 
   return key.length ? key : null;
 }
 
+/**
+ * True when a "question number" is really the printed page number: a bare
+ * number in the header or footer band, near the horizontal centre. Question
+ * numbers are printed in the left margin, never centred in the header. When
+ * the scan cut that margin off, the reader took the page number instead
+ * (owner, 6 Oct 2026); the label is withheld and the region goes to review.
+ */
+export function looksLikePageNumber(
+  label: string | null | undefined,
+  box: { x: number; y: number; w: number; h: number } | null,
+  width: number,
+  height: number,
+): boolean {
+  if (!box || typeof label !== "string" || !/^\s*\d{1,3}\s*\.?\s*$/.test(label)) return false;
+  const cx = (box.x + box.w / 2) / width;
+  const top = box.y / height;
+  const bottom = (box.y + box.h) / height;
+  return cx > 0.35 && cx < 0.65 && (bottom < 0.08 || top > 0.92);
+}
+
 export interface PlannedRegion {
   order_index: number;
   span: { page: number; box: { x: number; y: number; w: number; h: number } };
@@ -82,6 +102,11 @@ export function planPage(input: PagePlanInput): PlannedRegion[] {
     const numberBox = continuation ? null : takeBox(region.number_box, page, width, height);
     let label: string | null = numberBox ? region.candidate_number : null;
     let withheld: string | undefined;
+
+    if (looksLikePageNumber(label, numberBox, width, height)) {
+      withheld = label ?? undefined;
+      label = null;
+    }
 
     const key = uniqueLabelKey(label);
     if (key && taken.has(key)) {
