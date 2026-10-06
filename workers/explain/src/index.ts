@@ -23,6 +23,7 @@ import type { Env } from "@mastery/shared/env.js";
 import { runExplainEvalCase, type EvalExplainMessage } from "@mastery/shared/eval/explain-run.js";
 import { tagRegion, failTopicTag, type TopicTagMessage } from "@mastery/shared/topic_tag.js";
 import { runTopicTagEvalCase, type EvalTopicTagMessage } from "@mastery/shared/eval/topic-tag-run.js";
+import { runSchemeCheckEvalCase, type EvalSchemeCheckMessage } from "@mastery/shared/eval/scheme-check-run.js";
 import {
   runSchemeCheck, failSchemeCheck, runSchemeCheckQuestion, failSchemeCheckQuestion,
   type SchemeCheckMessage, type SchemeCheckQuestionMessage,
@@ -41,7 +42,7 @@ interface PipelineExplainMessage {
 // explain_status.
 // A scheme_check message checks one whole unmarked Cambridge paper (owner
 // decision, 6 Oct 2026); it writes paper_check/region_check only.
-type ExplainMessage = PipelineExplainMessage | EvalExplainMessage | TopicTagMessage | EvalTopicTagMessage | SchemeCheckMessage | SchemeCheckQuestionMessage;
+type ExplainMessage = PipelineExplainMessage | EvalExplainMessage | TopicTagMessage | EvalTopicTagMessage | EvalSchemeCheckMessage | SchemeCheckMessage | SchemeCheckQuestionMessage;
 
 // Tier 2 is used only after exact assessment identity + exact question-label
 // resolution against an authorized stored official scheme. Any unresolved Tier
@@ -50,6 +51,7 @@ const handler = consumeQueue<ExplainMessage>(
   async ({ env, sb, msg, attempt, beat }) => {
     if ("eval" in msg) return { detail: await runExplainEvalCase({ env, sb, message: msg.eval }) };
     if ("eval_topic_tag" in msg) return { detail: await runTopicTagEvalCase({ env, sb, message: msg.eval_topic_tag }) };
+    if ("eval_scheme_check" in msg) return { detail: await runSchemeCheckEvalCase({ env, sb, message: msg.eval_scheme_check }) };
     if ("scheme_check" in msg) {
       return { detail: await runSchemeCheck({ env, sb, runId: msg.scheme_check.run_id, attempt }) };
     }
@@ -359,7 +361,7 @@ const handler = consumeQueue<ExplainMessage>(
   // swallowed, and the message acknowledged anyway, stranding the region.
   async ({ sb, msg }, error) => {
     // A failed eval message has no region to fail; the eval case result records its own failure.
-    if ("eval" in msg || "eval_topic_tag" in msg) return;
+    if ("eval" in msg || "eval_topic_tag" in msg || "eval_scheme_check" in msg) return;
     if ("topic_tag" in msg) { await failTopicTag(sb, msg, error); return; }
     if ("scheme_check" in msg) { await failSchemeCheck(sb, msg, error); return; }
     if ("scheme_check_q" in msg) { await failSchemeCheckQuestion(sb, msg, error); return; }
