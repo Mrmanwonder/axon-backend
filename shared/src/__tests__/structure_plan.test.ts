@@ -15,6 +15,7 @@ import {
   regionsWrittenByPage,
   structureFailureReason,
   uniqueLabelKey,
+  looksLikePageNumber,
 } from "../structure_plan.js";
 import { ModelError } from "../model-client.js";
 import type { StructureRegion } from "../prompts/structure.v1.js";
@@ -122,4 +123,28 @@ test("only a model failure is reported as an unreadable page", () => {
   const db = structureFailureReason(Object.assign(new Error("duplicate key"), { code: "23505" }));
   assert.doesNotMatch(db, /could not read/);
   assert.match(db, /Your page is kept/);
+});
+
+test("a printed page number is not taken as a question number (owner, 6 Oct 2026)", () => {
+  // "6" centred in the header of page 6, read as question 6 after the scan cut
+  // the left margin off. The region stays; its label is withheld for review.
+  const header: StructureRegion = {
+    candidate_number: "6",
+    number_box: { x: 490, y: 20, w: 20, h: 15 } as never,
+    box: { x: 30, y: 60, w: 900, h: 300 } as never,
+    continues_from_previous: false,
+    structure_confidence: "high",
+  };
+  const [planned] = plan(6, [header]);
+  assert.equal(planned.row.question_label, null);
+  assert.equal(planned.withheld_label, "6");
+
+  // The same number in the left margin is a question number.
+  const [margin] = plan(6, [{ ...header, number_box: { x: 40, y: 80, w: 20, h: 15 } as never }]);
+  assert.equal(margin.row.question_label, "6");
+
+  // A part label in the header band is never mistaken for a page number.
+  assert.equal(looksLikePageNumber("6(a)", { x: 980, y: 30, w: 40, h: 30 }, W, H), false);
+  // Footer, centred.
+  assert.equal(looksLikePageNumber("12", { x: 980, y: 2700, w: 40, h: 30 }, W, H), true);
 });
