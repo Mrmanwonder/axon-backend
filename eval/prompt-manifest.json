@@ -25,6 +25,10 @@
       "sha256": "1b0ca1a2acff32c09a0268b92656e64a71585b19421b2f4f16e2ec297341797d",
       "eval_run": "baseline-2026-10-02"
     },
+    "shared/src/prompts/scheme_check.v1.ts": {
+      "sha256": "4961a622f58366a7585f320a396c9fc39e1120896d543498fd52738d0b9fbb62",
+      "eval_run": "00000000-0000-0000-0000-000000000000"
+    },
     "shared/src/prompts/structure.v1.ts": {
       "sha256": "41188b0cf86e1f4c64bd6240627d5996b519e858a52f5b569dad4bba39b1ad9e",
       "eval_run": "baseline-2026-10-02"

@@ -1,0 +1,9 @@
+{
+  "kind": "eval",
+  "passed": true,
+  "prompt_files": [
+    "shared/src/prompts/scheme_check.v1.ts"
+  ],
+  "release_gate_extraction": false,
+  "human_labelled_extraction": false
+}
