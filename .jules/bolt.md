@@ -1,3 +1,3 @@
-## 2026-09-28 - [Optimize Queue Dispatch]
-**Learning:** In Cloudflare Workers architecture, `Queue.sendBatch()` has a strict limit of 100 messages per batch. Passing arrays mapped directly to `.sendBatch()` throws errors on larger payloads or can silently drop messages due to size.
-**Action:** Use a loop to chunk the array into sizes of 100 or less and issue `sendBatch()` using `Promise.all()` for concurrent dispatches to avoid N+1 bottleneck.
+## 2024-05-18 - Cloudflare R2 Bulk Delete
+**Learning:** Using `Promise.all()` to concurrently fire hundreds of individual R2 `delete()` operations consumes excessive subrequests, causes high memory spikes, and risks exceeding Cloudflare Worker subrequest limits.
+**Action:** Use R2's bulk deletion method `bucket.delete(arrayOfKeys)` when deleting multiple objects. It accepts up to 1000 keys per request, significantly reducing latency and network overhead.

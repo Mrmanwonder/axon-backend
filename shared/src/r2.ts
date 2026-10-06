@@ -181,7 +181,8 @@ export async function deletePrefix(env: Env, bucket: BucketKind, prefix: string,
   while (deleted < budget) {
     const listing = await b.list({ prefix, limit: Math.min(1000, budget - deleted), cursor });
     if (listing.objects.length) {
-      await Promise.all(listing.objects.map((o) => b.delete(o.key)));
+      // Optimize R2 bulk deletes to avoid N+1 subrequests and reduce latency
+      await b.delete(listing.objects.map((o) => o.key));
       deleted += listing.objects.length;
     }
     if (listing.truncated) {
