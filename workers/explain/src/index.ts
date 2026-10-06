@@ -23,7 +23,10 @@ import type { Env } from "@mastery/shared/env.js";
 import { runExplainEvalCase, type EvalExplainMessage } from "@mastery/shared/eval/explain-run.js";
 import { tagRegion, failTopicTag, type TopicTagMessage } from "@mastery/shared/topic_tag.js";
 import { runTopicTagEvalCase, type EvalTopicTagMessage } from "@mastery/shared/eval/topic-tag-run.js";
-import { runSchemeCheck, failSchemeCheck, type SchemeCheckMessage } from "@mastery/shared/scheme_check.js";
+import {
+  runSchemeCheck, failSchemeCheck, runSchemeCheckQuestion, failSchemeCheckQuestion,
+  type SchemeCheckMessage, type SchemeCheckQuestionMessage,
+} from "@mastery/shared/scheme_check.js";
 
 interface PipelineExplainMessage {
   run_id: string;
@@ -38,7 +41,7 @@ interface PipelineExplainMessage {
 // explain_status.
 // A scheme_check message checks one whole unmarked Cambridge paper (owner
 // decision, 6 Oct 2026); it writes paper_check/region_check only.
-type ExplainMessage = PipelineExplainMessage | EvalExplainMessage | TopicTagMessage | EvalTopicTagMessage | SchemeCheckMessage;
+type ExplainMessage = PipelineExplainMessage | EvalExplainMessage | TopicTagMessage | EvalTopicTagMessage | SchemeCheckMessage | SchemeCheckQuestionMessage;
 
 // Tier 2 is used only after exact assessment identity + exact question-label
 // resolution against an authorized stored official scheme. Any unresolved Tier
@@ -49,6 +52,9 @@ const handler = consumeQueue<ExplainMessage>(
     if ("eval_topic_tag" in msg) return { detail: await runTopicTagEvalCase({ env, sb, message: msg.eval_topic_tag }) };
     if ("scheme_check" in msg) {
       return { detail: await runSchemeCheck({ env, sb, runId: msg.scheme_check.run_id, attempt }) };
+    }
+    if ("scheme_check_q" in msg) {
+      return { detail: await runSchemeCheckQuestion({ env, sb, msg: msg.scheme_check_q, attempt }) };
     }
     if ("topic_tag" in msg) {
       return { detail: await tagRegion({ env, sb, regionId: msg.topic_tag.region_id, documentId: msg.topic_tag.document_id, attempt }) };
@@ -356,6 +362,7 @@ const handler = consumeQueue<ExplainMessage>(
     if ("eval" in msg || "eval_topic_tag" in msg) return;
     if ("topic_tag" in msg) { await failTopicTag(sb, msg, error); return; }
     if ("scheme_check" in msg) { await failSchemeCheck(sb, msg, error); return; }
+    if ("scheme_check_q" in msg) { await failSchemeCheckQuestion(sb, msg, error); return; }
     await mustOk(
       sb.from("question_region")
         .update({ explain_status: "failed", explain_failure_reason: failureCodeFor("explain", error) })

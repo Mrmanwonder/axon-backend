@@ -1,7 +1,15 @@
 // The scheme_check stage: one unmarked Cambridge paper, checked question by
 // question against the mark scheme for that exact paper (owner decision,
-// 6 Oct 2026). Delivered as one message on the explain queue after the
-// student finishes review, so the scheme is fetched once per paper.
+// 6 Oct 2026).
+//
+// Two message kinds on the explain queue:
+//   scheme_check   — one per paper, after review: confirm the printed code,
+//                    read the scheme ONCE, split it, fan out one message per
+//                    question;
+//   scheme_check_q — one per question: a single model call, so each delivery
+//                    stays well inside the queue handler's deadline.
+// The scheme section travels in the question message only for the life of the
+// message. Nothing here writes scheme text to a table.
 //
 // Writes only paper_check and region_check. It never touches marks_awarded,
 // teacher_mark, region_explanation or anything analytics reads.
@@ -11,6 +19,7 @@ import type { Env } from "./env.js";
 import { callModel } from "./model-client.js";
 import { imageRef } from "./r2.js";
 import { mustData, mustMaybe, mustOk } from "./db.js";
+import { isRetryable } from "./errors.js";
 import {
   fetchCambridgeScheme, headerMatches, schemePreamble, schemeSections, sectionFor, type SchemeRef,
 } from "./cambridge_scheme.js";
@@ -24,13 +33,22 @@ export interface SchemeCheckMessage {
   _retries?: number;
 }
 
+export interface SchemeCheckQuestionMessage {
+  scheme_check_q: {
+    run_id: string;
+    region_id: string;
+    paper: string;
+    section: string | null;
+    conventions: string | null;
+  };
+  _retries?: number;
+}
+
 /** What triage stored on the run when it accepted an unmarked Cambridge paper. */
 export interface SchemeCheckRouting {
   ref: SchemeRef;
   candidates: string[];
 }
-
-const CONCURRENCY = 4;
 
 function sessionWords(ref: SchemeRef): string {
   return ref.series === "w" ? "October/November" : ref.series === "s" ? "May/June" : "February/March";
@@ -40,18 +58,11 @@ async function setStatus(sb: SupabaseClient, runId: string, patch: Record<string
   await mustOk(sb.from("paper_check").update({ ...patch, updated_at: new Date().toISOString() }).eq("run_id", runId), "paper_check update");
 }
 
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const i = next++;
-      out[i] = await fn(items[i]!);
-    }
-  }));
-  return out;
-}
+const UNCHECKED = (reason: string): CheckResult => ({
+  canCheck: false, reason, estimatedMarks: null, maxMarks: null, confidence: "unsure", whatWasRight: null, whatWasMissing: [], doThisNext: null,
+});
 
+/** The paper message: confirm, read the scheme once, fan out per question. */
 export async function runSchemeCheck(opts: { env: Env; sb: SupabaseClient; runId: string; attempt?: number }) {
   const { env, sb, runId } = opts;
   const run = await mustMaybe(sb.from("extraction_run").select("id, paper_id, student_id, status, tier_routing").eq("id", runId).maybeSingle(), "run read") as any;
@@ -59,11 +70,14 @@ export async function runSchemeCheck(opts: { env: Env; sb: SupabaseClient; runId
   if (!run || !routing?.ref) return { skipped: "not a scheme-check run" };
   const check = await mustMaybe(sb.from("paper_check").select("status").eq("run_id", runId).maybeSingle(), "paper_check read") as any;
   if (!check) return { skipped: "no paper_check row" };
+  // "running" is allowed through: a redelivery after a transient failure must
+  // be able to finish the paper. Re-running is safe (all writes are upserts).
   if (check.status === "done" || check.status === "unavailable") return { skipped: `already ${check.status}` };
   await setStatus(sb, runId, { status: "running", reason: null });
   const ref = routing.ref;
 
   // 1. Confirm the printed reference on the page itself with the strong route.
+  //    A misread variant (…/12 for …/11) is a real scheme for another paper.
   const pages = await mustData(sb.from("paper_page").select("page_number, r2_bucket, r2_key").eq("paper_id", run.paper_id).not("r2_key", "is", null).order("page_number").limit(2), "pages read") as any[];
   let confirmed = false;
   for (const page of pages) {
@@ -74,7 +88,7 @@ export async function runSchemeCheck(opts: { env: Env; sb: SupabaseClient; runId
       runId, paperId: run.paper_id, studentId: run.student_id, attempt: opts.attempt, thinkingLevel: "low",
     });
     if (headerMatches(parsed.reference, ref)) { confirmed = true; break; }
-    if (parsed.reference) break; // a legible, different reference: stop, do not try another page
+    if (parsed.reference) break; // legible and different: stop, do not try another page
   }
   if (!confirmed) {
     await setStatus(sb, runId, { status: "unavailable", reason: `We could not confirm this is ${ref.label} from the page itself, so it was not checked.` });
@@ -90,53 +104,94 @@ export async function runSchemeCheck(opts: { env: Env; sb: SupabaseClient; runId
   const sections = schemeSections(scheme.markdown);
   const conventions = schemePreamble(scheme.markdown);
 
-  // 3. Every readable question the student confirmed.
+  // 3. One message per readable question.
   const regions = await mustData(sb.from("question_region")
-    .select("id, question_label, question_text, student_answer, marks_available, confidence_tier, order_index")
+    .select("id, question_label")
     .eq("run_id", runId)
-    .neq("confidence_tier", "unreadable")
+    .or("confidence_tier.is.null,confidence_tier.neq.unreadable")
     .order("order_index"), "regions read") as any[];
+  if (!regions.length) {
+    await setStatus(sb, runId, { status: "done", checked: 0, reason: "No readable question was found on this paper." });
+    return { checked: 0 };
+  }
+  const queue = env.SELF_QUEUE ?? env.EXPLAIN_QUEUE;
+  if (!queue) throw new Error("scheme_check: no queue to fan out to");
+  const paper = `${ref.code}/${ref.component} ${sessionWords(ref)} ${ref.year}`;
+  const messages: SchemeCheckQuestionMessage[] = regions.map((region) => ({
+    scheme_check_q: { run_id: runId, region_id: region.id, paper, section: sectionFor(sections, region.question_label), conventions },
+  }));
+  for (let i = 0; i < messages.length; i += 50) {
+    await queue.sendBatch(messages.slice(i, i + 50).map((body) => ({ body })));
+  }
+  return { queued: messages.length, sections: sections.size, scheme: ref.filename, source_host: scheme.sourceHost };
+}
 
-  const paperName = `${ref.code}/${ref.component} ${sessionWords(ref)} ${ref.year}`;
-  let checked = 0;
-  await mapLimit(regions, CONCURRENCY, async (region) => {
-    const section = sectionFor(sections, region.question_label);
-    const marksAvailable = region.marks_available === null ? null : Number(region.marks_available);
-    let result: CheckResult;
-    let model: string | null = null;
-    if (!section) {
-      result = { canCheck: false, reason: "This question was not found in the mark scheme.", estimatedMarks: null, maxMarks: null, confidence: "unsure", whatWasRight: null, whatWasMissing: [], doThisNext: null };
-    } else {
-      try {
-        const out = await callModel({
-          env, sb, stage: "scheme_check", system: SYSTEM,
-          instruction: instruction({ paper: paperName, label: region.question_label, marksAvailable, questionText: region.question_text, studentAnswer: region.student_answer, scheme: section, conventions }),
-          schema: SCHEMA as any,
-          validate: (v) => validate(v, { scheme: section, marksAvailable }),
-          runId, paperId: run.paper_id, regionId: region.id, studentId: run.student_id, attempt: opts.attempt,
-        });
-        result = out.parsed;
-        model = out.model;
-      } catch (error) {
-        console.warn("scheme_check question failed", region.id, String((error as Error)?.message ?? error).slice(0, 200));
-        result = { canCheck: false, reason: "This question could not be checked.", estimatedMarks: null, maxMarks: null, confidence: "unsure", whatWasRight: null, whatWasMissing: [], doThisNext: null };
-      }
+/** One question: check it, store the estimate, close the paper when it is the last. */
+export async function runSchemeCheckQuestion(opts: { env: Env; sb: SupabaseClient; msg: SchemeCheckQuestionMessage["scheme_check_q"]; attempt?: number }) {
+  const { env, sb, msg } = opts;
+  const region = await mustMaybe(sb.from("question_region")
+    .select("id, paper_id, student_id, question_label, question_text, student_answer, marks_available")
+    .eq("id", msg.region_id).eq("run_id", msg.run_id).maybeSingle(), "region read") as any;
+  if (!region) return { skipped: "no such question" };
+  const marksAvailable = region.marks_available === null ? null : Number(region.marks_available);
+
+  let result: CheckResult;
+  let model: string | null = null;
+  if (!msg.section) {
+    result = UNCHECKED("This question was not found in the mark scheme.");
+  } else {
+    try {
+      const out = await callModel({
+        env, sb, stage: "scheme_check", system: SYSTEM,
+        instruction: instruction({ paper: msg.paper, label: region.question_label, marksAvailable, questionText: region.question_text, studentAnswer: region.student_answer, scheme: msg.section, conventions: msg.conventions }),
+        schema: SCHEMA as any,
+        validate: (v) => validate(v, { scheme: msg.section!, marksAvailable }),
+        runId: msg.run_id, paperId: region.paper_id, regionId: region.id, studentId: region.student_id, attempt: opts.attempt,
+      });
+      result = out.parsed;
+      model = out.model;
+    } catch (error) {
+      // A transient provider failure goes back to the queue; anything else is
+      // an honest gap on this one question.
+      if (isRetryable(error)) throw error;
+      console.warn("scheme_check question failed", region.id, String((error as Error)?.message ?? error).slice(0, 200));
+      result = UNCHECKED("This question could not be checked.");
     }
-    await mustOk(sb.from("region_check").upsert({
-      region_id: region.id, run_id: runId, student_id: run.student_id,
-      can_check: result.canCheck, reason: result.reason,
-      estimated_marks: result.estimatedMarks, max_marks: result.maxMarks, confidence: result.confidence,
-      what_was_right: result.whatWasRight, what_was_missing: result.whatWasMissing, do_this_next: result.doThisNext,
-      model_version: model, prompt_version: PROMPT_VERSION,
-    }, { onConflict: "region_id" }), "region_check upsert");
-    if (result.canCheck) checked++;
-  });
+  }
+  await writeRegionCheck(sb, msg.run_id, region.id, region.student_id, result, model);
+  await closeIfComplete(sb, msg.run_id);
+  return { can_check: result.canCheck, estimate: result.estimatedMarks };
+}
 
+async function writeRegionCheck(sb: SupabaseClient, runId: string, regionId: string, studentId: string, result: CheckResult, model: string | null) {
+  await mustOk(sb.from("region_check").upsert({
+    region_id: regionId, run_id: runId, student_id: studentId,
+    can_check: result.canCheck, reason: result.reason,
+    estimated_marks: result.estimatedMarks, max_marks: result.maxMarks, confidence: result.confidence,
+    what_was_right: result.whatWasRight, what_was_missing: result.whatWasMissing, do_this_next: result.doThisNext,
+    model_version: model, prompt_version: PROMPT_VERSION,
+  }, { onConflict: "region_id" }), "region_check upsert");
+}
+
+/** The paper is done once every readable question has a row. Idempotent. */
+async function closeIfComplete(sb: SupabaseClient, runId: string) {
+  const expected = await mustData(sb.from("question_region").select("id").eq("run_id", runId).or("confidence_tier.is.null,confidence_tier.neq.unreadable"), "regions count") as any[];
+  const rows = await mustData(sb.from("region_check").select("can_check").eq("run_id", runId), "region_check count") as any[];
+  if (rows.length < expected.length) return;
+  const checked = rows.filter((r) => r.can_check).length;
   await setStatus(sb, runId, { status: "done", checked, reason: checked ? null : "No question on this paper could be checked." });
-  return { checked, questions: regions.length, scheme: ref.filename, source_host: scheme.sourceHost };
 }
 
 export async function failSchemeCheck(sb: SupabaseClient, msg: SchemeCheckMessage, error: unknown) {
   console.error("scheme_check failed", msg.scheme_check.run_id, String((error as Error)?.message ?? error).slice(0, 300));
-  await sb.from("paper_check").update({ status: "failed", reason: "Checking this paper failed. Try again later.", updated_at: new Date().toISOString() }).eq("run_id", msg.scheme_check.run_id);
+  await mustOk(sb.from("paper_check").update({ status: "failed", reason: "Checking this paper failed. Try again later.", updated_at: new Date().toISOString() }).eq("run_id", msg.scheme_check.run_id), "paper_check failed");
+}
+
+export async function failSchemeCheckQuestion(sb: SupabaseClient, msg: SchemeCheckQuestionMessage, error: unknown) {
+  const m = msg.scheme_check_q;
+  console.error("scheme_check question failed permanently", m.region_id, String((error as Error)?.message ?? error).slice(0, 300));
+  const region = await mustMaybe(sb.from("question_region").select("student_id").eq("id", m.region_id).maybeSingle(), "region read") as any;
+  if (!region) return;
+  await writeRegionCheck(sb, m.run_id, m.region_id, region.student_id, UNCHECKED("This question could not be checked."), null);
+  await closeIfComplete(sb, m.run_id);
 }
