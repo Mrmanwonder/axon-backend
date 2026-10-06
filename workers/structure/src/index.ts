@@ -7,7 +7,7 @@ import { planPage, regionsWrittenByPage, structureFailureReason, uniqueLabelKey 
 import { pageDimensions, UNPLACEABLE_PAGE_REASON } from "@mastery/shared/page.js";
 import { attribute, type RawMark } from "@mastery/shared/attribution.js";
 import { mustData, mustOk, mustRpc, mustMaybe } from "@mastery/shared/db.js";
-import { SYSTEM, instruction, SCHEMA, validate } from "@mastery/shared/prompts/structure.v1.js";
+import { SYSTEM, instruction, SCHEMA, validate, PROMPT_VERSION } from "@mastery/shared/prompts/structure.v2.js";
 import { loadStructurePage } from "@mastery/shared/structure-page.js";
 import { ConfigurationError } from "@mastery/shared/errors.js";
 import type { Env } from "@mastery/shared/env.js";
@@ -133,7 +133,10 @@ const handler = consumeQueue<StructureMessage>(
       paperId: page.paper_id,
       studentId: page.student_id,
       attempt,
-      routeOverride: override,
+      // The prompt text is chosen by the import above, so the provenance label
+      // recorded on every model_call is the one that text carries, whatever the
+      // route row says.
+      routeOverride: { ...(override ?? {}), prompt_version: PROMPT_VERSION },
     });
 
     if (!parsed.is_graded_exam_paper) {
@@ -188,6 +191,7 @@ const handler = consumeQueue<StructureMessage>(
       studentId: page.student_id,
       nextIndex,
       takenLabels,
+      printedPageNumber: parsed.printed_page_number,
     });
 
     const created: Array<{ id: string; order_index: number; spans: unknown[] }> = [];

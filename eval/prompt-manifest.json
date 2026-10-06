@@ -13,6 +13,10 @@
       "sha256": "2a3a0b28552c47e893812029f86afc943904e8b04b26eb2bd92adbde9bfb1d59",
       "eval_run": "baseline-2026-10-02"
     },
+    "shared/src/prompts/content.v2.ts": {
+      "sha256": "b1825ff522c6893d1cbed748e67c7ba291e46312fa9a8160d9927b8831f6c769",
+      "eval_run": "pending-live-eval-content-v2-structure-v2"
+    },
     "shared/src/prompts/explain_tier1.v1.ts": {
       "sha256": "4eac9b4424b35a8837d91610ba0160b8274c57543b71f9213eda06868193d620",
       "eval_run": "baseline-2026-10-02"
@@ -28,6 +32,10 @@
     "shared/src/prompts/structure.v1.ts": {
       "sha256": "41188b0cf86e1f4c64bd6240627d5996b519e858a52f5b569dad4bba39b1ad9e",
       "eval_run": "baseline-2026-10-02"
+    },
+    "shared/src/prompts/structure.v2.ts": {
+      "sha256": "521d4ad5348ccaf4bcdeb5fe6f24eb655039e9973d08742209e9aa0f50bb594a",
+      "eval_run": "pending-live-eval-content-v2-structure-v2"
     },
     "shared/src/prompts/topic_tag.v1.ts": {
       "sha256": "5cf9ca29e1eb78cea93803a5edbcf39af5af81c7d86ae4ed2ecceb3e5593fe82",

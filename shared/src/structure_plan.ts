@@ -31,7 +31,7 @@
 
 import { takeBox } from "./contract.js";
 import { ModelError } from "./model-client.js";
-import type { StructureRegion } from "./prompts/structure.v1.js";
+import type { StructureBox, StructureRegion, ValueWithBox } from "./prompts/structure.v1.js";
 
 /** The key the run-level uniqueness index compares, or null when the index
     does not apply to this label. Mirrors `question_region_one_label_per_run`:
@@ -63,6 +63,70 @@ export interface PagePlanInput {
   nextIndex: number;
   /** `uniqueLabelKey` of every label already stored for this run on OTHER pages. */
   takenLabels: Set<string>;
+  /** The page number printed on this page, with its box, when the structure
+      prompt reports it (structure.v2). Absent or null switches the furniture
+      guard off; nothing is inferred in its place. */
+  printedPageNumber?: ValueWithBox<string> | null;
+}
+
+/** The header and footer bands, and the centre column a lone page number is
+    printed in, on the model's 0-1000 grid. Question numbers sit at the left
+    margin, well outside the centre column. */
+const HEADER_BAND_MAX_Y = 120;
+const FOOTER_BAND_MIN_Y = 880;
+const CENTRE_MIN_X = 300;
+const CENTRE_MAX_X = 700;
+
+function onGrid(b: StructureBox | null | undefined): b is StructureBox {
+  return !!b && ["x", "y", "w", "h"].every((k) => Number.isFinite((b as any)[k]));
+}
+
+function overlaps(a: StructureBox, b: StructureBox): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+/**
+ * Is this region's label the printed page number rather than a question number?
+ *
+ * Cambridge prints a lone page number at the top centre of each page, and the
+ * structure pass has read it as a question number ("6" for a region on printed
+ * page 6), or put it in front of a part label continued from an earlier page
+ * ("6(b)"). Two cases are refused, and only on evidence the model returned:
+ *
+ *  1. The label is a bare number equal to the printed page number, and its box
+ *     sits in the header or footer band, in the centre column. A real question
+ *     number is at the left margin.
+ *  2. The label's leading number equals the printed page number, and the
+ *     label's box overlaps the printed page number's own box: the model read
+ *     the page-number glyph into the label.
+ *
+ * Without a printed page number from the model the guard says nothing. A
+ * question 6 that genuinely sits on printed page 6, numbered at the left
+ * margin, passes both checks.
+ */
+export function pageFurnitureLabel(
+  region: Pick<StructureRegion, "candidate_number" | "number_box">,
+  printed: ValueWithBox<string> | null | undefined,
+): boolean {
+  const label = region.candidate_number;
+  if (typeof label !== "string" || !printed) return false;
+  const page = String(printed.value ?? "").trim().match(/^\d{1,3}$/)?.[0];
+  if (!page) return false;
+  const numberBox = region.number_box;
+  if (!onGrid(numberBox)) return false;
+
+  const lead = label.trim().match(/^\(?\s*(?:q\s*)?(\d+)/i)?.[1];
+  if (!lead || Number(lead) !== Number(page)) return false;
+
+  const bare = /^\(?\s*(?:q\s*)?\d+\s*[.)]?\s*$/i.test(label.trim());
+  if (bare) {
+    const cx = numberBox.x + numberBox.w / 2;
+    const cy = numberBox.y + numberBox.h / 2;
+    const inBand = cy <= HEADER_BAND_MAX_Y || cy >= FOOTER_BAND_MIN_Y;
+    const centred = cx >= CENTRE_MIN_X && cx <= CENTRE_MAX_X;
+    if (inBand && centred) return true;
+  }
+  return onGrid(printed.box) && overlaps(numberBox, printed.box);
 }
 
 export function planPage(input: PagePlanInput): PlannedRegion[] {
@@ -82,6 +146,14 @@ export function planPage(input: PagePlanInput): PlannedRegion[] {
     const numberBox = continuation ? null : takeBox(region.number_box, page, width, height);
     let label: string | null = numberBox ? region.candidate_number : null;
     let withheld: string | undefined;
+
+    if (label && pageFurnitureLabel(region, input.printedPageNumber)) {
+      // The printed page number, read as (part of) a question number. The
+      // region and its marks stay; the label is withheld and the region goes
+      // to review, where a person can say which question it is.
+      withheld = label;
+      label = null;
+    }
 
     const key = uniqueLabelKey(label);
     if (key && taken.has(key)) {

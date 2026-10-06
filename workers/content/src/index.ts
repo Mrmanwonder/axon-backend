@@ -9,7 +9,7 @@ import { mapModelBoxToPage, frameForIndex, type ModelFrame } from "@mastery/shar
 import { bandForRegion } from "@mastery/shared/crop.js";
 import { mustData, mustMaybe, mustOk, mustRpc } from "@mastery/shared/db.js";
 import { mapAnswerBlockToPages } from "@mastery/shared/answer_block_frames.js";
-import { SYSTEM, instruction, SCHEMA, validate } from "@mastery/shared/prompts/content.v1.js";
+import { SYSTEM, instruction, SCHEMA, validate, PROMPT_VERSION } from "@mastery/shared/prompts/content.v2.js";
 import type { Env } from "@mastery/shared/env.js";
 
 interface ContentMessage {
@@ -191,7 +191,10 @@ const handler = consumeQueue<ContentMessage>(
       regionId,
       studentId: region.student_id,
       attempt,
-      routeOverride: override,
+      // The prompt text is chosen by the import above, so the provenance label
+      // recorded on every model_call is the one that text carries, whatever the
+      // route row says (the row's "content.v2" names the v1 text).
+      routeOverride: { ...(override ?? {}), prompt_version: PROMPT_VERSION },
     });
 
     try {
