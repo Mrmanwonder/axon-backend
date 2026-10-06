@@ -426,6 +426,26 @@ describe("AXO-170/172 storage authority", () => {
     expect(response.status).toBe(403);
     expect(fixture.signAssetUrl).not.toHaveBeenCalled();
   });
+  test("returns a signed derived thumb_url per page, and null when a page has no thumb", async () => {
+    fixture.pages = [
+      { page_number: 1, student_id: STUDENT, paper_id: PAPER, r2_bucket: "derived", r2_key: `${STUDENT}/${PAPER}/page/p1.jpg`, mask_key: null, thumb_key: `${STUDENT}/${PAPER}/thumb/p1-thumb.jpg` },
+      { page_number: 2, student_id: STUDENT, paper_id: PAPER, r2_bucket: "derived", r2_key: `${STUDENT}/${PAPER}/page/p2.jpg`, mask_key: null, thumb_key: null },
+    ];
+    const response = await worker.fetch(request("/page-asset-urls", { paper_id: PAPER, page_numbers: [1, 2] }), {} as any);
+    expect(response.status).toBe(200);
+    const body = await response.json() as any;
+    expect(body.urls["1"].thumb_url).toBe(`https://asset.test/${encodeURIComponent(`${STUDENT}/${PAPER}/thumb/p1-thumb.jpg`)}`);
+    expect(body.urls["2"].thumb_url).toBeNull();
+    const thumbCalls = fixture.signAssetUrl.mock.calls.filter((call: any[]) => String(call[2]).includes("/thumb/"));
+    expect(thumbCalls).toHaveLength(1);
+    expect(thumbCalls[0]![1]).toBe("derived");
+  });
+  test("refuses to sign a victim thumb key stored on an otherwise visible page", async () => {
+    fixture.pages = [{ page_number: 1, student_id: STUDENT, paper_id: PAPER, r2_bucket: "derived", r2_key: `${STUDENT}/${PAPER}/page/p1.jpg`, mask_key: null, thumb_key: "victim/paper/thumb.jpg" }];
+    const response = await worker.fetch(request("/page-asset-urls", { paper_id: PAPER, page_numbers: [1] }), {} as any);
+    expect(response.status).toBe(403);
+    expect(fixture.signAssetUrl).not.toHaveBeenCalled();
+  });
   test("creates ledger entries for derived pages and masks as well as originals", async () => {
     const response = await worker.fetch(request("/upload-intent", { student_id: STUDENT, paper_id: PAPER, objects: [uploadObject(1, { kind: "page" }), uploadObject(2, { kind: "mask", content_type: "image/png" })] }), {} as any);
     expect(response.status).toBe(200);

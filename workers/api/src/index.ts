@@ -787,7 +787,7 @@ async function pageAssetUrls(req: Request, env: Env): Promise<Response> {
   }
   const { data: pages, error } = await user
     .from("paper_page")
-    .select("page_number, student_id, paper_id, r2_bucket, r2_key, mask_key")
+    .select("page_number, student_id, paper_id, r2_bucket, r2_key, mask_key, thumb_key")
     .eq("paper_id", body.paper_id)
     .in("page_number", body.page_numbers);
   if (error) return failure("We could not look up those pages.", 500, error.message);
@@ -797,19 +797,22 @@ async function pageAssetUrls(req: Request, env: Env): Promise<Response> {
   // /page-asset-urls cannot hand the frontend a URL for a different Worker.
   if ((pages ?? []).some(page => !["originals", "derived"].includes(page.r2_bucket ?? "derived")
     || (page.r2_key && !ownedObjectKey(page.r2_key, page.student_id, page.paper_id))
-    || (page.mask_key && !ownedObjectKey(page.mask_key, page.student_id, page.paper_id)))) {
+    || (page.mask_key && !ownedObjectKey(page.mask_key, page.student_id, page.paper_id))
+    || (page.thumb_key && !ownedObjectKey(page.thumb_key, page.student_id, page.paper_id)))) {
     return failure("Those page assets do not belong to this paper.", 403);
   }
   const assetOrigin = new URL(req.url).origin;
   const signed = await mapLimit(pages ?? [], PAGE_PAIR_CONCURRENCY, async (page) => {
     const bucket = (page.r2_bucket as BucketKind) ?? "derived";
-    // Each page's independent page/mask pair can be signed together, while the
-    // outer page concurrency is bounded so a large booklet cannot create a burst.
-    const [url, maskUrl] = await Promise.all([
+    // Each page's independent page/mask/thumb set can be signed together, while
+    // the outer page concurrency is bounded so a large booklet cannot create a
+    // burst. Thumbs, like masks, are always derived (BUCKET_FOR.thumb).
+    const [url, maskUrl, thumbUrl] = await Promise.all([
       page.r2_key ? signAssetUrl(env, bucket, page.r2_key, undefined, assetOrigin) : Promise.resolve(null),
       page.mask_key ? signAssetUrl(env, "derived", page.mask_key, undefined, assetOrigin) : Promise.resolve(null),
+      page.thumb_key ? signAssetUrl(env, BUCKET_FOR.thumb, page.thumb_key, undefined, assetOrigin) : Promise.resolve(null),
     ]);
-    return [page.page_number, { url, mask_url: maskUrl }] as const;
+    return [page.page_number, { url, mask_url: maskUrl, thumb_url: thumbUrl }] as const;
   });
   return json({ urls: Object.fromEntries(signed) });
 }
