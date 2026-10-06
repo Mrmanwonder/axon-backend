@@ -1,7 +1,7 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
-  cambridgeSchemeRef, documentMatches, headerMatches, locateScheme, schemeSections, sectionFor, seriesLetter, topLevelNumber,
+  bestExamHelpUrl, cambridgeSchemeRef, documentMatches, fetchCambridgeScheme, headerMatches, locateScheme, schemeSections, searchScheme, sectionFor, seriesLetter, topLevelNumber,
 } from "../cambridge_scheme.js";
 import { validate } from "../prompts/scheme_check.v1.js";
 
@@ -71,21 +71,93 @@ test("sections split on question rows and ignore the preamble", () => {
   assert.equal(topLevelNumber("(b)"), null);
 });
 
-test("locate asks Tavily first and stops when it finds the exact file", async () => {
-  const hosts: string[] = [];
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
-    hosts.push(new URL(String(input)).hostname);
+const DIRECT = "https://bestexamhelp.com/exam/cambridge-international-a-level/mathematics-further-9231/2025/9231_w25_ms_11.pdf";
+const keys = { FIRECRAWL_API_KEY: "f", TAVILY_API_KEY: "t" } as any;
+
+test("the scheme address is computed from the paper code, with no search", () => {
+  const ref = (over: Record<string, unknown>) => cambridgeSchemeRef(id(over))!;
+  assert.equal(bestExamHelpUrl(ref({}), "cambridge-international-a-level/mathematics-further-9231"), DIRECT);
+  assert.equal(bestExamHelpUrl(ref({ paper_code: "9231/12", exam_year: 2023 }), "cambridge-international-a-level/mathematics-further-9231"),
+    "https://bestexamhelp.com/exam/cambridge-international-a-level/mathematics-further-9231/2023/9231_w23_ms_12.pdf");
+  assert.equal(bestExamHelpUrl(ref({ paper_code: "9231/12" }), "cambridge-international-a-level/mathematics-further-9231"),
+    "https://bestexamhelp.com/exam/cambridge-international-a-level/mathematics-further-9231/2025/9231_w25_ms_12.pdf");
+});
+
+test("a known subject resolves with one free HEAD and no provider call", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push(`${init?.method ?? "GET"} ${new URL(String(input)).hostname}`);
+    return new Response(null, { status: 200, headers: { "content-type": "application/pdf" } });
+  }) as typeof fetch;
+  assert.deepEqual(await locateScheme(keys, cambridgeSchemeRef(id())!), [DIRECT]);
+  assert.deepEqual(calls, ["HEAD bestexamhelp.com"]);
+});
+
+test("a blocked or slow HEAD keeps the direct address; only a 404 sends us to search", async () => {
+  globalThis.fetch = (async () => new Response("", { status: 403 })) as typeof fetch;
+  assert.deepEqual(await locateScheme(keys, cambridgeSchemeRef(id())!), [DIRECT]);
+});
+
+test("a subject missing from the table is found on the site's own index", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push(`${init?.method ?? "GET"} ${new URL(url).hostname}`);
+    if (url.includes("firecrawl")) {
+      const body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ data: { links: body.url.includes("a-level")
+        ? ["https://bestexamhelp.com/exam/cambridge-international-a-level/marine-science-9693/index.php"] : [] } }), { status: 200 });
+    }
+    return new Response(null, { status: 200, headers: { "content-type": "application/pdf" } });
+  }) as typeof fetch;
+  const ref = cambridgeSchemeRef(id({ subject_code: "9693", paper_code: "9693/12" }))!;
+  assert.deepEqual(await locateScheme(keys, ref), ["https://bestexamhelp.com/exam/cambridge-international-a-level/marine-science-9693/2025/9693_w25_ms_12.pdf"]);
+  assert.deepEqual(calls, ["POST api.firecrawl.dev", "HEAD bestexamhelp.com"]);
+});
+
+test("locate searches only after the direct file 404s: Tavily first, stops on a hit", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push(`${init?.method ?? "GET"} ${new URL(String(input)).hostname}`);
+    if (init?.method === "HEAD") return new Response(null, { status: 404 });
     return new Response(JSON.stringify({ results: [
-      { url: "https://bestexamhelp.com/exam/cambridge-international-a-level/mathematics-further-9231/2025/9231_w25_ms_11.pdf" },
+      { url: "https://pastpapers.co/caie/a-level/mathematics-further-9231/2025-oct-nov/9231_w25_ms_11.pdf" },
       { url: "https://example.org/9231_w25_ms_12.pdf" },
     ] }), { status: 200 });
   }) as typeof fetch;
-  const urls = await locateScheme({ FIRECRAWL_API_KEY: "f", TAVILY_API_KEY: "t" } as any, cambridgeSchemeRef(id())!);
-  assert.deepEqual(hosts, ["api.tavily.com"]);
-  assert.deepEqual(urls, ["https://bestexamhelp.com/exam/cambridge-international-a-level/mathematics-further-9231/2025/9231_w25_ms_11.pdf"]);
+  const urls = await locateScheme(keys, cambridgeSchemeRef(id())!);
+  assert.deepEqual(calls, ["HEAD bestexamhelp.com", "POST api.tavily.com"]);
+  // The address that just 404'd is not offered again.
+  assert.deepEqual(urls, ["https://pastpapers.co/caie/a-level/mathematics-further-9231/2025-oct-nov/9231_w25_ms_11.pdf"]);
 });
 
-test("locate falls back to Firecrawl, keeps only the exact file and derives the raw-PDF mirror", async () => {
+test("reading: the direct PDF is read once; search runs only if it does not name this paper", async () => {
+  const good = "# Cambridge International AS & A Level\n**9231/11**\nMARK SCHEME\nOctober/November 2025";
+  const calls: string[] = [];
+  const serve = (directText: string) => (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const body = init?.body ? JSON.parse(String(init.body)) : {};
+    calls.push(url.includes("/scrape") ? `scrape ${new URL(body.url).hostname}` : `${init?.method ?? "GET"} ${new URL(url).hostname}`);
+    if (url.includes("/scrape")) {
+      const text = body.url === DIRECT ? directText : good;
+      return new Response(JSON.stringify({ data: { markdown: text, metadata: { contentType: "application/pdf" } } }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ results: [{ url: "https://pastpapers.co/x/9231_w25_ms_11.pdf" }] }), { status: 200 });
+  }) as typeof fetch;
+
+  globalThis.fetch = serve(good);
+  const hit = await fetchCambridgeScheme(keys, cambridgeSchemeRef(id())!, [DIRECT]);
+  assert.equal(hit?.sourceHost, "bestexamhelp.com");
+  assert.deepEqual(calls, ["scrape bestexamhelp.com"]);
+
+  calls.length = 0;
+  globalThis.fetch = serve(good.replace("9231/11", "9231/12"));
+  const fallback = await fetchCambridgeScheme(keys, cambridgeSchemeRef(id())!, [DIRECT]);
+  assert.equal(fallback?.sourceHost, "pastpapers.co");
+  assert.deepEqual(calls, ["scrape bestexamhelp.com", "POST api.tavily.com", "scrape pastpapers.co"]);
+});
+
+test("search falls back to Firecrawl, keeps only the exact file and derives the raw-PDF mirror", async () => {
   const hosts: string[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     hosts.push(new URL(String(input)).hostname);
@@ -96,7 +168,7 @@ test("locate falls back to Firecrawl, keeps only the exact file and derives the 
         ] } }
       : { results: [] }), { status: 200 });
   }) as typeof fetch;
-  const urls = await locateScheme({ FIRECRAWL_API_KEY: "f", TAVILY_API_KEY: "t" } as any, cambridgeSchemeRef(id())!);
+  const urls = await searchScheme(keys, cambridgeSchemeRef(id())!);
   assert.deepEqual(hosts, ["api.tavily.com", "api.firecrawl.dev"]);
   assert.deepEqual(urls, [
     "https://bestexamhelp.com/exam/cambridge-international-a-level/mathematics-further-9231/2025/9231_w25_ms_11.pdf",
