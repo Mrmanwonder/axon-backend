@@ -5,6 +5,9 @@
 // The scheme is used only as private model input:
 //   - found by exact identity only: the printed paper code becomes one filename
 //     (9231/11, Oct/Nov 2025 -> 9231_w25_ms_11.pdf); nothing else is accepted;
+//   - addressed directly, not searched for: the filename plus the subject
+//     folder gives the bestexamhelp URL (bestexamhelp_subjects.ts); search is
+//     only the fallback when that site does not carry the file;
 //   - verified inside the document before use (code/component and session must
 //     appear on the PDF itself);
 //   - never written to Axon's database, R2 or logs; only the filename is kept
@@ -16,6 +19,7 @@
 
 import type { Env } from "./env.js";
 import { publicWebUrl } from "./tavily.js";
+import { BESTEXAMHELP_LEVELS, BESTEXAMHELP_SUBJECTS, type BestExamHelpLevel } from "./bestexamhelp_subjects.js";
 
 const FIRECRAWL_API = "https://api.firecrawl.dev/v2";
 const TAVILY_API = "https://api.tavily.com";
@@ -147,23 +151,95 @@ function candidatesFrom(rawUrls: unknown[], ref: SchemeRef): string[] {
   return [...new Set(ordered)].slice(0, 4);
 }
 
+// ── Direct address (owner, 6 Oct 2026) ──────────────────────────────────────
+// bestexamhelp's paths are a pure function of the paper code once the subject
+// folder is known, so the common case needs no search at all: compute the URL,
+// confirm it with a free HEAD from the Worker, read it once.
+
+const BEH = `https://${PREFERRED_HOST}/exam`;
+const PROBE_TIMEOUT_MS = 5_000;
+const INDEX_MAX_AGE_MS = 30 * 24 * 3600 * 1000;
+
+/** The direct URL for this scheme, given the subject folder ("<level>/<slug>-<code>"). */
+export function bestExamHelpUrl(ref: SchemeRef, folder: string): string {
+  return `${BEH}/${folder}/${ref.year}/${ref.filename}`;
+}
+
+/** Index pages to read for a code missing from the table, likeliest level first. */
+function levelsFor(code: string): BestExamHelpLevel[] {
+  const first: BestExamHelpLevel = code.startsWith("0") ? "cambridge-igcse" : code.startsWith("9") ? "cambridge-international-a-level" : "cambridge-o-level";
+  return [first, ...BESTEXAMHELP_LEVELS.filter((l) => l !== first)];
+}
+
 /**
- * Candidate URLs for exactly this file, best first. One engine at a time
- * (owner, 6 Oct 2026): Tavily searches the quoted filename; Firecrawl is asked
- * only if Tavily finds no copy. Only URLs whose path ends in that exact
- * filename survive; a bestexamhelp URL is also derived from the subject slug
- * other mirrors use, since that host serves the raw PDF.
+ * The subject folder for a code: the built-in table, else the site's own
+ * subject index (one Firecrawl call per level, served from Firecrawl's cache
+ * for 30 days). Null when the site does not carry the subject.
+ */
+export async function bestExamHelpFolder(env: Env, code: string): Promise<string | null> {
+  const known = BESTEXAMHELP_SUBJECTS[code];
+  if (known) return known;
+  if (!env.FIRECRAWL_API_KEY) return null;
+  const pattern = new RegExp(`/exam/(cambridge-[a-z-]+/[a-z0-9-]+-${code})/(?:index\\.php)?$`);
+  for (const level of levelsFor(code)) {
+    const res = await postJson(`${FIRECRAWL_API}/scrape`, env.FIRECRAWL_API_KEY, {
+      url: `${BEH}/${level}/`, formats: ["links"], maxAge: INDEX_MAX_AGE_MS, timeout: SEARCH_TIMEOUT_MS,
+    }, SEARCH_TIMEOUT_MS + 5_000);
+    for (const link of (res?.data?.links ?? []) as unknown[]) {
+      const m = typeof link === "string" ? link.match(pattern) : null;
+      if (m) return m[1]!;
+    }
+  }
+  return null;
+}
+
+export type ProbeResult = "found" | "missing" | "unknown";
+
+/**
+ * HEAD the URL from the Worker itself: free, no provider credits. 404/410
+ * means the file is not there; anything else that is not a PDF 200 (a block,
+ * a timeout) is "unknown", and the read step decides.
+ */
+export async function probeUrl(url: string): Promise<ProbeResult> {
+  try {
+    const res = await fetch(url, { method: "HEAD", redirect: "follow", signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+    if (res.status === 404 || res.status === 410) return "missing";
+    const type = res.headers.get("content-type") ?? "";
+    if (res.ok && /pdf|octet-stream/i.test(type)) return "found";
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * Candidate URLs for exactly this file, best first.
+ *
+ * 1. The computed bestexamhelp address, unless a HEAD says it is not there.
+ *    No search is made when it is (or may be) there.
+ * 2. Only when bestexamhelp does not carry it: one search for the quoted
+ *    filename, one engine at a time (Tavily, then Firecrawl).
  */
 export async function locateScheme(env: Env, ref: SchemeRef): Promise<string[]> {
+  const folder = await bestExamHelpFolder(env, ref.code);
+  if (!folder) return searchScheme(env, ref);
+  const url = bestExamHelpUrl(ref, folder);
+  if (await probeUrl(url) !== "missing") return [url];
+  return searchScheme(env, ref, [url]);
+}
+
+/** Last resort: find a copy of the exact filename on any host. */
+export async function searchScheme(env: Env, ref: SchemeRef, exclude: string[] = []): Promise<string[]> {
   const query = `"${ref.filename}"`;
+  const keep = (urls: string[]) => urls.filter((u) => !exclude.includes(u));
   if (env.TAVILY_API_KEY) {
     const tv = await postJson(`${TAVILY_API}/search`, env.TAVILY_API_KEY, { query, max_results: 10, search_depth: "basic", include_raw_content: false }, SEARCH_TIMEOUT_MS);
-    const found = candidatesFrom((tv?.results ?? []).map((r: any) => r?.url), ref);
+    const found = keep(candidatesFrom((tv?.results ?? []).map((r: any) => r?.url), ref));
     if (found.length) return found;
   }
   if (env.FIRECRAWL_API_KEY) {
     const fc = await postJson(`${FIRECRAWL_API}/search`, env.FIRECRAWL_API_KEY, { query, limit: 10, sources: ["web"] }, SEARCH_TIMEOUT_MS);
-    return candidatesFrom((fc?.data?.web ?? []).map((r: any) => r?.url), ref);
+    return keep(candidatesFrom((fc?.data?.web ?? []).map((r: any) => r?.url), ref));
   }
   return [];
 }
@@ -187,13 +263,27 @@ export interface FetchedScheme { ref: SchemeRef; markdown: string; sourceHost: s
  */
 export async function fetchCambridgeScheme(env: Env, ref: SchemeRef, candidates?: string[]): Promise<FetchedScheme | null> {
   if (!env.FIRECRAWL_API_KEY && !env.TAVILY_API_KEY) return null;
-  const urls = candidates ?? await locateScheme(env, ref);
-  for (const url of urls) {
-    const markdown = await readSchemePdf(env, url);
-    if (!markdown || !documentMatches(markdown, ref)) continue;
-    return { ref, markdown, sourceHost: new URL(url).hostname };
-  }
+  const tried: string[] = [];
+  const attempt = async (urls: string[]) => {
+    for (const url of urls) {
+      if (tried.includes(url)) continue;
+      tried.push(url);
+      const markdown = await readSchemePdf(env, url);
+      if (markdown && documentMatches(markdown, ref)) return { ref, markdown, sourceHost: new URL(url).hostname };
+    }
+    return null;
+  };
+  const direct = await attempt(candidates ?? await locateScheme(env, ref));
+  if (direct) return direct;
+  // The direct address could not be read or did not name this paper: search
+  // once, skipping what was already tried. A search hit is never trusted
+  // without the same in-document check.
+  if (!tried.some((u) => !isBestExamHelp(u))) return attempt(await searchScheme(env, ref, tried));
   return null;
+}
+
+function isBestExamHelp(url: string): boolean {
+  try { return new URL(url).hostname.replace(/^www\./, "") === PREFERRED_HOST; } catch { return false; }
 }
 
 /**
