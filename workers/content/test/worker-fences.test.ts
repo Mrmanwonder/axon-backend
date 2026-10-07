@@ -3,7 +3,7 @@ const f = vi.hoisted(() => ({
   runStatus: "content", answer: "original", extractStatus: "pending", gate: null as Promise<void> | null,
   modelStarted: false, empty: false, failRun: vi.fn(), writes: [] as string[],
 }));
-vi.mock("@mastery/shared/worker.js", () => ({ consumeQueue: (handle: any) => handle, failRun: f.failRun }));
+vi.mock("@mastery/shared/worker.js", async (importOriginal) => ({ ...await importOriginal<any>(), consumeQueue: (handle: any) => handle, failRun: f.failRun }));
 vi.mock("@mastery/shared/r2.js", () => ({ imageRef: async () => ({ url: "fixture", key: "fixture", detail: "high" }) }));
 vi.mock("@mastery/shared/page.js", () => ({ pageDimensions: () => ({ width: 1000, height: 2000 }) }));
 vi.mock("@mastery/shared/model-client.js", () => ({

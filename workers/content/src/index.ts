@@ -1,7 +1,8 @@
 import { callModel } from "@mastery/shared/model-client.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { pipelineWrite } from "@mastery/shared/pipeline_write.js";
-import { consumeQueue } from "@mastery/shared/worker.js";
+import { consumeQueue, shouldFanOut } from "@mastery/shared/worker.js";
+import { QUEUE_TUNING } from "@mastery/shared/queue_tuning.js";
 import { imageRef } from "@mastery/shared/r2.js";
 import { pageDimensions } from "@mastery/shared/page.js";
 import { planContentSources } from "@mastery/shared/content_sources.js";
@@ -18,9 +19,20 @@ interface ContentMessage {
   _retries?: number;
 }
 
-export async function advanceAndEnqueue(env: Env, sb: any, runId: string): Promise<void> {
+/**
+ * Advance the run past content when this was the last region, and hand it to
+ * reconciliation.
+ *
+ * Regions are read concurrently (AXO-211), so the last few often finish
+ * together. `advance_after_content` takes the run lock, so exactly one caller
+ * gets `advanced: true`; later callers are told `enqueue_reconcile` again so a
+ * caller whose own send failed can resend on retry. Only that retry (a
+ * redelivery) acts on it, see `shouldFanOut`, so reconciliation is not queued
+ * once per finishing region.
+ */
+export async function advanceAndEnqueue(env: Env, sb: any, runId: string, redelivered: boolean): Promise<void> {
   const advance = await mustRpc<any>(sb.rpc("advance_after_content", { p_run_id: runId }), "advance_after_content");
-  if (advance?.enqueue_reconcile) {
+  if (advance?.enqueue_reconcile && shouldFanOut(advance, redelivered)) {
     if (!env.RECONCILE_QUEUE) throw new Error("Reconciliation queue is not configured");
     await env.RECONCILE_QUEUE.send({ run_id: runId });
   }
@@ -56,7 +68,7 @@ function field(
 }
 
 const handler = consumeQueue<ContentMessage>(
-  async ({ env, sb, msg, attempt, beat }) => {
+  async ({ env, sb, msg, attempt, redelivered, beat }) => {
     const runId = msg.run_id;
     const regionId = msg.region_id;
     const region = await mustMaybe<any>(sb
@@ -67,7 +79,7 @@ const handler = consumeQueue<ContentMessage>(
     if (!region) return { detail: { skipped: "no such question" } };
 
     if (region.extract_status === "done") {
-      await advanceAndEnqueue(env, sb, runId);
+      await advanceAndEnqueue(env, sb, runId, redelivered);
       return { detail: { skipped: "already read" } };
     }
 
@@ -213,7 +225,7 @@ const handler = consumeQueue<ContentMessage>(
             confidence_signals: { unreadable_reason: "We could not work out the size of this page, so we cannot say where anything on it sits." },
             updated_at: new Date().toISOString(),
           } })) return { detail: { skipped: "stale content result" } };
-        await advanceAndEnqueue(env, sb, runId);
+        await advanceAndEnqueue(env, sb, runId, redelivered);
         return { detail: { unreadable: "no page dimensions" } };
       }
 
@@ -232,7 +244,7 @@ const handler = consumeQueue<ContentMessage>(
             confidence_signals: { unreadable_reason: parsed.unreadable_reason },
             updated_at: new Date().toISOString(),
           } })) return { detail: { skipped: "stale content result" } };
-        await advanceAndEnqueue(env, sb, runId);
+        await advanceAndEnqueue(env, sb, runId, redelivered);
         return { detail: { unreadable: parsed.unreadable_reason } };
       }
 
@@ -260,14 +272,14 @@ const handler = consumeQueue<ContentMessage>(
           updated_at: new Date().toISOString(),
         } })) return { detail: { skipped: "stale content result" } };
 
-      await advanceAndEnqueue(env, sb, runId);
+      await advanceAndEnqueue(env, sb, runId, redelivered);
       return { detail: { awarded: awarded.value, available: available.value } };
     } catch (e) {
       console.error("mastery-content post-model error", regionId, String((e as any)?.stack ?? e));
       throw e;
     }
   },
-  async ({ env, sb, msg }, error) => {
+  async ({ env, sb, msg, redelivered }, error) => {
     const regionId = msg.region_id;
     const region = await mustMaybe<any>(sb.from("question_region").select("confidence_signals").eq("id", regionId).maybeSingle(), "content terminal region read");
     if (!await pipelineWrite(sb, msg.run_id, "content", { region_id: regionId, patch: {
@@ -282,8 +294,9 @@ const handler = consumeQueue<ContentMessage>(
         },
         updated_at: new Date().toISOString(),
       } })) return;
-    await advanceAndEnqueue(env, sb, msg.run_id);
-  }
+    await advanceAndEnqueue(env, sb, msg.run_id, redelivered);
+  },
+  { concurrency: QUEUE_TUNING.content.concurrency },
 );
 
 export default { queue: handler } satisfies ExportedHandler<Env, ContentMessage>;

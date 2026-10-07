@@ -1,6 +1,7 @@
 import { callModel } from "@mastery/shared/model-client.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
+import { QUEUE_TUNING } from "@mastery/shared/queue_tuning.js";
 import { mustOk, mustOne, mustMaybe, mustData, mustAffectRows, mustRpc } from "@mastery/shared/db.js";
 import { clearsTheFloor } from "@mastery/shared/quality_floor.js";
 import { providerKeyForBoard, providerKeyForProgramme } from "@mastery/shared/provider_identity.js";
@@ -372,7 +373,8 @@ const handler = consumeQueue<ExplainMessage>(
       "explain_status=failed",
     );
     await mustRpc(sb.rpc("advance_after_explain", { p_run_id: msg.run_id }), "advance_after_explain");
-  }
+  },
+  { concurrency: QUEUE_TUNING.explain.concurrency },
 );
 
 export default { queue: handler } satisfies ExportedHandler<Env, ExplainMessage>;
