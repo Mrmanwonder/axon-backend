@@ -4,6 +4,7 @@ import { pipelineWrite } from "@mastery/shared/pipeline_write.js";
 import { callModel } from "@mastery/shared/model-client.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
+import { QUEUE_TUNING } from "@mastery/shared/queue_tuning.js";
 import { imageRef } from "@mastery/shared/r2.js";
 import { SYSTEM, instruction, SCHEMA, validate, REJECTION_REASON, qualityFailureMessage, type QualitySignals } from "@mastery/shared/prompts/triage.v1.js";
 import { CAPTURE } from "@mastery/shared/contract.js";
@@ -230,7 +231,8 @@ const handler = consumeQueue<TriageMessage>(
     }
     console.error("mastery-triage permanent failure", runId, String((error as any)?.stack ?? error));
     await failRun(sb, runId, "We ran into a problem reading this paper. Nothing was lost — please try again.", failureCodeFor("triage", error));
-  }
+  },
+  { concurrency: QUEUE_TUNING.triage.concurrency },
 );
 
 export default { queue: handler } satisfies ExportedHandler<Env, TriageMessage>;

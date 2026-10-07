@@ -37,24 +37,28 @@ queue = "reconcile-queue"
 binding = "SELF_QUEUE"
 queue = "structure-queue"
 
+# AXO-211: one invocation takes a batch and handles it concurrently, each
+# message acked or retried on its own (shared/src/worker.ts consumeQueue).
+# max_batch_size must equal QUEUE_TUNING.structure.maxBatchSize in
+# shared/src/queue_tuning.ts, which also holds the in-invocation concurrency
+# and the wall/CPU/memory budget it is checked against; a test fails if the two drift.
+#
+# max_concurrency was 1 as containment: the handler allocated the run-wide
+# order_index client-side (read the maximum, insert consecutive indexes), and
+# continuations stitched onto "the last region written". Continuations are
+# page-local with one run-level assembly pass since AXO-116. The index (and the
+# numbered-label index) is now claimed safely under concurrency: the insert runs
+# in pipeline_write under the paper lock, a page that loses the race gets 23505
+# with its transaction rolled back, and it re-plans from the same model answer
+# (workers/structure/src/index.ts, STRUCTURE_WRITE_ATTEMPTS). So pages of one
+# paper now run together: a 13-page paper is one batch of 13 handled at once.
+# At most 3 invocations at once, 13 calls each: 39 structure calls in flight.
 [[queues.consumers]]
 queue = "structure-queue"
-max_batch_size = 1
+max_batch_size = 25
 max_batch_timeout = 1
 max_retries = 3
-# Containment, not the intended architecture. The handler allocates global
-# order_index client-side: it reads the current maximum, then inserts a run of
-# consecutive indexes. Two page workers running at once read the same maximum
-# and allocate the same indexes, and there is a unique constraint on
-# (run_id, order_index) waiting for them. Cross-page continuation has the same
-# shape — it stitches onto "the last existing region", which is only the right
-# one if the previous page happens to have finished first.
-#
-# Concurrency 1 makes page order the arrival order rather than a race. It costs
-# throughput on long booklets and it is deliberately temporary: the real fix is
-# page-local detection plus one deterministic run-level assembly pass, which
-# removes the shared counter entirely. Raise this only with that in place.
-max_concurrency = 1
+max_concurrency = 3
 dead_letter_queue = "structure-dlq"
 
 # Secrets: ASSET_SIGNING_SECRET, GOOGLE_API_KEY, GROQ_API_KEY (legacy, unused),

@@ -1,5 +1,6 @@
 import { pipelineWrite } from "@mastery/shared/pipeline_write.js";
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
+import { QUEUE_TUNING } from "@mastery/shared/queue_tuning.js";
 import { mustOk, mustData, mustMaybe, mustRpc } from "@mastery/shared/db.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { adjudicationTriggers, reconcile, type QuestionMarks } from "@mastery/shared/reconcile.js";
@@ -185,7 +186,8 @@ const handler = consumeQueue<ReconcileMessage>(
         : "We could not find the pages for this paper. Try scanning it again.",
       pagesStored ? failureCodeFor("reconcile", error) : "reconcile_pages_missing",
     );
-  }
+  },
+  { concurrency: QUEUE_TUNING.reconcile.concurrency },
 );
 
 export default { queue: handler } satisfies ExportedHandler<Env, ReconcileMessage>;

@@ -19,12 +19,19 @@ queue = "reconcile-queue"
 binding = "SELF_QUEUE"
 queue = "content-queue"
 
+# AXO-211: one invocation takes a batch and handles it concurrently, each
+# message acked or retried on its own (shared/src/worker.ts consumeQueue).
+# max_batch_size must equal QUEUE_TUNING.content.maxBatchSize in
+# shared/src/queue_tuning.ts, which also holds the in-invocation concurrency
+# and the wall/CPU/memory budget it is checked against; a test fails if the two drift.
+# 24 regions per invocation, 12 model calls in flight each; up to 6 invocations
+# keeps the stage's ceiling at 72 concurrent Gemini calls.
 [[queues.consumers]]
 queue = "content-queue"
-max_batch_size = 1
+max_batch_size = 24
 max_batch_timeout = 1
 max_retries = 3
-max_concurrency = 10
+max_concurrency = 6
 dead_letter_queue = "content-dlq"
 
 # Secrets: ASSET_SIGNING_SECRET, GOOGLE_API_KEY, GROQ_API_KEY (legacy, unused),

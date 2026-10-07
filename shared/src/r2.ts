@@ -259,6 +259,39 @@ const imageRefCache: Map<string, string> =
   (globalThis as any).__imageRefCache ?? ((globalThis as any).__imageRefCache = new Map());
 
 /**
+ * Upper bound on the characters the image cache holds (about 1 byte each).
+ *
+ * The cache used to be bounded only by entry count (cleared past 50). Fifty
+ * full pages in base64 is about 70 MB, which was tolerable while an isolate
+ * handled one message at a time. A consumer now holds a batch of model calls
+ * in flight at once (AXO-211, queue_tuning.ts), each with its own request
+ * body, inside the same 128 MB isolate, so the cache gets a byte budget and
+ * evicts oldest-first instead.
+ */
+export const IMAGE_CACHE_MAX_CHARS = 24 * 1024 * 1024;
+
+/** Insert into the image cache, evicting the oldest entries past the byte budget. */
+export function rememberImage(cacheKey: string, dataUrl: string, maxChars = IMAGE_CACHE_MAX_CHARS): void {
+  imageRefCache.delete(cacheKey);
+  if (dataUrl.length > maxChars) return;
+  let total = dataUrl.length;
+  for (const v of imageRefCache.values()) total += v.length;
+  for (const [k, v] of imageRefCache) {
+    if (total <= maxChars) break;
+    imageRefCache.delete(k);
+    total -= v.length;
+  }
+  imageRefCache.set(cacheKey, dataUrl);
+}
+
+/** The cache's current size in characters (tests and diagnostics). */
+export function imageCacheChars(): number {
+  let total = 0;
+  for (const v of imageRefCache.values()) total += v.length;
+  return total;
+}
+
+/**
  * Reads an R2 object and returns it as a data: URL suitable for a model's
  * image_url content part. `detail` is accepted for the caller's intent (and
  * some callers — triage — pass "low" deliberately) but is NOT currently sent
@@ -289,8 +322,7 @@ export async function imageRef(env: Env, bucket: BucketKind, key: string, detail
       b64 = btoa(binary);
     }
     dataUrl = `data:${mime};base64,${b64}`;
-    if (imageRefCache.size > 50) imageRefCache.clear();
-    imageRefCache.set(cacheKey, dataUrl);
+    rememberImage(cacheKey, dataUrl);
   }
   return { url: dataUrl, key, detail };
 }

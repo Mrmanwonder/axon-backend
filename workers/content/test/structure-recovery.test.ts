@@ -5,7 +5,7 @@ const fixture = vi.hoisted(() => ({
   status: "pending", runStatus: "structure", deleteError: false, modelGate: null as Promise<void> | null,
   dispatch: false, events: [] as string[],
 }));
-vi.mock("@mastery/shared/worker.js", () => ({ consumeQueue: (handle: any) => handle, failRun: vi.fn() }));
+vi.mock("@mastery/shared/worker.js", async (importOriginal) => ({ ...await importOriginal<any>(), consumeQueue: (handle: any) => handle, failRun: vi.fn() }));
 vi.mock("@mastery/shared/structure-page.js", () => ({ loadStructurePage: async () => ({ ...fixture.page, structure_status: fixture.status }) }));
 vi.mock("@mastery/shared/r2.js", () => ({ imageRef: async () => ({ type: "image_url", image_url: { url: "fixture" } }) }));
 vi.mock("@mastery/shared/page.js", () => ({ pageDimensions: () => ({ width: 1000, height: 2000 }), UNPLACEABLE_PAGE_REASON: "no dimensions" }));
@@ -101,7 +101,9 @@ test("a failed downstream send is retried after structure has already advanced",
   await expect((worker.queue as any)(context)).rejects.toThrow("queue unavailable");
   expect(fixture.status).toBe("done");
   expect(fixture.runStatus).toBe("content");
-  await (worker.queue as any)(context);
+  // The queue redelivers the failed message (AXO-211: only a redelivery acts
+  // on the re-issued work list, so concurrent peers do not resend it).
+  await (worker.queue as any)({ ...context, attempt: 2, redelivered: true });
   expect(sendBatch).toHaveBeenCalledTimes(2);
 });
 test("missing downstream queue binding cannot acknowledge pending dispatch", async () => {
