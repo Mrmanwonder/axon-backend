@@ -3,6 +3,8 @@ import { normalizeInboundEvidence, TutorOrchestrator } from "../src/intelligence
 import type { AIProvider, ModelRequest, ModelResponse } from "../src/providers/types";
 import type { Evidence, ReasoningResult } from "../src/schemas";
 import type { RetrievalRequest, RetrievalService } from "../src/intelligence/retrieval/types";
+import { geminiPrivacyMode } from "../src/providers/gemini";
+import { probeTutorProvider } from "../src/providers/capabilities";
 
 class StubProvider implements AIProvider {
   readonly id = "gemini-zdr";
@@ -115,6 +117,29 @@ describe("TutorOrchestrator", () => {
     expect(result.status).toBe("controlled_failure");
     expect(result.answer).toContain("privacy-compliant");
     expect(provider.calls).toBe(0);
+  });
+  it("answers through the paid-tier provider (no training, declared retention)", async () => {
+    const provider = new StubProvider([supported({ id: "c", text: "Mitosis produces genetically similar daughter cells.", type: "stable", evidenceIds: ["stable:biology.cells.cell_division.mitosis"], risk: "low", verificationStatus: "pending" })]);
+    Object.defineProperty(provider, "id", { value: "gemini-paid" });
+    const result = await new TutorOrchestrator({ provider }).respond({ studentId: "s", message: "Explain mitosis", depth: "BRIEF" });
+    expect(provider.calls).toBe(1);
+    expect(result.verification.passed).toBe(true);
+  });
+  it("reads the privacy mode strictly: only zdr and paid_no_training are attested", () => {
+    expect(geminiPrivacyMode("paid_no_training")).toBe("paid_no_training");
+    expect(geminiPrivacyMode("zdr")).toBe("zdr");
+    for (const value of ["unverified", "", undefined, "paid", "ZDR", "paid_no_training "]) expect(geminiPrivacyMode(value)).toBe("unverified");
+  });
+  it("keeps zero_data_retention honest for the paid tier while no_training passes", async () => {
+    const provider = { id: "gemini-paid", generate: (request: ModelRequest) => Promise.resolve({ requestedModel: request.model, servedModel: request.model, latencyMs: 1, usage: {}, output: { probe: "ok" } }) } satisfies AIProvider;
+    const probe = await probeTutorProvider(provider, "gemini-3.8-flash");
+    const passed = (capability: string) => probe.results.find((item) => item.capability === capability)?.passed;
+    expect(passed("zero_data_retention")).toBe(false);
+    expect(passed("no_training")).toBe(true);
+    expect(passed("structured_output")).toBe(true);
+    const unattested = await probeTutorProvider({ ...provider, id: "gemini-unverified" }, "gemini-3.8-flash");
+    expect(unattested.results.find((item) => item.capability === "no_training")?.passed).toBe(false);
+    expect(unattested.results.find((item) => item.capability === "structured_output")?.passed).toBe(false);
   });
   it("infers brief depth from an explicit direct-answer request", async () => {
     const provider = new StubProvider([{

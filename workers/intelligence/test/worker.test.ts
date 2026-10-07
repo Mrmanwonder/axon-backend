@@ -129,7 +129,7 @@ describe("Worker", () => {
   it("reports fail-closed production readiness until external evidence exists", async () => {
     const response = await exports.default.fetch(new Request("https://axon.test/v1/admin/readiness", { headers: { authorization: "Bearer test-admin-token" } }));
     expect(response.status).toBe(503);
-    await expect(response.json()).resolves.toMatchObject({ status: "not_ready", checks: { geminiZdr: false, releaseCertified: false } });
+    await expect(response.json()).resolves.toMatchObject({ status: "not_ready", checks: { geminiNoTraining: false, releaseCertified: false } });
   });
   it("does not allow ordinary callers to use admin endpoints", async () => {
     const response = await exports.default.fetch(new Request("https://axon.test/v1/admin/provider-health", { headers: { authorization: "Bearer test-token" } }));

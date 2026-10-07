@@ -4,10 +4,12 @@
   // consumer, no artifact bucket. The document routes are not part of this stage, and nothing
   // binds to document-vision until it is admitted to the deployment plan.
   //
-  // GEMINI_PRIVACY_MODE stays "unverified". While it does, /v1/tutor fails closed with
-  // NO_COMPLIANT_PROVIDER by design (docs/TUTOR_SECURITY.md, Boundary D). Changing it to "zdr" is
-  // an attestation that Google zero-data-retention applies to the key in use; it is made by the
-  // owner, never by this repo's tooling.
+  // GEMINI_PRIVACY_MODE is "paid_no_training": the key is on the Google AI Studio paid tier, so
+  // Google does not train on the data and keeps it for a bounded period that the Privacy Policy
+  // declares (owner decision, 7 Oct 2026, Axon.md §11; AXO-126). It is not zero retention. "zdr" is
+  // an attestation that a written Google zero-data-retention arrangement covers the key; it is made
+  // by the owner, never by this repo's tooling. Any other value fails closed with
+  // NO_COMPLIANT_PROVIDER (docs/TUTOR_SECURITY.md, Boundary D).
   //
   // Secrets, set with `wrangler secret put` (never committed): GOOGLE_API_KEY, AXON_INTERNAL_TOKEN,
   // AXON_ADMIN_TOKEN, AXON_PSEUDONYM_KEY, SUPABASE_SECRET_KEY; optional TAVILY_API_KEY, FIRECRAWL_API_KEY.
@@ -20,7 +22,7 @@
     "AXON_DEPLOYMENT_SHA": "development",
     "AXON_CONFIG_REVISION": "v3.default",
     "AXON_PIPELINE_VERSION": "3.0.0",
-    "GEMINI_PRIVACY_MODE": "unverified",
+    "GEMINI_PRIVACY_MODE": "paid_no_training",
     "AXON_VISION_PRIVACY_MODE": "unverified",
     "TAVILY_API_BASE": "https://api.tavily.com",
     "SUPABASE_URL": "https://dlgcqieyevoebefhcggi.supabase.co",
