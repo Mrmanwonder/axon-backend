@@ -3,6 +3,13 @@ main = "src/index.ts"
 compatibility_date = "2026-08-01"
 compatibility_flags = ["nodejs_compat"]
 
+# The scheme check (AXO-202) reads the first page image to confirm the printed
+# paper code before it fetches the scheme, so this worker needs the derived
+# bucket (AXO-213). Read only: nothing here writes to R2.
+[[r2_buckets]]
+binding = "DERIVED"
+bucket_name = "axon-derived"
+
 [[queues.producers]]
 binding = "SELF_QUEUE"
 queue = "explain-queue"
