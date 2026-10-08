@@ -20,6 +20,7 @@ import { callModel } from "./model-client.js";
 import { imageRef } from "./r2.js";
 import { mustData, mustMaybe, mustOk } from "./db.js";
 import { isRetryable } from "./errors.js";
+import { placementInput, placementVerdicts } from "./placement.js";
 import {
   fetchCambridgeScheme, headerMatches, schemePreamble, schemeSections, sectionFor, type SchemeRef,
 } from "./cambridge_scheme.js";
@@ -38,6 +39,8 @@ export interface SchemeCheckQuestionMessage {
     run_id: string;
     region_id: string;
     paper: string;
+    /** The placed label ("3(c)"); absent on messages queued before it existed. */
+    label?: string | null;
     section: string | null;
     conventions: string | null;
   };
@@ -105,25 +108,48 @@ export async function runSchemeCheck(opts: { env: Env; sb: SupabaseClient; runId
   const conventions = schemePreamble(scheme.markdown);
 
   // 3. One message per readable question.
-  const regions = await mustData(sb.from("question_region")
-    .select("id, question_label")
+  const allRegions = await mustData(sb.from("question_region")
+    .select("id, order_index, question_label, page_spans, confidence_tier, marks_awarded, marks_available, student_answer, question_text")
     .eq("run_id", runId)
-    .or("confidence_tier.is.null,confidence_tier.neq.unreadable")
     .order("order_index"), "regions read") as any[];
-  if (!regions.length) {
+  const paper = `${ref.code}/${ref.component} ${sessionWords(ref)} ${ref.year}`;
+  const messages = schemeQuestionMessages(runId, allRegions, sections, paper, conventions);
+  if (!messages.length) {
     await setStatus(sb, runId, { status: "done", checked: 0, reason: "No readable question was found on this paper." });
     return { checked: 0 };
   }
   const queue = env.SELF_QUEUE ?? env.EXPLAIN_QUEUE;
   if (!queue) throw new Error("scheme_check: no queue to fan out to");
-  const paper = `${ref.code}/${ref.component} ${sessionWords(ref)} ${ref.year}`;
-  const messages: SchemeCheckQuestionMessage[] = regions.map((region) => ({
-    scheme_check_q: { run_id: runId, region_id: region.id, paper, section: sectionFor(sections, region.question_label), conventions },
-  }));
   for (let i = 0; i < messages.length; i += 50) {
     await queue.sendBatch(messages.slice(i, i + 50).map((body) => ({ body })));
   }
   return { queued: messages.length, sections: sections.size, scheme: ref.filename, source_host: scheme.sourceHost };
+}
+
+/**
+ * One message per readable region, each carrying its scheme section.
+ *
+ * The section is found by the PLACED label (council D1). Cambridge prints
+ * "3(a)" once and then a bare "(c)" further down; a bare "(c)" has no question
+ * number to find a section by, so every such part came back "not found in the
+ * mark scheme". The walk is the one the review screen groups parts with, run
+ * over every region of the run (unreadable ones included, so the reading order
+ * is the paper's), then the unreadable ones are dropped.
+ */
+export function schemeQuestionMessages(
+  runId: string,
+  rows: Array<Parameters<typeof placementInput>[0] & { id: string; confidence_tier?: string | null; question_label?: string | null }>,
+  sections: Map<number, string>,
+  paper: string,
+  conventions: string | null,
+): SchemeCheckQuestionMessage[] {
+  const placement = placementVerdicts(rows.map(placementInput));
+  return rows
+    .map((row, i) => ({ row, label: placement[i].placedLabel ?? row.question_label ?? null }))
+    .filter(({ row }) => row.confidence_tier !== "unreadable")
+    .map(({ row, label }) => ({
+      scheme_check_q: { run_id: runId, region_id: row.id, paper, label, section: sectionFor(sections, label), conventions },
+    }));
 }
 
 /** One question: check it, store the estimate, close the paper when it is the last. */
@@ -143,7 +169,7 @@ export async function runSchemeCheckQuestion(opts: { env: Env; sb: SupabaseClien
     try {
       const out = await callModel({
         env, sb, stage: "scheme_check", system: SYSTEM,
-        instruction: instruction({ paper: msg.paper, label: region.question_label, marksAvailable, questionText: region.question_text, studentAnswer: region.student_answer, scheme: msg.section, conventions: msg.conventions }),
+        instruction: instruction({ paper: msg.paper, label: msg.label ?? region.question_label, marksAvailable, questionText: region.question_text, studentAnswer: region.student_answer, scheme: msg.section, conventions: msg.conventions }),
         schema: SCHEMA as any,
         validate: (v) => validate(v, { scheme: msg.section!, marksAvailable }),
         runId: msg.run_id, paperId: region.paper_id, regionId: region.id, studentId: region.student_id, attempt: opts.attempt,

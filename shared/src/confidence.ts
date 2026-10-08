@@ -19,7 +19,8 @@ export type Recognition = "high" | "medium" | "low" | null;
 
 export interface AssessInput {
   recognition: Recognition;
-  numberingSound: boolean;
+  /** Numbering judged on placed labels in page order (shared/src/placement.ts). */
+  numberingSound: SignalValue;
   /**
    * Whether this region's own working actually checks out, computed by
    * evaluating it — see shared/src/arithmetic.ts.
@@ -38,6 +39,14 @@ export interface AssessInput {
   awarded: number | null;
   available: number | null;
   unreadable: boolean;
+  /**
+   * The paper is shown to be unmarked (council D1, 7 Oct 2026): triage read it
+   * as `ungraded_paper` at `high` confidence. Only then is a missing teacher
+   * mark the absence of a check (`unknown`) rather than a failed one. Defaults
+   * to false: on a marked paper a missing mark is a failure, and it is the
+   * signal that caught all five known misreads (ADDENDUM-01A item 4).
+   */
+  paperUnmarked?: boolean;
 }
 
 /**
@@ -69,7 +78,7 @@ export function assess(input: AssessInput): AssessResult {
     recognition: input.recognition === null ? "unknown" : input.recognition === "high" || input.recognition === "medium",
     structural: input.numberingSound,
     arithmetic: input.arithmeticOk,
-    plausibility: plausible(input.awarded, input.available),
+    plausibility: plausible(input.awarded, input.available, input.paperUnmarked === true),
   };
   if (input.unreadable) {
     return { tier: "unreadable", signals };
@@ -98,13 +107,69 @@ export function downgradeRecognition(recognition: Recognition): Recognition {
   return recognition;
 }
 
-function plausible(awarded: number | null, available: number | null): boolean {
-  if (awarded === null || available === null) return false;
-  if (awarded < 0 || available <= 0 || awarded > available) return false;
-  if (available > 30) return false;
+/**
+ * Is the teacher's mark, as read, a mark that can exist?
+ *
+ * Out-of-range or impossible values are always false. A missing mark is false
+ * on a marked paper and `unknown` only on a paper shown to be unmarked, where
+ * there is no mark to have read. There is no cap on the marks available: a
+ * 40-mark essay question is real (ADDENDUM-01A item 9).
+ */
+export function plausible(awarded: number | null, available: number | null, paperUnmarked = false): SignalValue {
+  if (awarded !== null && (!Number.isFinite(awarded) || awarded < 0)) return false;
+  if (available !== null && (!Number.isFinite(available) || available <= 0)) return false;
+  if (awarded !== null && available !== null && awarded > available) return false;
   // Half marks are the finest grain CAIE marking actually uses; anything
   // finer than that is a misread, not a real award.
-  return Math.abs(awarded * 2 - Math.round(awarded * 2)) < 1e-6;
+  if (awarded !== null && Math.abs(awarded * 2 - Math.round(awarded * 2)) >= 1e-6) return false;
+  if (awarded === null || available === null) return paperUnmarked ? "unknown" : false;
+  return true;
+}
+
+/** Why a part asks the student. Empty means it does not ask. */
+export type AskReason = "unreadable" | "recognition" | "teacher_mark" | "unplaceable";
+
+export interface AskInput {
+  unreadable: boolean;
+  /** The recognition the tier was judged on (after any page downgrade). */
+  recognition: Recognition;
+  /** True unless the paper is shown to be unmarked. */
+  paperMarked: boolean;
+  plausibility: SignalValue;
+  /** Placement: unassigned, or still colliding once placed. */
+  unplaceable: boolean;
+  /** False for an unlabelled region with no mark, answer or question text. */
+  counted: boolean;
+}
+
+/**
+ * Council D1 ask-rule (7 Oct 2026). A part asks the student only when
+ *   (a) it is unreadable, or its recognition is low or null;
+ *   (b) the paper is marked, and the teacher's mark or the marks available is
+ *       missing or impossible;
+ *   (c) it cannot be placed (unassigned, or colliding after placement).
+ * Arithmetic failing alone does not ask: the part stays `unsure` with "Fix
+ * this". A region that is not a part (no label and nothing on it) is asked
+ * only under (a).
+ */
+export function askReasons(input: AskInput): AskReason[] {
+  const out: AskReason[] = [];
+  if (input.unreadable) out.push("unreadable");
+  else if (input.recognition === "low" || input.recognition === null) out.push("recognition");
+  if (input.counted && input.paperMarked && input.plausibility === false) out.push("teacher_mark");
+  if (input.counted && input.unplaceable) out.push("unplaceable");
+  return out;
+}
+
+/**
+ * Shown to be unmarked: triage classified the paper `ungraded_paper` at `high`
+ * confidence. There is no student-facing "this paper is unmarked" field today
+ * (only the opposite, `route_override.student_says_marked`, which triage
+ * already folds into the stored classification).
+ */
+export function paperShownUnmarked(tierRouting: unknown): boolean {
+  const triage = (tierRouting as { triage?: { classification?: unknown; confidence?: unknown } } | null)?.triage;
+  return triage?.classification === "ungraded_paper" && triage?.confidence === "high";
 }
 
 /**
@@ -113,6 +178,10 @@ function plausible(awarded: number | null, available: number | null): boolean {
  * or exactly one higher). A label the model couldn't read (`null`) neither
  * passes nor fails anything else; it is simply skipped when looking
  * backward for "the previous number".
+ *
+ * @deprecated Raw labels in stored order. Reconcile judges numbering with
+ * `placementVerdicts` (shared/src/placement.ts) on placed labels in page order
+ * since council D1; this is kept only for callers outside the pipeline.
  */
 export function numberingSoundness(labels: Array<string | null>): boolean[] {
   const numeric = labels.map(mainNumber);

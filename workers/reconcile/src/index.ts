@@ -4,15 +4,15 @@ import { QUEUE_TUNING } from "@mastery/shared/queue_tuning.js";
 import { mustOk, mustData, mustMaybe, mustRpc } from "@mastery/shared/db.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { adjudicationTriggers, reconcile, type QuestionMarks } from "@mastery/shared/reconcile.js";
-import { assess, numberingSoundness, downgradeRecognition, type Recognition } from "@mastery/shared/confidence.js";
+import { paperShownUnmarked } from "@mastery/shared/confidence.js";
 import { checkAnswer } from "@mastery/shared/arithmetic.js";
-import { checkLabels, duplicateIndexes } from "@mastery/shared/labels.js";
+import { checkLabels } from "@mastery/shared/labels.js";
+import { byReadingOrder, placementInput } from "@mastery/shared/placement.js";
+import { judgeRegions, recognitionFor } from "@mastery/shared/review_rule.js";
 import { readAnswerBlock, checkableText } from "@mastery/shared/answer_block.js";
 import type { Env } from "@mastery/shared/env.js";
 
-export function recognitionFor(value: unknown): Recognition {
-  return value === "high" || value === "medium" || value === "low" ? value : null;
-}
+export { recognitionFor };
 
 interface ReconcileMessage {
   run_id: string;
@@ -22,7 +22,7 @@ interface ReconcileMessage {
 const handler = consumeQueue<ReconcileMessage>(
   async ({ env, sb, msg }) => {
     const runId = msg.run_id;
-    const run = await mustMaybe<any>(sb.from("extraction_run").select("id, paper_id, student_id, status").eq("id", runId).maybeSingle(), "reconcile run read");
+    const run = await mustMaybe<any>(sb.from("extraction_run").select("id, paper_id, student_id, status, tier_routing").eq("id", runId).maybeSingle(), "reconcile run read");
     if (!run) return { detail: { skipped: "no such run" } };
     if (["failed", "rejected", "committed", "needs_review", "ready"].includes(run.status)) {
       return { detail: { skipped: run.status } };
@@ -38,7 +38,7 @@ const handler = consumeQueue<ReconcileMessage>(
     const paper = await mustMaybe<any>(sb.from("paper").select("reported_total, stated_maximum").eq("id", run.paper_id).maybeSingle(), "reconcile paper read");
     const regions = await mustData<any[]>(sb
       .from("question_region")
-      .select("id, order_index, question_label, marks_awarded, marks_available, confidence_tier, confidence_signals, extract_status, page_spans, student_answer, answer_block")
+      .select("id, order_index, question_label, marks_awarded, marks_available, confidence_tier, confidence_signals, extract_status, page_spans, student_answer, question_text, answer_block")
       .eq("run_id", runId)
       .order("order_index"), "reconcile regions read");
     if (!regions?.length) {
@@ -60,16 +60,17 @@ const handler = consumeQueue<ReconcileMessage>(
       paper?.stated_maximum === null || paper?.stated_maximum === undefined ? null : Number(paper.stated_maximum)
     );
 
-    const sound = numberingSoundness(marks.map((m) => m.label));
-
     // The label set, checked structurally rather than trusted. Two regions
     // claiming the same part means the marks on at least one of them are
-    // attached to the wrong question — decidable without a model, and a
-    // condition the paper must not be committed under. `2a` and `2. a)` are the
-    // same part, which is why this compares canonical forms: production holds
-    // both spellings for one question, so a string comparison sees no clash.
-    const labelCheck = checkLabels(regions.map((r: any) => r.question_label));
-    const duplicates = duplicateIndexes(labelCheck);
+    // attached to the wrong question — decidable without a model. `2a` and
+    // `2. a)` are the same part, which is why this compares canonical forms.
+    // Read in page order (council D1): stored order was the order pages
+    // finished structure, which says nothing about the paper. This feeds only
+    // the adjudication trigger; the per-region verdict is the placement walk's.
+    const inReadingOrder = regions
+      .map((r: any) => ({ ...placementInput(r), label: r.question_label as string | null }))
+      .sort(byReadingOrder);
+    const labelCheck = checkLabels(inReadingOrder.map((r) => r.label));
     if (!labelCheck.ok) {
       console.info("duplicate question labels on this run", runId,
         labelCheck.problems.filter((p) => p.kind === "duplicate").map((p) => p.label).join(","));
@@ -105,42 +106,29 @@ const handler = consumeQueue<ReconcileMessage>(
     // AXON_FIX_BRIEF.md §3.3, §9.1). apply_region_confidence() does the same
     // update in a single statement, tested against a synthetic 60-question
     // batch before this shipped.
-    const confidenceRows = regions.map((region: any, i: number) => {
-      const spans: Array<{ page: number }> = region.page_spans ?? [];
-      const touchesFallbackPage = spans.some((s) => fallbackPageNumbers.has(s.page));
-      const recognition: Recognition = touchesFallbackPage
-        ? downgradeRecognition(marks[i].recognition)
-        : marks[i].recognition;
-
-      // The paper's totals not adding up is not this region's problem unless
-      // this region is *why*. reconcile() ranks which region(s) the discrepancy
-      // is attributable to, and mastery-adjudicate confirms and applies that
-      // before the student reaches the review screen. So a clean question is
-      // still not punished for a bad total elsewhere on the paper.
-      //
-      // What HAS changed is that `arithmetic` now means this region's own
-      // working, evaluated — not a hardcoded true. An inconsistent chain makes
-      // the region unsure and routes it back to its crop; it never touches a
-      // mark, because which of the student and the transcription is wrong is
-      // not knowable from the text. Production holds handwritten `8/2` stored
-      // as `8+1`, which turns a correct step into a false one.
-      const { tier, signals } = assess({
-        recognition,
-        // A duplicated label is a structural failure of the whole set, so every
-        // region on the run carries it: the marks may be on the wrong question
-        // and there is no way to tell which one from here.
-        // A duplicated part is a structural failure of the regions that share
-        // it, not of every question on the paper: the other parts' marks are
-        // where they were read (owner, 5 Oct 2026: nineteen correct readings
-        // all unsure because two "(b)"s collided).
-        numberingSound: (sound[i] ?? false) && !duplicates.has(i),
-        arithmeticOk: arithmetic[i],
-        awarded: marks[i].awarded,
-        available: marks[i].available,
-        unreadable: region.confidence_tier === "unreadable" || region.extract_status === "failed",
-      });
-      return { id: region.id, tier, signals: { ...region.confidence_signals, ...signals }, needs_review: true };
+    //
+    // The paper's totals not adding up is not a region's problem unless that
+    // region is *why*: reconcile() ranks the suspects and mastery-adjudicate
+    // confirms them. `arithmetic` is the region's own working, evaluated; an
+    // inconsistent chain makes the region unsure, never touches a mark, and —
+    // council D1 — does not on its own ask the student.
+    //
+    // needs_review used to be true for every region on every paper, so review
+    // was a whole screen that protected nothing. It is now the D1 ask-rule:
+    // unreadable or low/null recognition, a missing or impossible teacher mark
+    // on a marked paper, or a part the placement walk cannot place. The reasons
+    // travel in confidence_signals.ask so the inline card can say why.
+    const verdicts = judgeRegions(regions, {
+      paperUnmarked: paperShownUnmarked(run.tier_routing),
+      fallbackPages: fallbackPageNumbers,
+      arithmetic,
     });
+    const confidenceRows = regions.map((region: any, i: number) => ({
+      id: region.id,
+      tier: verdicts[i].tier,
+      signals: { ...region.confidence_signals, ...verdicts[i].signals },
+      needs_review: verdicts[i].needs_review,
+    }));
 
     // A failed write here used to be ignored: the run moved on with a stale or missing
     // reconciliation. Throwing lets the queue retry the stage and the terminal handler classify it.
