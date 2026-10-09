@@ -4,6 +4,7 @@ import type { Env } from "@mastery/shared/env.js";
 import { deliverCostAlerts, type CostAlertRow } from "@mastery/shared/cost_alerts.js";
 import { runTutorPurges } from "@mastery/shared/tutor_purge.js";
 import { queueTopicTagWork } from "@mastery/shared/topic_tag.js";
+import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
 
 const KEYS_PER_TICK = 200;
 const CLAIMS_PER_TICK = 20;
@@ -87,7 +88,8 @@ export default {
             return (data ?? []) as Array<{ region_id: string; document_id: string }>;
           },
           async send(messages) {
-            await env.EXPLAIN_QUEUE!.sendBatch(messages.map((body) => ({ body })));
+            // ⚡ Bolt: Use chunkedSendBatch for concurrent dispatch to avoid N+1 bottleneck and honor batch limits
+            await chunkedSendBatch(env.EXPLAIN_QUEUE!, messages, (body) => ({ body }));
           },
         });
         if (queued) console.info("topic tags queued", queued);
