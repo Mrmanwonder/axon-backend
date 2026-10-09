@@ -32,3 +32,12 @@ for (const scriptName of ["mastery-triage","mastery-structure","mastery-crop","m
     cpuP50: r.quantiles?.cpuTimeP50, cpuP99: r.quantiles?.cpuTimeP99,
   }))}));
 }
+
+for (const scriptName of ["mastery-structure", "mastery-content"]) {
+  const response = await fetch("https://api.cloudflare.com/client/v4/accounts/" + encodeURIComponent(account) + "/workers/scripts/" + scriptName + "/settings", {
+    headers: { authorization: "Bearer " + token }, signal: AbortSignal.timeout(30000),
+  });
+  if (!response.ok) { console.log(JSON.stringify({scriptName, settingsHttpStatus:response.status})); continue; }
+  const settings = (await response.json()).result;
+  console.log(JSON.stringify({scriptName, usageModel: settings?.usage_model, limits: {cpu_ms:settings?.limits?.cpu_ms, subrequests:settings?.limits?.subrequests}}));
+}
