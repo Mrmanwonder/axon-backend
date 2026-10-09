@@ -1,7 +1,7 @@
 import { beforeEach, expect, test, vi } from "vitest";
 const f = vi.hoisted(() => ({
   runStatus: "content", answer: "original", extractStatus: "pending", gate: null as Promise<void> | null,
-  modelStarted: false, empty: false, failRun: vi.fn(), writes: [] as string[],
+  modelStarted: false, empty: false, failRun: vi.fn(), writes: [] as string[], contentReceipts: [] as any[],
 }));
 vi.mock("@mastery/shared/worker.js", async (importOriginal) => ({ ...await importOriginal<any>(), consumeQueue: (handle: any) => handle, failRun: f.failRun }));
 vi.mock("@mastery/shared/r2.js", () => ({ imageRef: async () => ({ url: "fixture", key: "fixture", detail: "high" }) }));
@@ -26,6 +26,7 @@ function db() {
         }
         if (f.runStatus !== "content") return { data: { applied: false }, error: null };
         const patch = args.p_args.patch;
+        if (patch.extract_status === "running" && patch.confidence_signals?.content_delivery) f.contentReceipts.push(patch.confidence_signals.content_delivery);
         f.extractStatus = patch.extract_status;
         if (patch.student_answer) { f.answer = patch.student_answer; f.writes.push(f.answer); }
         return { data: { applied: true }, error: null };
@@ -51,7 +52,7 @@ function db() {
 }
 beforeEach(() => {
   f.runStatus = "content"; f.answer = "original"; f.extractStatus = "pending";
-  f.gate = null; f.modelStarted = false; f.empty = false; f.writes = []; f.failRun.mockClear();
+  f.gate = null; f.modelStarted = false; f.empty = false; f.writes = []; f.contentReceipts = []; f.failRun.mockClear();
 });
 test("a stalled content response cannot overwrite an answer corrected after review opens", async () => {
   let release!: () => void;
@@ -68,4 +69,14 @@ test("an empty content run reaches the explicit no-questions failure instead of 
   await (reconciliation.queue as any)({ env: {}, sb: db(), msg: { run_id: "run" }, attempt: 1, beat: async () => {} });
   expect(f.runStatus).toBe("reconciliation");
   expect(f.failRun).toHaveBeenCalledWith(expect.anything(), "run", expect.any(String), "reconcile_no_questions");
+});
+
+// AXO-224: a region which entered a Worker must carry a durable receipt even
+// when a model call never completes. Only timing/retry data is recorded.
+test("content processing records queue delivery before requesting Gemini", async () => {
+  await (content.queue as any)({ env: {}, sb: db(), msg: { run_id: "run", region_id: "region", _retries: 2 }, attempt: 3, redelivered: true, beat: async () => {} });
+  expect(f.contentReceipts).toHaveLength(1);
+  expect(f.contentReceipts[0]).toMatchObject({ queue_attempt: 3, manual_retry: 2, redelivered: true });
+  expect(f.contentReceipts[0].started_at).toMatch(/^20\\d{2}-\\d{2}-\\d{2}T/);
+  expect(Object.keys(f.contentReceipts[0]).sort()).toEqual(["manual_retry", "queue_attempt", "redelivered", "started_at"]);
 });
