@@ -1,5 +1,8 @@
 /**
- * AXO-211: the structure stage reads a whole paper's pages at once.
+ * AXO-211/224: the structure stage processes all paper pages under a bounded
+ * per-invocation concurrency limit. Production batches contain at most two
+ * messages; this harness sends thirteen to prove that its worker lanes stay
+ * bounded without losing the stage transition or writes.
  *
  * Driven through the real batch harness (`consumeBatch`) and the real
  * planning code, against a fake database that enforces what production
@@ -141,17 +144,17 @@ beforeEach(() => {
   db.pageStatus = new Map(Array.from({ length: f.pages }, (_, i) => [i + 1, "pending"]));
 });
 
-test("a 13-page batch is read at once, every page lands, and the run advances and fans out once", async () => {
+test("a 13-page workload respects bounded concurrency, lands every page and advances once", async () => {
   let release!: () => void;
   f.gate = new Promise<void>((r) => { release = r; });
   const sendBatch = vi.fn().mockResolvedValue(undefined);
   const env: any = { CONTENT_QUEUE: { sendBatch }, RECONCILE_QUEUE: { send: vi.fn() } };
   const messages = Array.from({ length: 13 }, (_, i) => message(i + 1));
 
-  expect(worker.options.concurrency).toBeGreaterThanOrEqual(13);
+  expect(worker.options.concurrency).toBe(2);
   const run = consumeBatch(messages as any, sb() as any, env, worker.handle, worker.onPermanent, worker.options);
-  await vi.waitFor(() => expect(f.modelInFlight).toBe(13));
-  expect(f.modelPeak).toBe(13); // all thirteen model calls in flight together
+  await vi.waitFor(() => expect(f.modelInFlight).toBe(2));
+  expect(f.modelPeak).toBe(2); // never trust a 13-wide isolated Worker invocation
   release();
   await run;
 
