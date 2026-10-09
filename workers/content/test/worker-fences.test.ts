@@ -77,6 +77,6 @@ test("content processing records queue delivery before requesting Gemini", async
   await (content.queue as any)({ env: {}, sb: db(), msg: { run_id: "run", region_id: "region", _retries: 2 }, attempt: 3, redelivered: true, beat: async () => {} });
   expect(f.contentReceipts).toHaveLength(1);
   expect(f.contentReceipts[0]).toMatchObject({ queue_attempt: 3, manual_retry: 2, redelivered: true });
-  expect(f.contentReceipts[0].started_at).toMatch(/^20\\d{2}-\\d{2}-\\d{2}T/);
+  expect(f.contentReceipts[0].started_at).toMatch(/^20\d{2}-\d{2}-\d{2}T/);
   expect(Object.keys(f.contentReceipts[0]).sort()).toEqual(["manual_retry", "queue_attempt", "redelivered", "started_at"]);
 });
