@@ -104,7 +104,7 @@ export function checkPromptGate({ promptFiles, read, manifest, baseManifest, rea
     // Only unchanged dated baselines are grandfathered. Every measured artifact
     // remains validated even when the prompt hash is unchanged: swapping just
     // its run reference must not bypass evidence checks.
-    if (!changedFromBase && /^baseline-\\d{4}-\\d{2}-\\d{2}$/.test(String(entry.eval_run ?? ""))) continue;
+    if (!changedFromBase && /^baseline-\d{4}-\d{2}-\d{2}$/.test(String(entry.eval_run ?? ""))) continue;
 
     if (!UUID.test(String(entry.eval_run ?? "")) || entry.eval_run === ZERO_UUID) {
       violations.push(`${file}: prompt is new or changed against the base branch but its eval_run is "${entry.eval_run}". It needs a linked passing eval run, not a baseline.`);
