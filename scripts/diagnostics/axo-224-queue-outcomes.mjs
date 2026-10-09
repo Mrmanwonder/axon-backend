@@ -6,7 +6,7 @@ const account = process.env.CLOUDFLARE_ACCOUNT_ID;
 if (!token || !account) throw new Error("Queue diagnosis credentials unavailable");
 const api = "https://api.cloudflare.com/client/v4";
 const headers = { authorization: "Bearer " + token };
-const wanted = new Set(["content-queue","content-dlq","structure-queue","triage-queue","crop-queue"]);
+const wanted = new Set(["content-queue","content-dlq","structure-queue","structure-dlq","triage-queue","triage-dlq","crop-queue","crop-dlq","reconcile-queue","reconcile-dlq"]);
 
 async function get(path) {
   const response = await fetch(api + path, { headers, signal: AbortSignal.timeout(30000) });
