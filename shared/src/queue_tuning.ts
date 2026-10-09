@@ -13,7 +13,10 @@
  * its own. `maxBatchSize` must equal `max_batch_size` in the stage's
  * wrangler.toml; a test reads both and fails if they drift.
  *
- * Limits these numbers rely on (Workers Paid, standard usage model):
+ * Limits below must remain safe on a 50-external-subrequest invocation tier as
+ * well as Workers Paid. AXO-224 metrics showed many exactly-50-subrequest
+ * content invocations and 41 messages in the DLQ. Workers 'standard' usage
+ * model alone is not evidence of Paid 10,000-subrequest entitlement.
  *   - Queue consumer wall time: 15 minutes per invocation. Each message is
  *     bounded by HANDLE_TIMEOUT_MS (200 s) in `processQueueMessage`, so a batch
  *     takes at most ceil(maxBatchSize / concurrency) * 200 s of handler time;
@@ -21,10 +24,9 @@
  *     the permanent-failure path and queue sends. A batch that does overrun
  *     loses nothing: explicit acks already made stand, and anything unacked is
  *     redelivered.
- *   - CPU time: the default 30 s per invocation. Handlers are I/O bound: the
- *     CPU work per message is a native base64 of one or two images, a JSON
- *     encode/decode and pure planning code, tens of milliseconds, so even a
- *     25-message batch stays far below the default. No `limits.cpu_ms` is set.
+ *   - CPU time: handlers are primarily I/O bound, but CPU and image memory
+ *     must be measured on production rather than assumed. No custom CPU
+ *     budget is currently set.
  *   - Memory: 128 MB per isolate. A model call holds its images as base64 data
  *     URLs (pages are about 0.8 to 1 MB, so about 1.4 MB each in base64) plus
  *     the JSON request body, roughly 3 to 4 MB per call in flight.
@@ -52,8 +54,11 @@ export const QUEUE_TUNING = {
   // A 13-page paper arrives as one batch (the contract allows 25 pages) and is
   // read 13 pages at once: one wave of structure calls instead of thirteen.
   structure: { maxBatchSize: 25, concurrency: 13 },
-  // 24 regions in one batch, 12 calls in flight: two waves at most.
-  content: { maxBatchSize: 24, concurrency: 12 },
+  // AXO-224: repeated 50-subrequest Worker invocations and 41 dead-lettered
+  // regions demand fail-safe smaller batches. 2 per invocation x up to 6
+  // consumers preserves a 12-model-call upper bound but isolates I/O budgets.
+  // Increase only after a verified 12-page phone run and account-limit check.
+  content: { maxBatchSize: 2, concurrency: 2 },
   // One message per run. Batching helps only when several papers arrive
   // together, and costs nothing for one.
   triage: { maxBatchSize: 5, concurrency: 5 },
