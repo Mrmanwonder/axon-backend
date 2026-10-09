@@ -51,14 +51,17 @@ queue = "structure-queue"
 # in pipeline_write under the paper lock, a page that loses the race gets 23505
 # with its transaction rolled back, and it re-plans from the same model answer
 # (workers/structure/src/index.ts, STRUCTURE_WRITE_ATTEMPTS). So pages of one
-# paper now run together: a 13-page paper is one batch of 13 handled at once.
-# At most 3 invocations at once, 13 calls each: 39 structure calls in flight.
+# paper can run together but in separate batches. AXO-224 production
+# instrumentation saw repeated 50-subrequest structure invocations and 29
+# structure dead letters. Use two pages per invocation (six consumers, 12
+# calls total) until the Cloudflare effective limit and errors are verified.
+# The cross-invocation index conflict path is retry-safe (10 attempts).
 [[queues.consumers]]
 queue = "structure-queue"
-max_batch_size = 25
+max_batch_size = 2
 max_batch_timeout = 1
 max_retries = 3
-max_concurrency = 3
+max_concurrency = 6
 dead_letter_queue = "structure-dlq"
 
 # Secrets: ASSET_SIGNING_SECRET, GOOGLE_API_KEY, GROQ_API_KEY (legacy, unused),
