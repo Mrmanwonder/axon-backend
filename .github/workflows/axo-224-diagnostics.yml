@@ -1,0 +1,19 @@
+name: AXO-224 read-only incident metrics
+on:
+  push:
+    branches: [diagnose/axo-224-worker-outcomes]
+permissions:
+  contents: read
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/diagnostics/axo-224-worker-outcomes.mjs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
