@@ -1,5 +1,6 @@
 import { callModel } from "@mastery/shared/model-client.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
+import { finishSkippedExplanation } from "@mastery/shared/explanation_status.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
 import { QUEUE_TUNING } from "@mastery/shared/queue_tuning.js";
 import { mustOk, mustOne, mustMaybe, mustData, mustAffectRows, mustRpc } from "@mastery/shared/db.js";
@@ -88,8 +89,7 @@ const handler = consumeQueue<ExplainMessage>(
     const awarded = Number(region.marks_awarded);
     const available = Number(region.marks_available);
     if (!Number.isFinite(awarded) || !Number.isFinite(available) || awarded >= available) {
-      await mustOk(sb.from("question_region").update({ explain_status: "skipped" }).eq("id", regionId), "explain_status=skipped");
-      await mustRpc(sb.rpc("advance_after_explain", { p_run_id: runId }), "advance_after_explain");
+      await finishSkippedExplanation(sb, regionId, runId, "no_marks_lost");
       return { detail: { skipped: "no marks lost" } };
     }
 
@@ -285,12 +285,11 @@ const handler = consumeQueue<ExplainMessage>(
 
     // The model said it could not explain this from what it was given. Honour
     // that instead of storing whatever prose came with the refusal: the region
-    // is marked skipped, the run advances, and the card renders nothing. An
-    // empty slot is honest; an explanation the model itself disowned is not.
+    // is marked skipped with a durable reason and the run advances. The UI
+    // admits the missing explanation; no disowned prose becomes a diagnosis.
     if (!parsed.can_explain) {
       console.info("model declined to explain", regionId);
-      await mustOk(sb.from("question_region").update({ explain_status: "skipped" }).eq("id", regionId), "explain_status=skipped (can_explain false)");
-      await mustRpc(sb.rpc("advance_after_explain", { p_run_id: runId }), "advance_after_explain");
+      await finishSkippedExplanation(sb, regionId, runId, "insufficient_evidence");
       return { detail: { skipped: "model could not explain from the evidence given" } };
     }
 
