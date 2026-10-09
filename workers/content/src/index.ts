@@ -89,7 +89,23 @@ const handler = consumeQueue<ContentMessage>(
     }
     const override = run.route_override;
 
-    if (!await pipelineWrite(sb, runId, "content", { region_id: regionId, patch: { extract_status: "running" } })) return { detail: { skipped: "stale content work" } };
+    // A successful model_call row exists only AFTER the provider answers.
+    // Persist a privacy-safe delivery receipt BEFORE any image or model request,
+    // so an incident can distinguish a lost queue delivery from a handler stuck
+    // fetching images or waiting on Gemini (AXO-224).
+    const deliverySignals = {
+      ...(region.confidence_signals ?? {}),
+      content_delivery: {
+        started_at: new Date().toISOString(),
+        queue_attempt: attempt,
+        manual_retry: msg._retries ?? 0,
+        redelivered,
+      },
+    };
+    if (!await pipelineWrite(sb, runId, "content", { region_id: regionId, patch: {
+      extract_status: "running",
+      confidence_signals: deliverySignals,
+    } })) return { detail: { skipped: "stale content work" } };
     await beat();
 
     const spans: Array<{ page: number }> = region.page_spans ?? [];
@@ -222,7 +238,7 @@ const handler = consumeQueue<ContentMessage>(
             extract_status: "done",
             confidence_tier: "unreadable",
             needs_review: true,
-            confidence_signals: { unreadable_reason: "We could not work out the size of this page, so we cannot say where anything on it sits." },
+            confidence_signals: { ...deliverySignals, unreadable_reason: "We could not work out the size of this page, so we cannot say where anything on it sits." },
             updated_at: new Date().toISOString(),
           } })) return { detail: { skipped: "stale content result" } };
         await advanceAndEnqueue(env, sb, runId, redelivered);
@@ -241,7 +257,7 @@ const handler = consumeQueue<ContentMessage>(
             extract_status: "done",
             confidence_tier: "unreadable",
             needs_review: true,
-            confidence_signals: { unreadable_reason: parsed.unreadable_reason },
+            confidence_signals: { ...deliverySignals, unreadable_reason: parsed.unreadable_reason },
             updated_at: new Date().toISOString(),
           } })) return { detail: { skipped: "stale content result" } };
         await advanceAndEnqueue(env, sb, runId, redelivered);
@@ -262,7 +278,7 @@ const handler = consumeQueue<ContentMessage>(
           teacher_remark: remark.value,
           teacher_remark_box: remark.box,
           answer_block: mapAnswerBlockToPages((parsed as any).answer_block, answer.value as string | null, frames),
-          confidence_signals: { ...region.confidence_signals, recognition_confidence: parsed.recognition_confidence ?? null },
+          confidence_signals: { ...deliverySignals, recognition_confidence: parsed.recognition_confidence ?? null },
           // region_type is null on 28 of 76 live regions, so over a third of
           // them do not know whether they are maths or prose and nothing
           // downstream can decide how to typeset them. `unknown` is a value;
