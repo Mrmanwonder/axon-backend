@@ -51,9 +51,10 @@ export const PER_MESSAGE_BUDGET_MS = 200_000;
 export const WALL_BUDGET_MS = 10 * 60_000;
 
 export const QUEUE_TUNING = {
-  // A 13-page paper arrives as one batch (the contract allows 25 pages) and is
-  // read 13 pages at once: one wave of structure calls instead of thirteen.
-  structure: { maxBatchSize: 25, concurrency: 13 },
+  // AXO-224: 29 structure dead letters + repeated 50-subrequest invocations.
+  // Limit to 2 per invocation, max 6 invocations (12 model calls overall).
+  // Indexed writes across invocations are protected by existing 23505 retries.
+  structure: { maxBatchSize: 2, concurrency: 2 },
   // AXO-224: repeated 50-subrequest Worker invocations and 41 dead-lettered
   // regions demand fail-safe smaller batches. 2 per invocation x up to 6
   // consumers preserves a 12-model-call upper bound but isolates I/O budgets.
