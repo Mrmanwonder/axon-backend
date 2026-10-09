@@ -56,10 +56,6 @@
     "workers/intelligence/src/prompts/scanner/index.ts": {
       "sha256": "949504e129e39f9fd26243ba730dd991854febd79cf38a4dcf6832170cd63e19",
       "eval_run": "baseline-2026-10-02"
-    },
-    "shared/src/prompts/topic_tag.v1.ts": {
-      "sha256": "5cf9ca29e1eb78cea93803a5edbcf39af5af81c7d86ae4ed2ecceb3e5593fe82",
-      "eval_run": "e45f9a23-4562-4321-9876-123456789abc"
     }
   }
 }

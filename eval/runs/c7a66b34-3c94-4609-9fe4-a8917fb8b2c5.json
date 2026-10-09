@@ -1,53 +1,62 @@
 {
- "id": "c7a66b34-3c94-4609-9fe4-a8917fb8b2c5",
- "kind": "eval",
- "passed": true,
- "stage": "scheme_check",
- "run_at": "2026-10-06",
- "golden_set_version": "scheme-check-synthetic-v1",
- "golden_set_source": "Axon-Site evals/golden/scheme-check-v1.json (public.eval_case, stage scheme_check)",
- "candidate_key": "prod-3.8-flash-high",
- "candidate_models": [
-  "gemini-3.8-flash"
- ],
- "thinking_level": "high",
- "max_tokens": 16384,
- "prompt_files": [
-  "shared/src/prompts/scheme_check.v1.ts"
- ],
- "cases": 30,
- "checkable_cases": 27,
- "control_cases": {
-  "blank": 2,
-  "mismatch": 2,
-  "unreadable": 1,
-  "verbatim": 1
- },
- "metrics": {
-  "schema_valid": "30/30",
-  "can_check_agreement": "30/30",
-  "estimate_in_range": "25/27",
-  "in_range_rate": 0.926,
-  "over_estimates": 0,
-  "under_estimates_by_one": 2,
-  "blank_zero": "2/2",
-  "mismatch_refused": "2/2",
-  "unreadable_refused": "1/1",
-  "validator_rejections": 0,
-  "model_calls": 30,
-  "failed_calls": 0,
-  "latency_ms_p50": 7248,
-  "latency_ms_p95": 27282,
-  "cost_usd_total": null
- },
- "thresholds": {
-  "schema_valid_min": 0.95,
-  "can_check_min": 0.95,
-  "in_range_min": 0.8,
-  "over_estimates_max_rate": 0.1,
-  "controls": "all"
- },
- "human_labelled_extraction": false,
- "release_gate_extraction": false,
- "notes": "scheme_check only; no extraction stage is gated. Questions, answers and scheme sections are invented for the eval (no board text). Both misses are one mark under the accepted range (a sign slip hidden by squaring, and an induction step with no base case); none over-estimates. Expected ranges are drafts by Claude awaiting owner confirmation. AI Studio returned no per-call cost, so cost_usd_total is null. Per-case outputs: public.eval_case_result where eval_run_id = c7a66b34-3c94-4609-9fe4-a8917fb8b2c5."
+  "id": "c7a66b34-3c94-4609-9fe4-a8917fb8b2c5",
+  "kind": "eval",
+  "passed": true,
+  "stage": "scheme_check",
+  "run_at": "2026-10-06",
+  "golden_set_version": "scheme-check-synthetic-v1",
+  "golden_set_source": "Axon-Site evals/golden/scheme-check-v1.json (public.eval_case, stage scheme_check)",
+  "candidate_key": "prod-3.8-flash-high",
+  "candidate_models": [
+    "gemini-3.8-flash"
+  ],
+  "thinking_level": "high",
+  "max_tokens": 16384,
+  "prompt_files": [
+    "shared/src/prompts/scheme_check.v1.ts"
+  ],
+  "cases": 30,
+  "checkable_cases": 27,
+  "control_cases": {
+    "blank": 2,
+    "mismatch": 2,
+    "unreadable": 1,
+    "verbatim": 1
+  },
+  "metrics": {
+    "schema_valid": "30/30",
+    "can_check_agreement": "30/30",
+    "estimate_in_range": "25/27",
+    "in_range_rate": 0.926,
+    "over_estimates": 0,
+    "under_estimates_by_one": 2,
+    "blank_zero": "2/2",
+    "mismatch_refused": "2/2",
+    "unreadable_refused": "1/1",
+    "validator_rejections": 0,
+    "model_calls": 30,
+    "failed_calls": 0,
+    "latency_ms_p50": 7248,
+    "latency_ms_p95": 27282,
+    "cost_usd_total": null
+  },
+  "thresholds": {
+    "schema_valid_min": 0.95,
+    "can_check_min": 0.95,
+    "in_range_min": 0.8,
+    "over_estimates_max_rate": 0.1,
+    "controls": "all"
+  },
+  "human_labelled_extraction": false,
+  "release_gate_extraction": false,
+  "notes": "scheme_check only; no extraction stage is gated. Questions, answers and scheme sections are invented for the eval (no board text). Both misses are one mark under the accepted range (a sign slip hidden by squaring, and an induction step with no base case); none over-estimates. Expected ranges are drafts by Claude awaiting owner confirmation. AI Studio returned no per-call cost, so cost_usd_total is null. Per-case outputs: public.eval_case_result where eval_run_id = c7a66b34-3c94-4609-9fe4-a8917fb8b2c5. Read-only verification on 2026-10-09 confirms the recorded run and per-case results. Labels were owner-confirmed on 2026-10-06; this remains a synthetic stage eval and does not certify real-paper extraction.",
+  "provenance": {
+    "kind": "supabase_eval_run",
+    "project_id": "dlgcqieyevoebefhcggi",
+    "eval_run_id": "c7a66b34-3c94-4609-9fe4-a8917fb8b2c5",
+    "result_count": 30,
+    "result_sha256": "50d0904d5f1070d500356f1a7cfb4c9c87293f3aee425a9b1ca2d0b8ce04c1df",
+    "verified_at": "2026-10-09",
+    "label_status": "owner-confirmed synthetic cases as of 2026-10-09"
+  }
 }

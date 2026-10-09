@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { checkPromptGate } from "./lib/prompt-gate.mjs";
+import { checkPromptGate, parseUniqueJson } from "./lib/prompt-gate.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const base = process.argv[process.argv.indexOf("--base") + 1] ?? "origin/main";
@@ -15,7 +15,7 @@ const PROMPT_FILES = [
   "workers/intelligence/src/prompts/scanner/index.ts",
 ].filter((f) => existsSync(path.join(root, f))).sort();
 
-const manifest = JSON.parse(readFileSync(path.join(root, "eval/prompt-manifest.json"), "utf8"));
+const manifest = parseUniqueJson(readFileSync(path.join(root, "eval/prompt-manifest.json"), "utf8"));
 let baseManifest = null;
 try {
   baseManifest = JSON.parse(execFileSync("git", ["show", `${base}:eval/prompt-manifest.json`], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
@@ -29,7 +29,7 @@ const violations = checkPromptGate({
   readEvidence: (id) => {
     const file = path.join(root, "eval", "runs", `${id}.json`);
     if (!existsSync(file)) return null;
-    try { return JSON.parse(readFileSync(file, "utf8")); } catch { return { kind: "unreadable" }; }
+    try { return parseUniqueJson(readFileSync(file, "utf8")); } catch { return { kind: "unreadable" }; }
   },
 });
 
