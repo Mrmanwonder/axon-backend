@@ -1,7 +1,11 @@
 {
-  "kind": "eval",
-  "passed": true,
+  "id": "e45f9a23-4562-4321-9876-123456789abc",
+  "kind": "invalid_evidence",
+  "passed": false,
   "prompt_files": [
     "shared/src/prompts/topic_tag.v1.ts"
-  ]
+  ],
+  "invalidated_at": "2026-10-09",
+  "reason": "Historical bare passed declaration: no measured evaluation row, run identity, case results, models, thresholds or provenance. Do not use as prompt or release evidence.",
+  "replacement_eval_run": "7ca49ba7-6f11-4d11-b212-416d7d1987d1"
 }

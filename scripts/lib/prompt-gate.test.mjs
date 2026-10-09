@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { checkPromptGate, sha256 } from "./prompt-gate.mjs";
+import { checkPromptGate, sha256, parseUniqueJson } from "./prompt-gate.mjs";
 
 const ID = "11111111-2222-4333-8444-555555555555";
 const FILE = "shared/src/prompts/explain_tier1.v2.ts";
@@ -16,7 +16,16 @@ function setup({ text = "prompt v1", entry, base, evidence }) {
   };
 }
 const entryFor = (text, eval_run) => ({ sha256: sha256(text), eval_run });
-const passing = (over = {}) => ({ kind: "eval", passed: true, prompt_files: [FILE], human_labelled_extraction: true, ...over });
+const passing = (over = {}) => ({
+  id: ID, kind: "eval", passed: true, prompt_files: [FILE],
+  stage: "explain", run_at: "2026-10-09", golden_set_version: "human-labelled-v1",
+  golden_set_source: "Controlled human-labelled test corpus", candidate_key: "candidate-v1",
+  candidate_models: ["test-model"], cases: 10,
+  metrics: { model_calls: 10, failed_calls: 0 }, thresholds: { schema_valid_min: 0.98 },
+  provenance: { kind: "supabase_eval_run", project_id: "test-project", eval_run_id: ID,
+    result_count: 10, result_sha256: "a".repeat(64), verified_at: "2026-10-09" },
+  human_labelled_extraction: true, ...over,
+});
 
 test("unchanged prompt text matching the manifest passes", () => {
   assert.deepEqual(checkPromptGate(setup({ entry: entryFor("prompt v1", BASELINE) })), []);
@@ -63,4 +72,54 @@ test("a manifest entry for a deleted prompt file is flagged", () => {
   const args = setup({ entry: entryFor("prompt v1", BASELINE) });
   args.promptFiles = [];
   assert.match(checkPromptGate(args)[0], /no longer exists/);
+});
+
+test("a bare passed declaration is not measured evidence even for an unchanged prompt", () => {
+  const args = setup({ entry: entryFor("prompt v1", ID),
+    evidence: { kind: "eval", passed: true, prompt_files: [FILE] } });
+  const v = checkPromptGate(args).join("\n");
+  assert.match(v, /measured run id/);
+  assert.match(v, /positive measured case count/);
+  assert.match(v, /per-case result provenance/);
+});
+
+test("changing only an unchanged prompt's run reference cannot bypass validation", () => {
+  const args = setup({ entry: entryFor("prompt v1", ID),
+    evidence: passing({ id: "99999999-2222-4333-8444-555555555555" }) });
+  assert.match(checkPromptGate(args).join("\n"), /measured run id does not match/);
+});
+
+test("all-zero run IDs are refused before reading declared evidence", () => {
+  const args = setup({ text: "prompt v2", entry: entryFor("prompt v2", "00000000-0000-0000-0000-000000000000") });
+  args.readEvidence = () => passing();
+  assert.match(checkPromptGate(args).join("\n"), /needs a linked passing eval run/);
+});
+
+for (const [field, value, reason] of [
+  ["cases", 0, /positive measured case count/],
+  ["candidate_models", [], /model identity/],
+  ["metrics", { model_calls: 0, failed_calls: 0 }, /model-call count/],
+  ["metrics", { model_calls: 10, failed_calls: 11 }, /failed-call count/],
+  ["thresholds", {}, /thresholds/],
+  ["run_at", "not-a-date", /run date/],
+  ["provenance", { kind: "supabase_eval_run", eval_run_id: ID, result_count: 10 }, /per-case result provenance/],
+]) {
+  test(`incomplete measured evidence is refused: ${field}`, () => {
+    const args = setup({ text: "prompt v2", entry: entryFor("prompt v2", ID),
+      evidence: passing({ [field]: value }) });
+    assert.match(checkPromptGate(args).join("\n"), reason);
+  });
+}
+
+test("per-case result count must cover the declared measured cases", () => {
+  const evidence = passing();
+  evidence.provenance.result_count = 9;
+  assert.match(checkPromptGate(setup({ text: "prompt v2", entry: entryFor("prompt v2", ID), evidence })).join("\n"), /per-case result provenance/);
+});
+
+test("duplicate manifest keys cannot shadow measured evidence", () => {
+  assert.throws(() => parseUniqueJson('{"prompts":{"x.ts":{"eval_run":"real"},"x.ts":{"eval_run":"placeholder"}}}'), /Duplicate JSON key: x.ts/);
+  assert.deepEqual(parseUniqueJson('{"prompts":{"a.ts":{"sha256":"a"},"b.ts":{"sha256":"b"}}}'), {
+    prompts: { "a.ts": { sha256: "a" }, "b.ts": { sha256: "b" } },
+  });
 });
