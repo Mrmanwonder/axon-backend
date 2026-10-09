@@ -38,6 +38,18 @@ if (!Array.isArray(found.result)) {
       metricsHttpStatus: metrics.httpStatus ?? null,
     }));
 
+    // Read-only verification after AXO-224 containment merge/deploy.
+    // A green backend workflow does not prove the live Queue consumer adopted
+    // its new Wrangler settings; verify the Cloudflare effective configuration.
+    if (name === "content-queue" || name === "structure-queue") {
+      const actualBatch = consumer?.settings?.batch_size ?? null;
+      const actualMaxConcurrency = consumer?.settings?.max_concurrency ?? null;
+      const applied = actualBatch === 2 && actualMaxConcurrency === 6;
+      console.log(JSON.stringify({queue:name,phase:"effective_config_check",
+        expectedBatch:2,actualBatch,expectedMaxConcurrency:6,actualMaxConcurrency,applied}));
+      if (!applied) process.exitCode = 1;
+    }
+
     // Docs: https://developers.cloudflare.com/queues/observability/metrics/
     // One day only; filter down to incident window after fetching aggregates.
     const query = `query($accountTag:string!,$queueId:string!,$datetimeStart:Date!,$datetimeEnd:Date!){
