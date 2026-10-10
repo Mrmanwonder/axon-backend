@@ -17,6 +17,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Env } from "./env.js";
 import { callModel } from "./model-client.js";
+import { chunkedSendBatch } from "./chunked_send.js";
 import { imageRef } from "./r2.js";
 import { mustData, mustMaybe, mustOk } from "./db.js";
 import { isRetryable } from "./errors.js";
@@ -120,9 +121,8 @@ export async function runSchemeCheck(opts: { env: Env; sb: SupabaseClient; runId
   }
   const queue = env.SELF_QUEUE ?? env.EXPLAIN_QUEUE;
   if (!queue) throw new Error("scheme_check: no queue to fan out to");
-  for (let i = 0; i < messages.length; i += 50) {
-    await queue.sendBatch(messages.slice(i, i + 50).map((body) => ({ body })));
-  }
+  // ⚡ Bolt: Use chunkedSendBatch for concurrent dispatch to avoid N+1 bottleneck and honor batch limits
+  await chunkedSendBatch(queue, messages, (body) => ({ body }));
   return { queued: messages.length, sections: sections.size, scheme: ref.filename, source_host: scheme.sourceHost };
 }
 
