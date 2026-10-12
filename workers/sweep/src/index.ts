@@ -55,6 +55,16 @@ export default {
       return;
     }
 
+    // AXO-243: the one-minute trigger is registered but has not been observed
+    // firing, so the 15-minute tick sends the stage outbox too. Re-driven work
+    // then starts within 15 minutes either way. Isolated: a failure here must
+    // never stop alerts, purges or deletions below.
+    try {
+      await dispatchOutbox(env);
+    } catch (cause) {
+      console.error("stage outbox dispatch failed", String(cause).slice(0, 200));
+    }
+
     const sb = serviceClient(env);
     const maintenance = maintenanceStore(sb);
 
