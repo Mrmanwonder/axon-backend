@@ -66,3 +66,8 @@ dead_letter_queue = "structure-dlq"
 
 # Secrets: ASSET_SIGNING_SECRET, GOOGLE_API_KEY, GROQ_API_KEY (legacy, unused),
 # MASTERY_ASSET_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL, TAVILY_API_KEY
+
+# AXO-225: durable work journal (public.work_*). Needs Axon-Site migration
+# 20261012180000_axo_225_paper_work_journal.sql applied first. Rollback: remove this var and redeploy.
+[vars]
+WORK_JOURNAL = "1"
