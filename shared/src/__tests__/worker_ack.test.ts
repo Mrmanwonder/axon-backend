@@ -229,3 +229,49 @@ test("a heartbeat failure is a database failure, not something to run on blind",
   assert.equal(handlerRan, false, "a run whose heartbeat is not landing must not be swept mid-work");
   assert.deepEqual(calls, ["retry"]);
 });
+
+// ── AXO-225: a lease held by another worker is a wait, not a failure ──────
+
+function busyHarness(msgBody: Record<string, unknown>) {
+  const sent: Array<{ body: any; delay?: number }> = [];
+  const state = { acked: 0, retried: 0, permanent: 0 };
+  const message = {
+    body: { run_id: "r1", ...msgBody } as any,
+    attempts: 1,
+    ack: () => { state.acked++; },
+    retry: () => { state.retried++; },
+  };
+  const sb = { rpc: async () => ({ data: null, error: null }) } as any;
+  const env = { SELF_QUEUE: { send: async (body: any, opts?: { delaySeconds?: number }) => { sent.push({ body, delay: opts?.delaySeconds }); } } } as any;
+  const run = () => processQueueMessage(message as any, sb, env,
+    async () => { throw new RetryableError("work_busy", "held", 200); },
+    async () => { state.permanent++; });
+  return { sent, state, run };
+}
+
+test("a busy lease waits it out without spending the retry budget", async () => {
+  const h = busyHarness({ _retries: 4 });
+  await h.run();
+  assert.equal(h.state.acked, 1);
+  assert.equal(h.state.permanent, 0);
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.sent[0].body._retries, 4); // unchanged
+  assert.equal(h.sent[0].body._busy, 1);
+  assert.equal(h.sent[0].delay, 205); // the lease's own retry-after, plus a margin
+});
+
+test("busy waits are bounded; past the bound it is an ordinary retry", async () => {
+  const h = busyHarness({ _busy: 6, _retries: 0 });
+  await h.run();
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.sent[0].body._retries, 1);
+  assert.equal(h.sent[0].body._busy, 6);
+});
+
+test("a message that waited out a lease counts as redelivered", async () => {
+  let seen: boolean | undefined;
+  const message = { body: { run_id: "r1", _busy: 1 } as any, attempts: 1, ack: () => {}, retry: () => {} };
+  await processQueueMessage(message as any, { rpc: async () => ({ data: null, error: null }) } as any, {} as any,
+    async (ctx) => { seen = ctx.redelivered; });
+  assert.equal(seen, true);
+});

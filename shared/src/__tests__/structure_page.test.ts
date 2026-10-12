@@ -6,9 +6,9 @@ import { ConfigurationError, RetryableError } from '../errors.js';
 import { processQueueMessage } from '../worker.js';
 import type { Env } from '../env.js';
 
-// Persisted schema from the incident. A nonexistent select field must reject
+// Persisted schema from the incident (sha256 and preprocess_version: migration 20260823192833_r2_and_runtime, AXO-225 checkpoint keys). A nonexistent select field must reject
 // the entire request, just as PostgREST does, rather than returning a fake page.
-const persisted = new Set('id paper_id student_id page_number r2_bucket r2_key mask_key structure_status layer_fallback teacher_marks conditioning_meta quality_signals'.split(' '));
+const persisted = new Set('id paper_id student_id page_number r2_bucket r2_key mask_key sha256 etag preprocess_version structure_status layer_fallback teacher_marks conditioning_meta quality_signals'.split(' '));
 function client(response: unknown, status = 200) {
   return createClient('https://database.example', 'test-key', {
     auth: { persistSession: false },

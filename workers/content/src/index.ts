@@ -1,4 +1,5 @@
 import { callModel } from "@mastery/shared/model-client.js";
+import { digestHex, markWorkApplied } from "@mastery/shared/checkpoint.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { pipelineWrite } from "@mastery/shared/pipeline_write.js";
 import { consumeQueue, shouldFanOut } from "@mastery/shared/worker.js";
@@ -67,6 +68,9 @@ function field(
   return box ? { value: v.value, box } : { value: null, box: null };
 }
 
+/** Part of the content checkpoint identity. See the comment where it is used. */
+const CONTENT_EVIDENCE_VERSION = "content-evidence.1";
+
 const handler = consumeQueue<ContentMessage>(
   async ({ env, sb, msg, attempt, redelivered, beat }) => {
     const runId = msg.run_id;
@@ -118,7 +122,7 @@ const handler = consumeQueue<ContentMessage>(
     // map back — see @mastery/shared/frames.ts.
     const pageRows = await mustData(
       sb.from("paper_page")
-        .select("page_number, r2_bucket, r2_key, mask_key, layer_fallback, conditioning_meta, quality_signals")
+        .select("page_number, r2_bucket, r2_key, mask_key, sha256, etag, preprocess_version, layer_fallback, conditioning_meta, quality_signals")
         .eq("paper_id", region.paper_id)
         .in("page_number", sourcePlan.pageNumbers)
         .order("page_number"),
@@ -200,10 +204,30 @@ const handler = consumeQueue<ContentMessage>(
       "teacher_mark read",
     ) as any[];
 
-    const { parsed } = await callModel({
+    // AXO-225: the same question on the same stored images is the same paid work
+    // in every run. The key is what is actually sent, after every fallback above:
+    // the R2 object keys of the images (a retake gets new keys), the frames their
+    // boxes are mapped through, and each page's stored object identity. The
+    // device sha256 is client-reported, so it is part of the key, never all of it.
+    // Bump CONTENT_EVIDENCE_VERSION whenever crop or mask generation changes what
+    // the model is shown for the same stored objects.
+    const checkpoint = images.every((i) => i.key) && pageRows.every((p: any) => p.r2_key)
+      ? {
+          unitKey: `content:p${sourcePlan.pageNumbers.join("-")}:${(await digestHex([spans])).slice(0, 16)}`,
+          imageDigest: await digestHex([
+            CONTENT_EVIDENCE_VERSION,
+            images.map((i) => [i.key, i.detail]),
+            frames,
+            pageRows.map((p: any) => [p.page_number, p.r2_bucket, p.r2_key, p.etag, p.sha256, p.preprocess_version, p.mask_key]),
+          ]),
+        }
+      : undefined;
+
+    const { parsed, workId } = await callModel({
       env,
       sb,
       stage: "content",
+      checkpoint,
       system: SYSTEM,
       instruction: instruction({
         label: region.question_label,
@@ -241,6 +265,7 @@ const handler = consumeQueue<ContentMessage>(
             confidence_signals: { ...deliverySignals, unreadable_reason: "We could not work out the size of this page, so we cannot say where anything on it sits." },
             updated_at: new Date().toISOString(),
           } })) return { detail: { skipped: "stale content result" } };
+        await markWorkApplied(sb, workId);
         await advanceAndEnqueue(env, sb, runId, redelivered);
         return { detail: { unreadable: "no page dimensions" } };
       }
@@ -260,6 +285,7 @@ const handler = consumeQueue<ContentMessage>(
             confidence_signals: { ...deliverySignals, unreadable_reason: parsed.unreadable_reason },
             updated_at: new Date().toISOString(),
           } })) return { detail: { skipped: "stale content result" } };
+        await markWorkApplied(sb, workId);
         await advanceAndEnqueue(env, sb, runId, redelivered);
         return { detail: { unreadable: parsed.unreadable_reason } };
       }
@@ -288,6 +314,7 @@ const handler = consumeQueue<ContentMessage>(
           updated_at: new Date().toISOString(),
         } })) return { detail: { skipped: "stale content result" } };
 
+      await markWorkApplied(sb, workId);
       await advanceAndEnqueue(env, sb, runId, redelivered);
       return { detail: { awarded: awarded.value, available: available.value } };
     } catch (e) {

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { serviceClient } from "./http.js";
 import type { Env } from "./env.js";
-import { isRetryable } from "./errors.js";
+import { isRetryable, RetryableError } from "./errors.js";
 import { mustRpc } from "./db.js";
 
 export { isRetryable };
@@ -74,7 +74,12 @@ export interface QueueContext<M> {
 interface RetryableMessage {
   run_id?: string;
   _retries?: number;
+  /** AXO-225: times this message waited for another worker's lease. Not a failure, so not in `_retries`. */
+  _busy?: number;
 }
+
+/** How many times a message may wait for a lease held elsewhere before it is treated as an ordinary retry. */
+export const MAX_BUSY_WAITS = 6;
 
 /** How many manual re-enqueues a message gets before it is treated as permanent. */
 export const MAX_MANUAL_RETRIES = 5;
@@ -142,7 +147,8 @@ export async function processQueueMessage<M extends RetryableMessage>(
     sb,
     msg,
     attempt: message.attempts,
-    redelivered: message.attempts > 1 || retries > 0,
+    // A message that waited out another worker's lease (`_busy`) is a retry of handed-out work too.
+    redelivered: message.attempts > 1 || retries > 0 || (typeof msg._busy === "number" && msg._busy > 0),
     beat: async () => {
       if (!msg.run_id) return;
       // Checked, because a silent heartbeat failure is what makes the
@@ -161,6 +167,22 @@ export async function processQueueMessage<M extends RetryableMessage>(
     await withDeadline(handle(ctx), HANDLE_TIMEOUT_MS, "handler");
     message.ack();
   } catch (error) {
+    // AXO-225: another worker holds the paid work. Wait out its lease instead of
+    // spending the retry budget, which is shorter than a lease and would turn a
+    // healthy wait into a failed question.
+    const busy = typeof msg._busy === "number" ? msg._busy : 0;
+    if (error instanceof RetryableError && error.code === "work_busy" && busy < MAX_BUSY_WAITS && env.SELF_QUEUE) {
+      try {
+        await env.SELF_QUEUE.send(
+          { ...msg, _busy: busy + 1 },
+          { delaySeconds: Math.max(10, Math.min(600, (error.retryAfterSeconds ?? 60) + 5)) },
+        );
+        message.ack();
+        return;
+      } catch (sendErr) {
+        console.error("busy re-enqueue failed, falling back to an ordinary retry", String(sendErr));
+      }
+    }
     if (isRetryable(error) && retries < MAX_MANUAL_RETRIES) {
       console.warn("retrying (manual re-enqueue)", String(error), "attempt", retries + 1);
       const selfQueue = env.SELF_QUEUE;

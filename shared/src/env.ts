@@ -5,6 +5,10 @@
 // a binding still type-checks; the guards at each call site (`if (env.X)`,
 // `if (!key) throw ...`) are what actually enforce presence at runtime.
 export interface Env {
+  // AXO-225: "1" turns on the durable work journal (public.work_*). Off unless set;
+  // enable only after the 20261012180000 migration is applied in production.
+  WORK_JOURNAL?: string;
+
   // Upload rollout defaults disabled; originals never exceed batch rollout.
   UPLOAD_BATCH_PERCENT?: string;
   UPLOAD_ORIGINALS_PERCENT?: string;
