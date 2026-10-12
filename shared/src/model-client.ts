@@ -5,6 +5,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Env } from "./env.js";
 import { ProviderConfigError, normalizeServedModel, resolveProviderTarget, type ModelProvider, type ProviderTarget } from "./model-provider.js";
+import { beginWork, busyError, digestHex, invalidateWork, journalEnabled, releaseWork, saveWork, schemaVersionOf, type CheckpointSpec } from "./checkpoint.js";
 import { TAVILY_TOOLS, WEB_TOOL_SYSTEM_GUARD, runTavilyTool, type TavilyToolCall } from "./tavily.js";
 
 export class ModelError extends Error {
@@ -139,6 +140,12 @@ export interface CallModelOptions<T> {
    * academic context as the outbound search query. Off by default.
    */
   webTools?: { searchContext: string };
+  /**
+   * AXO-225: save the paid answer under what was read and reuse it on a retry,
+   * including a retry in a new run. Ignored unless the deployment sets
+   * WORK_JOURNAL=1 and the call names its paper and student.
+   */
+  checkpoint?: CheckpointSpec;
 }
 
 export interface CallModelResult<T> {
@@ -154,6 +161,10 @@ export interface CallModelResult<T> {
   /** Public URLs consulted by Tavily during this model call. */
   webSources: string[];
   latencyMs: number;
+  /** AXO-225: set when the answer came from the journal and no model call was made. */
+  reused?: boolean;
+  /** AXO-225: pass to `markWorkApplied` once the downstream write has landed. */
+  workId?: string;
 }
 
 // Transient failures get exactly one inline retry before the call throws and
@@ -166,6 +177,110 @@ const INLINE_TRIES = 2;
 const FLEX_TIMEOUT_MS = 15 * 60_000;
 
 export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModelResult<T>> {
+  if (!opts.checkpoint || !opts.paperId || !opts.studentId || !journalEnabled(opts.env)) {
+    return callModelOnce(opts);
+  }
+  return callModelCheckpointed(opts, opts.checkpoint, opts.paperId, opts.studentId);
+}
+
+/**
+ * Look for the answer this exact work already paid for before paying again; if
+ * there is none, hold the lease, pay once, and save the answer before the caller
+ * does anything with it. A saved answer that the current validator refuses is
+ * invalidated and paid for again rather than trusted.
+ */
+async function callModelCheckpointed<T>(
+  opts: CallModelOptions<T>,
+  spec: CheckpointSpec,
+  paperId: string,
+  studentId: string,
+): Promise<CallModelResult<T>> {
+  const route = applyOverride(await getRoute(opts.sb, opts.stage), opts.routeOverride);
+  const thinkingLevel = opts.thinkingLevel ?? route.thinking_level ?? null;
+  const promptDigest = await digestHex([
+    opts.system, opts.instruction, opts.schema.name, thinkingLevel, opts.webTools?.searchContext ?? null,
+  ]);
+  const identity = {
+    paperId,
+    studentId,
+    stage: opts.stage,
+    unitKey: spec.unitKey,
+    inputDigest: spec.imageDigest,
+    promptDigest,
+    modelId: route.primary_model,
+    promptVersion: route.prompt_version,
+    schemaVersion: await schemaVersionOf(opts.schema.schema),
+  };
+
+  for (let pass = 0; pass < 2; pass++) {
+    const begin = await beginWork(opts.sb, identity);
+    if (begin.action === "busy") throw busyError(opts.stage, begin.retry_after_seconds);
+
+    if (begin.action === "reuse") {
+      let parsed: T;
+      try {
+        parsed = opts.validate(begin.output);
+      } catch (cause) {
+        console.warn("saved work no longer validates; paying again", opts.stage, redactDetail(cause));
+        await invalidateWork(opts.sb, begin.work_id, "saved_output_invalid");
+        continue;
+      }
+      const meta = (begin.output_meta ?? {}) as Record<string, unknown>;
+      return {
+        parsed,
+        requestedModel: typeof meta.requestedModel === "string" ? meta.requestedModel : route.primary_model,
+        model: typeof meta.model === "string" ? meta.model : route.primary_model,
+        promptVersion: route.prompt_version,
+        inputTokens: null,
+        outputTokens: null,
+        reasoningTokens: null,
+        costUsd: 0,
+        webSources: Array.isArray(meta.webSources) ? (meta.webSources as string[]) : [],
+        latencyMs: 0,
+        reused: true,
+        workId: begin.work_id,
+      };
+    }
+
+    // Save what the model said, not what the validator made of it: a reuse then
+    // runs the same `validate(raw)` the original answer went through.
+    let raw: unknown = null;
+    let result: CallModelResult<T>;
+    try {
+      result = await callModelOnce({ ...opts, validate: (parsed) => { raw = parsed; return opts.validate(parsed); } });
+    } catch (error) {
+      await releaseWork(opts.sb, begin.work_id, begin.lease_token, error instanceof ModelError ? error.code : "error");
+      throw error;
+    }
+
+    const saved = await saveWork(opts.sb, begin.work_id, begin.lease_token, (raw ?? result.parsed) as Record<string, unknown>, {
+      requestedModel: result.requestedModel,
+      model: result.model,
+      webSources: result.webSources,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      costUsd: result.costUsd,
+    });
+    if (saved === null) {
+      console.error("paid answer is not checkpointed; a retry will pay again", opts.stage, spec.unitKey);
+    } else if (saved.result === "already_saved") {
+      // A concurrent holder saved first. Use the stored answer so every reader agrees.
+      try {
+        return { ...result, parsed: opts.validate(saved.output), workId: begin.work_id };
+      } catch {
+        return { ...result, workId: begin.work_id };
+      }
+    } else if (saved.result === "fenced") {
+      console.warn("lease was taken over while the model call ran; answer is used but not saved", opts.stage, spec.unitKey);
+      return result;
+    }
+    return { ...result, workId: begin.work_id };
+  }
+  // Reached only if a saved answer was refused twice in a row. Pay once without the journal.
+  return callModelOnce(opts);
+}
+
+async function callModelOnce<T>(opts: CallModelOptions<T>): Promise<CallModelResult<T>> {
   const route = applyOverride(await getRoute(opts.sb, opts.stage), opts.routeOverride);
   let target: ProviderTarget;
   try {
