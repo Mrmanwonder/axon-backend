@@ -210,10 +210,22 @@ async function callModelCheckpointed<T>(
     modelId: route.primary_model,
     promptVersion: route.prompt_version,
     schemaVersion: await schemaVersionOf(opts.schema.schema),
+    // Just above the 200 s handler deadline: a live handler never loses its
+    // lease mid-call, and a dead one blocks the work for at most four minutes.
+    // Busy deliveries wait out the lease outside the retry budget (worker.ts).
+    leaseSeconds: 240,
   };
 
   for (let pass = 0; pass < 2; pass++) {
-    const begin = await beginWork(opts.sb, identity);
+    let begin: Awaited<ReturnType<typeof beginWork>>;
+    try {
+      begin = await beginWork(opts.sb, identity);
+    } catch (cause) {
+      // Nothing has been paid yet. A journal outage (or a deploy that ran ahead
+      // of its migration) must not stop papers being read: pay without it.
+      console.error("work journal unavailable; calling the model without a checkpoint", opts.stage, String(cause).slice(0, 200));
+      return callModelOnce(opts);
+    }
     if (begin.action === "busy") throw busyError(opts.stage, begin.retry_after_seconds);
 
     if (begin.action === "reuse") {

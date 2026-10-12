@@ -190,3 +190,13 @@ test("the answer is saved as the model said it, before the caller sees it", asyn
   assert.deepEqual(r.parsed, { answer: "raw" });
   assert.deepEqual(fx.rows[0].output, { answer: "raw", extra: 1 });
 });
+
+test("if the journal itself is unreachable, the model is still called once and nothing is lost", async (t) => {
+  const fx = fakeDb("ck-down");
+  const down = { ...fx.sb, rpc: async (name: string, a: any) => name === "work_begin" ? { data: null, error: { code: "PGRST202", message: "function not found" } } : fx.sb.rpc(name, a) };
+  const gemini = mockGemini(t);
+  const r = await call(ON, down, "ck-down");
+  assert.deepEqual(r.parsed, { answer: "ok" });
+  assert.equal(gemini.n, 1);
+  assert.equal(r.workId, undefined);
+});

@@ -122,7 +122,7 @@ const handler = consumeQueue<ContentMessage>(
     // map back — see @mastery/shared/frames.ts.
     const pageRows = await mustData(
       sb.from("paper_page")
-        .select("page_number, r2_bucket, r2_key, mask_key, sha256, preprocess_version, layer_fallback, conditioning_meta, quality_signals")
+        .select("page_number, r2_bucket, r2_key, mask_key, sha256, etag, preprocess_version, layer_fallback, conditioning_meta, quality_signals")
         .eq("paper_id", region.paper_id)
         .in("page_number", sourcePlan.pageNumbers)
         .order("page_number"),
@@ -204,19 +204,21 @@ const handler = consumeQueue<ContentMessage>(
       "teacher_mark read",
     ) as any[];
 
-    // AXO-225: the same question on the same page pixels is the same paid work in
-    // every run. Needs a device hash for every page it reads; a null is never a key.
+    // AXO-225: the same question on the same stored images is the same paid work
+    // in every run. The key is what is actually sent, after every fallback above:
+    // the R2 object keys of the images (a retake gets new keys), the frames their
+    // boxes are mapped through, and each page's stored object identity. The
+    // device sha256 is client-reported, so it is part of the key, never all of it.
     // Bump CONTENT_EVIDENCE_VERSION whenever crop or mask generation changes what
-    // the model is shown for the same page, or old answers would be reused.
-    const hashed = pageRows.length > 0 && pageRows.length === sourcePlan.pageNumbers.length && pageRows.every((p: any) => p.sha256);
-    const checkpoint = hashed
+    // the model is shown for the same stored objects.
+    const checkpoint = images.every((i) => i.key) && pageRows.every((p: any) => p.r2_key)
       ? {
           unitKey: `content:p${sourcePlan.pageNumbers.join("-")}:${(await digestHex([spans])).slice(0, 16)}`,
           imageDigest: await digestHex([
             CONTENT_EVIDENCE_VERSION,
-            sourcePlan.kind,
-            spans,
-            pageRows.map((p: any) => [p.page_number, p.sha256, p.preprocess_version, p.mask_key ? "mask" : "no-mask"]),
+            images.map((i) => [i.key, i.detail]),
+            frames,
+            pageRows.map((p: any) => [p.page_number, p.r2_bucket, p.r2_key, p.etag, p.sha256, p.preprocess_version, p.mask_key]),
           ]),
         }
       : undefined;

@@ -139,12 +139,17 @@ const handler = consumeQueue<StructureMessage>(
       images.push(await imageRef(env, "derived", page.mask_key, "low"));
     }
 
-    // AXO-225: a page is the same work in every run that reads the same pixels.
-    // No device hash, no checkpoint: a null is never a key.
-    const checkpoint = page.sha256
+    // AXO-225: a page is the same work in every run that sends the same stored
+    // objects. Keyed on the R2 object keys (a retake gets new ones) and the
+    // server etag; the device sha256 is client-reported, so it is part of the
+    // key, never all of it. No stored page key, no checkpoint.
+    const checkpoint = page.r2_key
       ? {
           unitKey: `structure:page:${page.page_number}`,
-          imageDigest: await digestHex([page.sha256, page.preprocess_version, page.mask_key ? "mask" : "no-mask", page.layer_fallback]),
+          imageDigest: await digestHex([
+            images.map((i) => i?.key ?? null),
+            page.r2_bucket, page.r2_key, page.etag, page.sha256, page.preprocess_version, page.mask_key, page.layer_fallback,
+          ]),
         }
       : undefined;
 
