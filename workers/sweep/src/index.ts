@@ -6,13 +6,55 @@ import { runTutorPurges } from "@mastery/shared/tutor_purge.js";
 import { maintenanceStore } from "@mastery/shared/maintenance_store.js";
 import { queueTopicTagWork } from "@mastery/shared/topic_tag.js";
 import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
+import { dispatchStageOutbox, type OutboxEvent } from "@mastery/shared/stage_outbox.js";
 
 const KEYS_PER_TICK = 200;
 const CLAIMS_PER_TICK = 20;
+/** The one-minute cron only dispatches the stage outbox (AXO-225). Must match wrangler.toml. */
+const OUTBOX_CRON = "* * * * *";
+
+/**
+ * AXO-225: send the stage messages the database wrote when it re-drove a stalled
+ * run (private.stage_outbox). Every minute, so a re-driven run starts again within
+ * a minute of the pg_cron sweep that re-drove it.
+ */
+async function dispatchOutbox(env: Env): Promise<void> {
+  if (!env.STRUCTURE_QUEUE || !env.CONTENT_QUEUE) {
+    console.error("stage outbox: STRUCTURE_QUEUE or CONTENT_QUEUE is not bound; nothing dispatched");
+    return;
+  }
+  const sb = serviceClient(env);
+  const queues = { structure: env.STRUCTURE_QUEUE, content: env.CONTENT_QUEUE };
+  const result = await dispatchStageOutbox({
+    async claim(limit) {
+      const { data, error } = await sb.rpc("claim_stage_outbox", { p_limit: limit });
+      if (error) throw new Error(`claim_stage_outbox: ${error.message}`);
+      return (data ?? []) as OutboxEvent[];
+    },
+    async finish(delivered, failed, reason) {
+      const { error } = await sb.rpc("finish_stage_outbox", { p_delivered: delivered, p_failed: failed, p_error: reason });
+      // Not fatal: an unfinished claim expires in two minutes and is sent again.
+      if (error) console.error("finish_stage_outbox failed", error.message);
+    },
+    async send(stage, messages) {
+      await chunkedSendBatch(queues[stage], messages, (body) => ({ body }));
+    },
+  });
+  if (result.delivered || result.failed) console.info("stage outbox", result);
+}
 
 
 export default {
-  async scheduled(_controller: ScheduledController, env: Env) {
+  async scheduled(controller: ScheduledController, env: Env) {
+    if (controller.cron === OUTBOX_CRON) {
+      try {
+        await dispatchOutbox(env);
+      } catch (cause) {
+        console.error("stage outbox dispatch failed", String(cause).slice(0, 200));
+      }
+      return;
+    }
+
     const sb = serviceClient(env);
     const maintenance = maintenanceStore(sb);
 

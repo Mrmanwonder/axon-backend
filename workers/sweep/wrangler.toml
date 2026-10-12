@@ -4,7 +4,8 @@ compatibility_date = "2026-08-01"
 compatibility_flags = ["nodejs_compat"]
 
 [triggers]
-crons = ["*/15 * * * *"]
+# "* * * * *" only dispatches private.stage_outbox (AXO-225); the 15-minute tick does everything else.
+crons = ["*/15 * * * *", "* * * * *"]
 
 [[r2_buckets]]
 binding = "ORIGINALS"
@@ -18,6 +19,15 @@ bucket_name = "axon-derived"
 [[queues.producers]]
 binding = "EXPLAIN_QUEUE"
 queue = "explain-queue"
+
+# AXO-225: re-driven pages and regions from private.stage_outbox.
+[[queues.producers]]
+binding = "STRUCTURE_QUEUE"
+queue = "structure-queue"
+
+[[queues.producers]]
+binding = "CONTENT_QUEUE"
+queue = "content-queue"
 
 # Carries Tutor deletion purges to axon-intelligence (AXO-126); needs AXON_ADMIN_TOKEN.
 [[services]]
