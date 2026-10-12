@@ -5,6 +5,11 @@
 // a binding still type-checks; the guards at each call site (`if (env.X)`,
 // `if (!key) throw ...`) are what actually enforce presence at runtime.
 export interface Env {
+  // AXO-226: "1" switches topic tagging to the scoped shortlist path (verified,
+  // approved syllabus only). Off unless set; needs Axon-Site migration
+  // 20261012200000_axo_226_scoped_topic_tagging.sql and approved sources.
+  SYLLABUS_SEARCH?: string;
+
   // Upload rollout defaults disabled; originals never exceed batch rollout.
   UPLOAD_BATCH_PERCENT?: string;
   UPLOAD_ORIGINALS_PERCENT?: string;
