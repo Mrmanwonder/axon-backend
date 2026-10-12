@@ -147,7 +147,8 @@ export async function processQueueMessage<M extends RetryableMessage>(
     sb,
     msg,
     attempt: message.attempts,
-    redelivered: message.attempts > 1 || retries > 0,
+    // A message that waited out another worker's lease (`_busy`) is a retry of handed-out work too.
+    redelivered: message.attempts > 1 || retries > 0 || (typeof msg._busy === "number" && msg._busy > 0),
     beat: async () => {
       if (!msg.run_id) return;
       // Checked, because a silent heartbeat failure is what makes the

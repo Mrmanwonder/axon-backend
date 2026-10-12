@@ -267,3 +267,11 @@ test("busy waits are bounded; past the bound it is an ordinary retry", async () 
   assert.equal(h.sent[0].body._retries, 1);
   assert.equal(h.sent[0].body._busy, 6);
 });
+
+test("a message that waited out a lease counts as redelivered", async () => {
+  let seen: boolean | undefined;
+  const message = { body: { run_id: "r1", _busy: 1 } as any, attempts: 1, ack: () => {}, retry: () => {} };
+  await processQueueMessage(message as any, { rpc: async () => ({ data: null, error: null }) } as any, {} as any,
+    async (ctx) => { seen = ctx.redelivered; });
+  assert.equal(seen, true);
+});
