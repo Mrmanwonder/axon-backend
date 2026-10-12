@@ -33,6 +33,13 @@ export interface Env {
   FIRECRAWL_API_KEY?: string;
   // Where the sweep worker posts spend alerts (AXO-124). Unset: alerts wait in cost_alert.
   ALERT_WEBHOOK_URL?: string;
+  // AXO-263 weekly parent digest (sweep worker). All three are required before anything is sent;
+  // while any is unset the weekly run does nothing and logs that it is not configured.
+  // API key of the transactional email provider (a secret) and the verified sender address.
+  RESEND_API_KEY?: string;
+  DIGEST_FROM_ADDRESS?: string;
+  // The app's https origin, used only to build the Settings link in the email footer.
+  DIGEST_APP_URL?: string;
   // Optional Tavily project identifier for usage attribution.
   TAVILY_PROJECT?: string;
   // Internal authentication and service binding for the verified tutor.
