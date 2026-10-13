@@ -5,7 +5,17 @@ compatibility_flags = ["nodejs_compat"]
 
 [triggers]
 # "* * * * *" only dispatches private.stage_outbox (AXO-225); the 15-minute tick does everything else.
-crons = ["*/15 * * * *", "* * * * *"]
+# "30 12 * * 0" (Sunday 12:30 UTC, 18:00 IST) sends the weekly parent digests (AXO-263) and nothing else.
+crons = ["*/15 * * * *", "* * * * *", "30 12 * * 0"]
+
+# AXO-263 weekly parent digest. Not secret, so kept here: a Worker setting that exists only in the
+# dashboard is wiped by the next `wrangler deploy` (the dashboard warns about exactly this).
+[vars]
+DIGEST_APP_URL = "https://axonstudy.online"
+DIGEST_FROM_ADDRESS = "updates@axonstudy.online"
+# The explicit on-switch (AXO-266). Anything but exactly "true" means the weekly run queues, claims and
+# sends nothing, even with the key and sender set. Turn it on in a reviewed commit, after counsel's answers.
+DIGEST_SEND_ENABLED = "false"
 
 [[r2_buckets]]
 binding = "ORIGINALS"
@@ -38,4 +48,6 @@ service = "axon-intelligence"
 # R2_BUCKET_DERIVED, R2_BUCKET_ORIGINALS, R2_ENDPOINT, R2_SECRET_ACCESS_KEY,
 # SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
 # AXON_ADMIN_TOKEN (Tutor purge)
+# AXO-263 weekly parent digest: RESEND_API_KEY (secret, set in the dashboard); DIGEST_FROM_ADDRESS and DIGEST_APP_URL are in [vars] above.
+# Until all three are set the Sunday run sends nothing and logs that it is not configured.
 # Optional: ALERT_WEBHOOK_URL (spend alerts, AXO-124). Unset, alerts wait in cost_alert.
