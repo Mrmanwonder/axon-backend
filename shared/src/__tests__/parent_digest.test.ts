@@ -9,6 +9,7 @@ import {
   resendMailer,
   runParentDigests,
   settingsUrlFor,
+  weekLabel,
   type ClaimedDigest,
   type DigestPayload,
   type DigestStore,
@@ -47,7 +48,7 @@ test("the digest says marks lost with its sample sizes, and names no more than t
   assert.match(m.text, /What keeps costing marks\n- Explain questions: 11 marks lost · 4 questions · 4 papers/);
   assert.match(m.text, /These are the teacher's marks\. Axon explains where they were lost; it does not change them\./);
   assert.ok(m.text.includes(`turn it off in Settings: ${SETTINGS}`));
-  for (const part of [m.subject, m.text, m.html.replace(/<[^>]+>/g, " ")]) assertCopyRules(part);
+  for (const part of [m.subject, m.text, m.html.replace(/<style>[\s\S]*?<\/style>/g, "").replace(/<[^>]+>/g, " ")]) assertCopyRules(part);
 });
 
 test("with fewer than four papers overall no pattern is named", () => {
@@ -91,8 +92,14 @@ test("a name is data: markup is stripped, entities are escaped, length is capped
 
 test("the HTML version carries the same words and a working Settings link", () => {
   const m = renderParentDigest(base, SETTINGS);
-  assert.ok(m.html.includes(`<a href="${SETTINGS}">${SETTINGS}</a>`));
-  assert.match(m.html, /Explain questions: 11 marks lost · 4 questions · 4 papers/);
+  assert.match(m.html, new RegExp(`<a class="lnk" href="${SETTINGS}"[^>]*>${SETTINGS}</a>`));
+  // The HTML says the same things as the text: the same sentences and the same figures.
+  assert.match(m.html, /Ana had 2 papers read in Axon this week \(Chemistry, Physics\)\./);
+  assert.match(m.html, /4 of the 7 questions Axon counted lost marks: 8 marks lost in total\./);
+  assert.match(m.html, /Explain questions<\/div>/);
+  assert.match(m.html, /11 marks lost/);
+  assert.match(m.html, /4 questions · 4 papers/);
+  assert.match(m.html, /These are the teacher&#39;s marks\./);
 });
 
 test("the Settings link is built only from a plain https origin", () => {
@@ -263,4 +270,46 @@ test("the weekly digest cron in wrangler.toml is the one the sweep worker routes
   assert.deepEqual(crons.filter((c) => c !== inCode).sort(), ["* * * * *", "*/15 * * * *"].sort());
   // Weekly, on a Sunday.
   assert.match(inCode!, /^\d+ \d+ \* \* 0$/);
+});
+
+test("the email design: no images, no tracking, a dark-mode variant, a generic preview line, and the same copy rules", () => {
+  const m = renderParentDigest(base, SETTINGS);
+  assert.doesNotMatch(m.html, /<img|<script|<link|url\(|http:\/\//i, "nothing is fetched when the email opens");
+  assert.match(m.html, /prefers-color-scheme: dark/);
+  assert.match(m.html, /name="color-scheme" content="light dark"/);
+  // The preview line shows in notifications and on lock screens, so it names no child and no figure.
+  const pre = /display:none[^>]*>([^<]*)</.exec(m.html)![1]!.replace(/&zwnj;|&nbsp;/g, "");
+  assert.equal(pre, "Your weekly summary from Axon.");
+  assertCopyRules(m.html.replace(/<style>[\s\S]*?<\/style>/g, "").replace(/<[^>]+>/g, " "));
+  assert.match(m.html, /Weekly summary/);
+  assert.match(m.html, /5–11 Oct 2026/);
+});
+
+test("a fixed question for the parent appears only when a pattern is named, and uses only data already shown", () => {
+  const withArea = renderParentDigest(base, SETTINGS);
+  assert.match(withArea.text, /Ask Ana to pick one Explain question from this week and say what the mark scheme was looking for\./);
+  assert.match(withArea.html, /Ask Ana to pick one Explain question/);
+  const none = renderParentDigest({ ...base, has_enough_data: false, papers_counted: 1, areas: [] }, SETTINGS);
+  assert.doesNotMatch(none.text, /Ask Ana/);
+  assertCopyRules(withArea.text);
+});
+
+test("unknown is not zero in the figures either: left-out questions show Not yet, not 0", () => {
+  const m = renderParentDigest({ ...base, questions_counted: 0, questions_lost: 0, marks_lost: 0 }, SETTINGS);
+  assert.match(m.html, />Not yet</);
+  assert.doesNotMatch(m.html.replace(/<style>[\s\S]*?<\/style>/g, ""), />0</);
+});
+
+test("the week label is built only from plain dates", () => {
+  assert.equal(weekLabel("2026-10-05", "2026-10-11"), "5–11 Oct 2026");
+  assert.equal(weekLabel("2026-09-28", "2026-10-04"), "28 Sep – 4 Oct 2026");
+  assert.equal(weekLabel("2025-12-29", "2026-01-04"), "29 Dec 2025 – 4 Jan 2026");
+  assert.equal(weekLabel("<b>", "2026-10-11"), "");
+  assert.equal(weekLabel("2026-13-05", "2026-10-11"), "");
+});
+
+test("figures from the database are whole numbers and never negative in the page", () => {
+  const m = renderParentDigest({ ...base, papers_committed: -3 as number, questions_counted: 7.9, questions_lost: 2.2 }, SETTINGS);
+  assert.match(m.text, /Ana had 0 papers read/);
+  assert.match(m.text, /2 of the 7 questions/);
 });
