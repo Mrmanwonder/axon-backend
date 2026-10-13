@@ -5,8 +5,8 @@ compatibility_flags = ["nodejs_compat"]
 
 [triggers]
 # "* * * * *" only dispatches private.stage_outbox (AXO-225); the 15-minute tick does everything else.
-# "30 12 * * 0" (Sunday 12:30 UTC, 18:00 IST) sends the weekly parent digests (AXO-263) and nothing else.
-crons = ["*/15 * * * *", "* * * * *", "30 12 * * 0"]
+# "30 12 * * SUN" (Sunday 12:30 UTC, 18:00 IST) sends the weekly parent digests (AXO-263) and nothing else. Cloudflare rejects a numeric 0 for Sunday (error 10100), so it is spelled SUN.
+crons = ["*/15 * * * *", "* * * * *", "30 12 * * SUN"]
 
 # AXO-263 weekly parent digest. Not secret, so kept here: a Worker setting that exists only in the
 # dashboard is wiped by the next `wrangler deploy` (the dashboard warns about exactly this).

@@ -269,7 +269,7 @@ test("the weekly digest cron in wrangler.toml is the one the sweep worker routes
   // It must not collide with the other two schedules, or one trigger would run two jobs.
   assert.deepEqual(crons.filter((c) => c !== inCode).sort(), ["* * * * *", "*/15 * * * *"].sort());
   // Weekly, on a Sunday.
-  assert.match(inCode!, /^\d+ \d+ \* \* 0$/);
+  assert.match(inCode!, /^\d+ \d+ \* \* SUN$/);
 });
 
 test("the email design: no images, no tracking, a dark-mode variant, a generic preview line, and the same copy rules", () => {

@@ -14,7 +14,7 @@ const CLAIMS_PER_TICK = 20;
 /** The one-minute cron only dispatches the stage outbox (AXO-225). Must match wrangler.toml. */
 const OUTBOX_CRON = "* * * * *";
 /** Sunday 12:30 UTC (18:00 IST): the weekly parent digests (AXO-263), and nothing else. Must match wrangler.toml. */
-const DIGEST_CRON = "30 12 * * 0";
+const DIGEST_CRON = "30 12 * * SUN";
 
 /**
  * AXO-263: queue, claim and send the weekly parent digests. The database decides who is owed one
