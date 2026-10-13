@@ -313,3 +313,58 @@ test("figures from the database are whole numbers and never negative in the page
   assert.match(m.text, /Ana had 0 papers read/);
   assert.match(m.text, /2 of the 7 questions/);
 });
+
+const richer: DigestPayload = {
+  ...base,
+  by_subject: [
+    { subject: "Chemistry", papers: 1, questions: 4, lost_questions: 2, marks_lost: 5 },
+    { subject: "Physics", papers: 1, questions: 3, lost_questions: 1, marks_lost: 3 },
+  ],
+  earlier_questions: 12,
+  earlier_lost: 8,
+  trend: "fewer",
+};
+
+test("the digest says what was worked on, subject by subject, with counts and no scores", () => {
+  const m = renderParentDigest(richer, SETTINGS);
+  assert.match(m.text, /What they worked on\n- Chemistry: 1 paper · 2 of 4 questions lost marks · 5 marks lost\n- Physics: 1 paper · 1 of 3 questions lost marks · 3 marks lost/);
+  assert.match(m.html, /What they worked on/);
+  assert.match(m.html, /2 of 4 questions lost marks/);
+  for (const part of [m.text, m.html.replace(/<style>[\s\S]*?<\/style>/g, "").replace(/<[^>]+>/g, " ")]) assertCopyRules(part);
+});
+
+test("how it is going compares the week with earlier papers, with both counts and a caveat", () => {
+  for (const [trend, phrase] of [
+    ["fewer", "A smaller share of questions lost marks than in Ana's earlier papers: 4 of 7 this week, against 8 of 12 in earlier papers."],
+    ["more", "A larger share of questions lost marks than in Ana's earlier papers: 4 of 7 this week, against 8 of 12 in earlier papers."],
+    ["similar", "About the same share of questions lost marks as in Ana's earlier papers: 4 of 7 this week, against 8 of 12 in earlier papers."],
+  ] as const) {
+    const m = renderParentDigest({ ...richer, trend }, SETTINGS);
+    assert.ok(m.text.includes(`How it is going\n${phrase}\nPapers differ in difficulty, so read this as a pointer, not a verdict.`), trend);
+    assertCopyRules(m.text);
+    assertCopyRules(m.html.replace(/<style>[\s\S]*?<\/style>/g, "").replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'"));
+  }
+});
+
+test("without enough earlier work the email says so instead of inventing a trend", () => {
+  const m = renderParentDigest({ ...richer, trend: null, earlier_questions: null, earlier_lost: null }, SETTINGS);
+  assert.match(m.text, /How it is going\nAxon compares a week with earlier papers once there are 10 questions on each side\./);
+  assert.doesNotMatch(m.text, /smaller share|larger share|same share/);
+});
+
+test("an inconsistent comparison from the database is not shown", () => {
+  for (const bad of [
+    { earlier_questions: 5, earlier_lost: 9 },
+    { earlier_questions: 0, earlier_lost: 0 },
+    { trend: "improving" as unknown as "fewer" },
+  ]) {
+    const m = renderParentDigest({ ...richer, ...bad }, SETTINGS);
+    assert.doesNotMatch(m.text, /smaller share|larger share|same share|improving/);
+  }
+});
+
+test("older payloads without the new fields still render", () => {
+  const m = renderParentDigest(base, SETTINGS);
+  assert.doesNotMatch(m.text, /What they worked on/);
+  assert.match(m.text, /4 of the 7 questions Axon counted lost marks/);
+});

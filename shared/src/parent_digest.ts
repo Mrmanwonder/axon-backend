@@ -19,6 +19,14 @@ export interface DigestArea {
   marks_lost: number;
 }
 
+export interface DigestSubject {
+  subject: string;
+  papers: number;
+  questions: number;
+  lost_questions: number;
+  marks_lost: number;
+}
+
 export interface DigestPayload {
   first_name: string;
   period_start: string;
@@ -33,6 +41,12 @@ export interface DigestPayload {
   papers_counted: number;
   has_enough_data: boolean;
   areas: DigestArea[];
+  /** Per subject read this week. Counts only. Absent on payloads from before notice 1.4.0. */
+  by_subject?: DigestSubject[];
+  /** This week against earlier papers, both counts. Null when either side has fewer than 10 questions. */
+  earlier_questions?: number | null;
+  earlier_lost?: number | null;
+  trend?: "fewer" | "similar" | "more" | null;
 }
 
 export interface ClaimedDigest {
@@ -139,13 +153,46 @@ function words(p: DigestPayload) {
       })
     : [];
 
+  const bySubject = counted === 0 ? [] : (p.by_subject ?? [])
+    .filter((x) => cleanLabel(x.subject))
+    .map((x) => {
+      const sName = cleanLabel(x.subject);
+      const sP = whole(x.papers);
+      const sQ = whole(x.questions);
+      const sL = whole(x.lost_questions);
+      const sM = whole(x.marks_lost);
+      const marks = `${sM} ${sM === 1 ? "mark" : "marks"} lost`;
+      const basis = `${count(sP, "paper", "papers")} · ${sL} of ${count(sQ, "question", "questions")} lost marks`;
+      return { name: sName, marks, basis, line: `${sName}: ${basis} · ${marks}` };
+    });
+
+  // This week against the student's own earlier papers. Both counts always shown; never a score,
+  // percentage, rank or prediction. Shown only when the database supplied a valid comparison.
+  const eq = whole(p.earlier_questions);
+  const el = whole(p.earlier_lost);
+  const trend = p.trend === "fewer" || p.trend === "similar" || p.trend === "more" ? p.trend : null;
+  let progress: string | null = null;
+  if (counted > 0 && trend && eq > 0 && el <= eq && lost <= counted) {
+    const now = `${lost} of ${counted} this week`;
+    const before = `${el} of ${eq} in earlier papers`;
+    progress =
+      trend === "fewer" ? `A smaller share of questions lost marks than in ${name}'s earlier papers: ${now}, against ${before}.`
+      : trend === "more" ? `A larger share of questions lost marks than in ${name}'s earlier papers: ${now}, against ${before}.`
+      : `About the same share of questions lost marks as in ${name}'s earlier papers: ${now}, against ${before}.`;
+  }
+  const progressNote = progress
+    ? "Papers differ in difficulty, so read this as a pointer, not a verdict."
+    : counted > 0
+      ? "Axon compares a week with earlier papers once there are 10 questions on each side. There are not yet, so there is nothing to compare."
+      : null;
+
   // A fixed sentence, not generated: it uses only the first name and the command word already shown.
   const ask = areas[0]
     ? `Ask ${name} to pick one ${areas[0].name} question from this week and say what the mark scheme was looking for.`
     : null;
 
   return {
-    name, papers, counted, lost, marksLost, subjects, papersLine, lossLine, patternNote, areas, ask,
+    name, papers, counted, lost, marksLost, subjects, papersLine, lossLine, patternNote, areas, ask, bySubject, progress, progressNote,
     teacherNote: "These are the teacher's marks. Axon explains where they were lost; it does not change them.",
     why: "You get this because you turned on the weekly summary.",
   };
@@ -193,6 +240,9 @@ export function renderParentDigest(p: DigestPayload, settingsUrl: string): Rende
 
   // Plain text: the same words, in reading order.
   const textParts: string[] = [w.papersLine, w.lossLine];
+  if (w.bySubject.length) textParts.push(["What they worked on", ...w.bySubject.map((x) => `- ${x.line}`)].join("\n"));
+  if (w.progress) textParts.push(["How it is going", w.progress, w.progressNote].join("\n"));
+  else if (w.progressNote) textParts.push(["How it is going", w.progressNote].join("\n"));
   if (w.patternNote) textParts.push(w.patternNote);
   else if (w.areas.length) textParts.push(["What keeps costing marks", ...w.areas.map((a) => `- ${a.line}`)].join("\n"));
   if (w.ask) textParts.push(w.ask);
@@ -222,6 +272,36 @@ export function renderParentDigest(p: DigestPayload, settingsUrl: string): Rende
     "wash",
     C.wash,
   );
+
+  const rowsOf = (items: { name: string; basis: string; marks: string }[], suffix: string) =>
+    items
+      .map(
+        (a, i) =>
+          `<tr><td class="rule" style="padding:${i === 0 ? "12px" : "14px"} 0 14px;${i === 0 ? "" : `border-top:1px solid ${C.rule};`}font-family:${FONT}">` +
+          `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>` +
+          `<td valign="top"><div class="ink" style="font-size:17px;line-height:1.35;font-weight:600;color:${C.ink}">${escapeHtml(a.name)}${suffix}</div>` +
+          `<div class="mute" style="margin-top:3px;font-size:13px;line-height:1.4;color:${C.mute}">${escapeHtml(a.basis)}</div></td>` +
+          `<td align="right" valign="top" style="white-space:nowrap"><div class="ink" style="font-size:17px;line-height:1.35;font-weight:700;color:${C.ink}">${escapeHtml(a.marks)}</div></td>` +
+          `</tr></table></td></tr>`,
+      )
+      .join("");
+
+  const subjectCard = w.bySubject.length
+    ? card(
+        `<div class="mute" style="font-size:13px;line-height:1.4;font-weight:600;color:${C.mute}">What they worked on</div>` +
+          `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rowsOf(w.bySubject, "")}</table>`,
+      )
+    : "";
+
+  const progressCard = w.progressNote
+    ? card(
+        `<div class="mute" style="font-size:13px;line-height:1.4;font-weight:600;color:${C.mute}">How it is going</div>` +
+          (w.progress
+            ? `<p class="ink" style="margin:8px 0 0;font-size:17px;line-height:1.5;font-weight:600;color:${C.ink}">${escapeHtml(w.progress)}</p>`
+            : "") +
+          `<p class="mute" style="margin:${w.progress ? 8 : 8}px 0 0;font-size:15px;line-height:1.55;color:${C.mute}">${escapeHtml(w.progressNote)}</p>`,
+      )
+    : "";
 
   let patternCard = "";
   if (w.patternNote) {
@@ -276,7 +356,7 @@ export function renderParentDigest(p: DigestPayload, settingsUrl: string): Rende
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="bg" style="background:${C.bg}"><tr>` +
     `<td align="center" style="padding:24px 12px">` +
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px">` +
-    brand + hero + gap(12) + lossCard + (patternCard ? gap(12) + patternCard : "") + gap(16) + footer +
+    brand + hero + gap(12) + lossCard + (subjectCard ? gap(12) + subjectCard : "") + (progressCard ? gap(12) + progressCard : "") + (patternCard ? gap(12) + patternCard : "") + gap(16) + footer +
     `</table></td></tr></table></body></html>`;
 
   return { subject: DIGEST_SUBJECT, text, html };
