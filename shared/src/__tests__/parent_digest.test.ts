@@ -148,9 +148,9 @@ test("each email carries a List-Unsubscribe link to Settings and a per-email ref
   });
 });
 
-test("the sweep wrangler.toml ships with sending switched off", () => {
+test("the sweep wrangler.toml has sending switched on (owner's instruction, 13 Oct 2026); the database gate still decides who is eligible", () => {
   const toml = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../../workers/sweep/wrangler.toml"), "utf8");
-  assert.match(toml, /^DIGEST_SEND_ENABLED = "false"$/m);
+  assert.match(toml, /^DIGEST_SEND_ENABLED = "true"$/m);
 });
 
 test("unconfigured: nothing is queued or claimed, and the run says why", async () => {
