@@ -38,6 +38,9 @@ export interface Env {
   // API key of the transactional email provider (a secret) and the verified sender address.
   RESEND_API_KEY?: string;
   DIGEST_FROM_ADDRESS?: string;
+  // The explicit on-switch: the weekly run does nothing unless this is exactly "true". Set in
+  // workers/sweep/wrangler.toml (default "false"), so turning sending on is a reviewed commit.
+  DIGEST_SEND_ENABLED?: string;
   // The app's https origin, used only to build the Settings link in the email footer.
   DIGEST_APP_URL?: string;
   // Optional Tavily project identifier for usage attribution.

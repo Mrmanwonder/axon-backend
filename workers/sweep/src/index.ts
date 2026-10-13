@@ -42,7 +42,7 @@ async function sendParentDigests(env: Env): Promise<void> {
         if (error) throw new Error(`finish_parent_digest: ${error.message}`);
       },
     },
-    { mailer, appUrl: env.DIGEST_APP_URL ?? null },
+    { mailer, appUrl: env.DIGEST_APP_URL ?? null, enabled: env.DIGEST_SEND_ENABLED === "true" },
   );
   if (!run.configured) console.error("parent digest: not configured, nothing queued or sent:", run.reason);
   else console.info("parent digest", { queued: run.queued, claimed: run.claimed, sent: run.sent, failed: run.failed });

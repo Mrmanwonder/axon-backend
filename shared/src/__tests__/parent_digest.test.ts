@@ -121,15 +121,40 @@ function fixture(digests: ClaimedDigest[]) {
 const d1: ClaimedDigest = { delivery_id: "d-1", to_email: "parent1@example.test", payload: base };
 const d2: ClaimedDigest = { delivery_id: "d-2", to_email: "parent2@example.test", payload: { ...base, first_name: "Ben" } };
 
+test("switched off: with the key, sender and URL all set, nothing is queued, claimed or sent", async () => {
+  const f = fixture([d1]);
+  let sends = 0;
+  const mailer: Mailer = { send: async () => { sends++; return { ok: true }; } };
+  const r = await runParentDigests(f.store, { mailer, enabled: false, appUrl: "https://app.example.test" });
+  assert.equal(r.configured, false);
+  assert.deepEqual(f.calls, []);
+  assert.equal(sends, 0);
+});
+
+test("each email carries a List-Unsubscribe link to Settings and a per-email reference", async () => {
+  const f = fixture([d1]);
+  const seenMail: MailMessage[] = [];
+  const mailer: Mailer = { send: async (m) => { seenMail.push(m); return { ok: true }; } };
+  await runParentDigests(f.store, { mailer, enabled: true, appUrl: "https://app.example.test" });
+  assert.deepEqual(seenMail[0]!.headers, {
+    "List-Unsubscribe": "<https://app.example.test/settings>", "X-Entity-Ref-ID": "d-1",
+  });
+});
+
+test("the sweep wrangler.toml ships with sending switched off", () => {
+  const toml = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../../workers/sweep/wrangler.toml"), "utf8");
+  assert.match(toml, /^DIGEST_SEND_ENABLED = "false"$/m);
+});
+
 test("unconfigured: nothing is queued or claimed, and the run says why", async () => {
   const noMailer = fixture([d1]);
-  const a = await runParentDigests(noMailer.store, { mailer: null, appUrl: "https://app.example.test" });
+  const a = await runParentDigests(noMailer.store, { mailer: null, enabled: true, appUrl: "https://app.example.test" });
   assert.deepEqual(a, { configured: false, reason: "no mail provider key or sender address is set" });
   assert.deepEqual(noMailer.calls, []);
 
   const noUrl = fixture([d1]);
   const mailer: Mailer = { send: async () => ({ ok: true }) };
-  const b = await runParentDigests(noUrl.store, { mailer, appUrl: "http://insecure.example.test" });
+  const b = await runParentDigests(noUrl.store, { mailer, enabled: true, appUrl: "http://insecure.example.test" });
   assert.equal(b.configured, false);
   assert.deepEqual(noUrl.calls, []);
 });
@@ -143,7 +168,7 @@ test("each digest is sent once to its own guardian, and success and failure are 
       return msg.to === "parent1@example.test" ? { ok: true } : { ok: false, status: 503 };
     },
   };
-  const run = await runParentDigests(store, { mailer, appUrl: "https://app.example.test" }, 10);
+  const run = await runParentDigests(store, { mailer, enabled: true, appUrl: "https://app.example.test" }, 10);
 
   assert.deepEqual(calls, ["queue", "claim:10"]);
   assert.deepEqual(run, { configured: true, queued: 2, claimed: 2, sent: 1, failed: 1 });
@@ -170,7 +195,7 @@ test("a provider that throws or never answers is a failed send, not a crash", as
       return { ok: false, status: null };
     },
   };
-  const run = await runParentDigests(store, { mailer, appUrl: "https://app.example.test" });
+  const run = await runParentDigests(store, { mailer, enabled: true, appUrl: "https://app.example.test" });
   assert.deepEqual(run, { configured: true, queued: 2, claimed: 2, sent: 0, failed: 2 });
   assert.deepEqual(finished.map((f) => f.error), ["request did not complete", "request did not complete"]);
 });
@@ -183,7 +208,7 @@ test("if recording the result fails, the run carries on with the next digest", a
     finish: async () => { throw new Error("database unreachable"); },
   };
   const mailer: Mailer = { send: async (m) => { sent.push(m.idempotencyKey); return { ok: true }; } };
-  const run = await runParentDigests(store, { mailer, appUrl: "https://app.example.test" });
+  const run = await runParentDigests(store, { mailer, enabled: true, appUrl: "https://app.example.test" });
   assert.deepEqual(sent, ["d-1", "d-2"]);
   assert.deepEqual(run, { configured: true, queued: 2, claimed: 2, sent: 2, failed: 0 });
 });
@@ -209,6 +234,8 @@ test("the Resend adapter posts one JSON message with a bearer key and an idempot
   assert.deepEqual(JSON.parse(String(seen[0]!.init.body)), {
     from: "Axon <digest@mail.example.test>", to: ["p@example.test"], subject: "S", text: "T", html: "<p>H</p>",
   });
+  await mailer.send({ to: "p@example.test", subject: "S", text: "T", html: "H", idempotencyKey: "d-10", headers: { "X-Entity-Ref-ID": "d-10" } });
+  assert.deepEqual(JSON.parse(String(seen[1]!.init.body)).headers, { "X-Entity-Ref-ID": "d-10" });
 });
 
 test("the Resend adapter reports a refusal by status only, and a network failure as null", async () => {

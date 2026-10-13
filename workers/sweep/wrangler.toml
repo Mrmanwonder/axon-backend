@@ -13,6 +13,9 @@ crons = ["*/15 * * * *", "* * * * *", "30 12 * * 0"]
 [vars]
 DIGEST_APP_URL = "https://axonstudy.online"
 DIGEST_FROM_ADDRESS = "updates@axonstudy.online"
+# The explicit on-switch (AXO-266). Anything but exactly "true" means the weekly run queues, claims and
+# sends nothing, even with the key and sender set. Turn it on in a reviewed commit, after counsel's answers.
+DIGEST_SEND_ENABLED = "false"
 
 [[r2_buckets]]
 binding = "ORIGINALS"

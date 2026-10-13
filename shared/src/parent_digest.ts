@@ -173,6 +173,8 @@ export interface MailMessage {
   html: string;
   /** Stable per digest, so a retry after an unclear failure cannot send twice where the provider honours it. */
   idempotencyKey: string;
+  /** Extra message headers (List-Unsubscribe, X-Entity-Ref-ID). */
+  headers?: Record<string, string>;
 }
 
 /** `status` is the provider's HTTP status, or null when the request never completed. No body, no address. */
@@ -194,7 +196,7 @@ export function resendMailer(apiKey: string, from: string, fetchFn: typeof fetch
             "content-type": "application/json",
             "idempotency-key": msg.idempotencyKey,
           },
-          body: JSON.stringify({ from, to: [msg.to], subject: msg.subject, text: msg.text, html: msg.html }),
+          body: JSON.stringify({ from, to: [msg.to], subject: msg.subject, text: msg.text, html: msg.html, ...(msg.headers ? { headers: msg.headers } : {}) }),
         });
         return res.ok ? { ok: true } : { ok: false, status: res.status };
       } catch {
@@ -215,6 +217,8 @@ export interface DigestStore {
 
 export interface DigestConfig {
   mailer: Mailer | null;
+  /** The explicit on-switch (DIGEST_SEND_ENABLED === "true"). Off: nothing is queued, claimed or sent, whatever else is set. */
+  enabled: boolean;
   /** The app's origin, e.g. https://example.test (no trailing path). Null: not configured. */
   appUrl: string | null;
 }
@@ -240,6 +244,7 @@ export function settingsUrlFor(appUrl: string | null | undefined): string | null
  * (and the caller logs it) rather than succeeding quietly, and no attempt is spent.
  */
 export async function runParentDigests(store: DigestStore, cfg: DigestConfig, limit = 25): Promise<DigestRun> {
+  if (!cfg.enabled) return { configured: false, reason: "DIGEST_SEND_ENABLED is not \"true\": sending is switched off" };
   const settingsUrl = settingsUrlFor(cfg.appUrl);
   if (!cfg.mailer) return { configured: false, reason: "no mail provider key or sender address is set" };
   if (!settingsUrl) return { configured: false, reason: "DIGEST_APP_URL is not set to an https origin" };
@@ -259,6 +264,9 @@ export async function runParentDigests(store: DigestStore, cfg: DigestConfig, li
         text: mail.text,
         html: mail.html,
         idempotencyKey: digest.delivery_id,
+        // A link to Settings where the switch is, and a per-email reference so a weekly
+        // message with the same subject is not folded into one thread.
+        headers: { "List-Unsubscribe": `<${settingsUrl}>`, "X-Entity-Ref-ID": digest.delivery_id },
       });
     } catch {
       result = { ok: false, status: null };
