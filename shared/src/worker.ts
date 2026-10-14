@@ -43,12 +43,13 @@ export async function failRun(
 // AXON_FIX_BRIEF.md §3.5.
 export const HANDLE_TIMEOUT_MS = 200_000;
 
-export function withDeadline<T>(promiseOrValue: T | Promise<T>, ms: number, label: string): Promise<T> {
+export function withDeadline<T>(promiseOrValue: T | Promise<T>, ms: number, label: string, onTimeout?: (error: Error) => void): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       const err = new Error(label + " exceeded " + ms + "ms budget — failing so the queue message does not hang forever");
       err.name = "HandlerTimeout";
+      onTimeout?.(err);
       reject(err);
     }, ms);
   });
@@ -57,6 +58,8 @@ export function withDeadline<T>(promiseOrValue: T | Promise<T>, ms: number, labe
 
 export interface QueueContext<M> {
   env: Env;
+  /** Aborted before timeout retry; pass to cancellable I/O. */
+  signal: AbortSignal;
   sb: SupabaseClient;
   msg: M;
   attempt: number;
@@ -133,16 +136,21 @@ export interface AckableMessage<M> {
  * rather than in the queue's own opaque counter. A worker with no SELF_QUEUE
  * binding falls through to the native `message.retry()`.
  */
+type QueueClient = SupabaseClient | ((signal: AbortSignal) => SupabaseClient);
+
 export async function processQueueMessage<M extends RetryableMessage>(
   message: AckableMessage<M>,
-  sb: SupabaseClient,
+  client: QueueClient,
   env: Env,
   handle: (ctx: QueueContext<M>) => Promise<unknown>,
   onPermanent?: (ctx: QueueContext<M>, error: unknown) => Promise<unknown>,
 ): Promise<void> {
   const msg = message.body;
   const retries = typeof msg._retries === "number" ? msg._retries : 0;
+  const controller = new AbortController();
+  const sb = typeof client === "function" ? client(controller.signal) : client;
   const ctx: QueueContext<M> = {
+    signal: controller.signal,
     env,
     sb,
     msg,
@@ -150,6 +158,7 @@ export async function processQueueMessage<M extends RetryableMessage>(
     // A message that waited out another worker's lease (`_busy`) is a retry of handed-out work too.
     redelivered: message.attempts > 1 || retries > 0 || (typeof msg._busy === "number" && msg._busy > 0),
     beat: async () => {
+      controller.signal.throwIfAborted();
       if (!msg.run_id) return;
       // Checked, because a silent heartbeat failure is what makes the
       // stale-run sweep wrong: the sweeper decides a run is abandoned from a
@@ -163,8 +172,10 @@ export async function processQueueMessage<M extends RetryableMessage>(
     // Inside the try now. The heartbeat is a database call like any other, and
     // an unhandled rejection here used to escape the per-message handler
     // entirely rather than going through retry.
-    await ctx.beat();
-    await withDeadline(handle(ctx), HANDLE_TIMEOUT_MS, "handler");
+    await withDeadline((async () => {
+      await ctx.beat();
+      return handle(ctx);
+    })(), HANDLE_TIMEOUT_MS, "handler", error => controller.abort(error));
     message.ack();
   } catch (error) {
     // AXO-225: another worker holds the paid work. Wait out its lease instead of
@@ -212,7 +223,16 @@ export async function processQueueMessage<M extends RetryableMessage>(
       return;
     }
     try {
-      await withDeadline(onPermanent(ctx, error), HANDLE_TIMEOUT_MS, "onPermanent");
+      // Terminal recording gets its own budget/client. An aborted handler's
+      // DB requests must never prevent durable failure recording.
+      const terminal = new AbortController();
+      const terminalSb = typeof client === "function" ? client(terminal.signal) : client;
+      const terminalCtx = { ...ctx, signal: terminal.signal, sb: terminalSb,
+        beat: async () => {
+          terminal.signal.throwIfAborted();
+          if (msg.run_id) await mustRpc(terminalSb.rpc("run_heartbeat", { p_run_id: msg.run_id }), "run_heartbeat");
+        } };
+      await withDeadline(onPermanent(terminalCtx, error), HANDLE_TIMEOUT_MS, "onPermanent", cause => terminal.abort(cause));
       message.ack();
     } catch (terminalError) {
       // The terminal state was NOT durably written. Acknowledging here would
@@ -279,7 +299,7 @@ export function consumeQueue<M extends RetryableMessage>(
   options: ConsumeOptions = {},
 ) {
   return async (batch: MessageBatch<M>, env: Env) => {
-    const sb = serviceClient(env);
+    const sb = (signal: AbortSignal) => serviceClient(env, signal);
     await consumeBatch(batch.messages as readonly AckableMessage<M>[], sb, env, handle, onPermanent, options);
   };
 }
@@ -287,7 +307,7 @@ export function consumeQueue<M extends RetryableMessage>(
 /** The batch loop, separated from client construction so it can be tested. */
 export async function consumeBatch<M extends RetryableMessage>(
   messages: readonly AckableMessage<M>[],
-  sb: SupabaseClient,
+  sb: QueueClient,
   env: Env,
   handle: (ctx: QueueContext<M>) => Promise<unknown>,
   onPermanent?: (ctx: QueueContext<M>, error: unknown) => Promise<unknown>,

@@ -61,19 +61,17 @@ export function clientFor(req: Request, env: Env): SupabaseClient | null {
 }
 
 /** A service-role client that bypasses RLS. Only ever used from within a worker, never in a response path that echoes caller input back as another caller's data. */
-export function serviceClient(env: Env): SupabaseClient {
+export function serviceClient(env: Env, signal?: AbortSignal): SupabaseClient {
   if (!env.SUPABASE_SERVICE_ROLE_KEY) {
     throw new Error("SUPABASE_SERVICE_ROLE_KEY is not set for this worker");
   }
   return createClient(env.SUPABASE_URL!, env.SUPABASE_SERVICE_ROLE_KEY, {
+    ...(signal ? { global: { fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+      signal.throwIfAborted();
+      return fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([signal, init.signal]) : signal });
+    } } } : {}),
     auth: { persistSession: false },
   });
 }
 
-export async function readJson<T = unknown>(req: Request): Promise<T | null> {
-  try {
-    return (await req.json()) as T;
-  } catch {
-    return null;
-  }
-}
+export { readBoundedJson as readJson } from "./http-body.js";

@@ -295,3 +295,31 @@ test("usage is logged for pricing: cached tokens and billed output including thi
   // The database prices the call; the worker never invents a cost.
   assert.equal(row.cost_usd, null);
 });
+
+test("handler abort cancels the provider request and never starts an inline retry", async (t) => {
+  const h = harness("handler-abort", 512);
+  const controller = new AbortController();
+  let started!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async (_url: string | URL | Request, init?: RequestInit) => {
+    calls++; started();
+    return new Promise<Response>((_, reject) => {
+      init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason));
+    });
+  });
+  const pending = h.run({ signal: controller.signal });
+  await ready;
+  const reason = Object.assign(new Error("handler deadline"), { name: "HandlerTimeout" });
+  controller.abort(reason);
+  await assert.rejects(pending, error => error === reason);
+  assert.equal(calls, 1);
+  assert.equal(h.inserted.length, 0, "no success/model result after the deadline");
+});
+test("already-aborted work cannot start a paid request", async (t) => {
+  const h = harness("already-aborted", 512);
+  const controller = new AbortController(); controller.abort();
+  const fetch = t.mock.method(globalThis, "fetch", async () => { throw new Error("must not fetch"); });
+  await assert.rejects(h.run({ signal: controller.signal }), { name: "AbortError" });
+  assert.equal(fetch.mock.callCount(), 0);
+});
