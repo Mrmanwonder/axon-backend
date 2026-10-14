@@ -31,19 +31,19 @@ export async function readBoundedJson<T = unknown>(req: Request, maxBytes = MAX_
   });
   try {
     return await Promise.race([(async () => {
-    const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
-    let bytes = 0;
-    let text = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (expired) throw new JsonBodyError(408, "JSON body read timed out.");
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > maxBytes) throw new JsonBodyError(413, "JSON body is too large.");
-      text += decoder.decode(value, { stream: true });
-    }
-    text += decoder.decode();
-    return JSON.parse(text) as T;
+      const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
+      let bytes = 0;
+      let text = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (expired) throw new JsonBodyError(408, "JSON body read timed out.");
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > maxBytes) throw new JsonBodyError(413, "JSON body is too large.");
+        text += decoder.decode(value, { stream: true });
+      }
+      text += decoder.decode();
+      return JSON.parse(text) as T;
     })(), deadline]);
   } catch (error) {
     void reader.cancel().catch(() => {});

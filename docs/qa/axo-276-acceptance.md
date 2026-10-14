@@ -29,3 +29,8 @@ physical worker-crash/redelivery and live cost acceptance are still NOT TESTED.
 
 Rollback: revert this PR; no migrations, scanner contracts, model routes or prompts
 change. Follow the consolidated ledger for B-03/B-04/B-05 and production gates.
+
+Local validation on 14 October 2026: all workspace typechecks; 471 shared tests;
+API 88, document-vision 18, prompt-catalog 11 and intelligence 137 tests;
+50 registry tests; generated bindings checks and all 11 Worker dry runs passed.
+These are fixture/build checks, not deployed-system evidence.
