@@ -105,7 +105,7 @@ const STRUCTURE_WRITE_ATTEMPTS = 10;
 const planningTurns = new KeyedMutex();
 
 const handler = consumeQueue<StructureMessage>(
-  async ({ env, sb, msg, attempt, redelivered, beat }) => {
+  async ({ env, sb, signal, msg, attempt, redelivered, beat }) => {
     const runId = msg.run_id;
     const pageId = msg.page_id;
     const page = await loadStructurePage(sb, pageId);
@@ -154,6 +154,7 @@ const handler = consumeQueue<StructureMessage>(
       : undefined;
 
     const { parsed, workId } = await callModel({
+      signal,
       env,
       sb,
       stage: "structure",

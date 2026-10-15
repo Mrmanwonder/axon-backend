@@ -72,7 +72,7 @@ function field(
 const CONTENT_EVIDENCE_VERSION = "content-evidence.1";
 
 const handler = consumeQueue<ContentMessage>(
-  async ({ env, sb, msg, attempt, redelivered, beat }) => {
+  async ({ env, sb, signal, msg, attempt, redelivered, beat }) => {
     const runId = msg.run_id;
     const regionId = msg.region_id;
     const region = await mustMaybe<any>(sb
@@ -224,6 +224,7 @@ const handler = consumeQueue<ContentMessage>(
       : undefined;
 
     const { parsed, workId } = await callModel({
+      signal,
       env,
       sb,
       stage: "content",

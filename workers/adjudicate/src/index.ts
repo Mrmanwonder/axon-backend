@@ -17,7 +17,7 @@ const CROPS = 6;
 const RANK: Record<string, number> = { unreadable: 0, unsure: 1, confident: 2 };
 
 const handler = consumeQueue<AdjudicateMessage>(
-  async ({ env, sb, msg, attempt, beat }) => {
+  async ({ env, sb, signal, msg, attempt, beat }) => {
     const runId = msg.run_id;
     const run = await mustMaybe<any>(sb.from("extraction_run")
       .select("id, paper_id, student_id, status, reconcile_delta, route_override").eq("id", runId).maybeSingle(), "adjudicate run read");
@@ -49,6 +49,7 @@ const handler = consumeQueue<AdjudicateMessage>(
     }
 
     const { parsed } = await callModel({
+      signal,
       env,
       sb,
       stage: "adjudicate",

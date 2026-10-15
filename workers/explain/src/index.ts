@@ -50,7 +50,7 @@ type ExplainMessage = PipelineExplainMessage | EvalExplainMessage | TopicTagMess
 // resolution against an authorized stored official scheme. Any unresolved Tier
 // 2 paper falls back to Tier 1 without scheme claims rather than fabricating one.
 const handler = consumeQueue<ExplainMessage>(
-  async ({ env, sb, msg, attempt, beat }) => {
+  async ({ env, sb, signal, msg, attempt, beat }) => {
     if ("eval" in msg) return { detail: await runExplainEvalCase({ env, sb, message: msg.eval }) };
     if ("eval_topic_tag" in msg) return { detail: await runTopicTagEvalCase({ env, sb, message: msg.eval_topic_tag }) };
     if ("eval_scheme_check" in msg) return { detail: await runSchemeCheckEvalCase({ env, sb, message: msg.eval_scheme_check }) };
@@ -217,6 +217,7 @@ const handler = consumeQueue<ExplainMessage>(
       ? validateTier2(value, providerKey)
       : validateTier1(value, providerKey);
     const { parsed, model, promptVersion, webSources } = await callModel({
+      signal,
       env,
       sb,
       stage: "explain",
