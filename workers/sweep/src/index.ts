@@ -99,6 +99,15 @@ export default {
       return;
     }
 
+    // AXO-243: also dispatch on the maintenance tick if the minute trigger
+    // is delayed. The digest-only tick has already returned above.
+    // A dispatch failure must not stop alerts, purges or retention work.
+    try {
+      await dispatchOutbox(env);
+    } catch (cause) {
+      console.error("stage outbox dispatch failed", String(cause).slice(0, 200));
+    }
+
     const sb = serviceClient(env);
     const maintenance = maintenanceStore(sb);
 
