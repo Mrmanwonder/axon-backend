@@ -806,9 +806,8 @@ async function pageAssetUrls(req: Request, env: Env): Promise<Response> {
   const assetOrigin = new URL(req.url).origin;
   const signed = await mapLimit(pages ?? [], PAGE_PAIR_CONCURRENCY, async (page) => {
     const bucket = (page.r2_bucket as BucketKind) ?? "derived";
-    // Each page's independent page/mask/thumb set can be signed together, while
-    // the outer page concurrency is bounded so a large booklet cannot create a
-    // burst. Thumbs, like masks, are always derived (BUCKET_FOR.thumb).
+    // Each page's independent page/mask/thumb set can be signed together, while the
+    // outer page concurrency is bounded so a large booklet cannot create a burst.
     const [url, maskUrl, thumbUrl] = await Promise.all([
       page.r2_key ? signAssetUrl(env, bucket, page.r2_key, undefined, assetOrigin) : Promise.resolve(null),
       page.mask_key ? signAssetUrl(env, "derived", page.mask_key, undefined, assetOrigin) : Promise.resolve(null),
@@ -834,16 +833,11 @@ async function reviewComplete(req: Request, env: Env): Promise<Response> {
   const { data: run } = await user.from("extraction_run").select("id, status").eq("id", body.run_id).maybeSingle();
   if (!run) return failure("That paper is not yours.", 403);
 
-  const { count } = await user
-    .from("question_region")
-    .select("id", { count: "exact", head: true })
-    .eq("run_id", body.run_id)
-    .eq("needs_review", true)
-    .is("student_confirmed_at", null);
-  if ((count ?? 0) > 0) {
-    return failure(`${count} question${count === 1 ? "" : "s"} still need${count === 1 ? "s" : ""} your eyes.`, 409, { outstanding: count });
-  }
-
+  // Council D1 (7 Oct 2026, AXO-216): a paper no longer waits for every flagged
+  // part. begin_explanations (Axon-Site migration save_placed_labels_and_flagged_parts)
+  // holds a flagged part the student has not checked as skipped/held_for_check, and
+  // retry_failed_explanations picks it up once checked. Refusing here would stop the
+  // explanations of every clean part on the paper.
   const admin = serviceClient(env);
   const { data: begin, error } = await admin.rpc("begin_explanations", { p_run_id: body.run_id });
   if (error) return failure("We could not start the explanations. Your corrections are saved.", 500, error.message);
