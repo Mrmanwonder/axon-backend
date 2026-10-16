@@ -16,9 +16,14 @@ queue = "adjudicate-queue"
 binding = "SELF_QUEUE"
 queue = "reconcile-queue"
 
+# AXO-211: one invocation takes a batch and handles it concurrently, each
+# message acked or retried on its own (shared/src/worker.ts consumeQueue).
+# max_batch_size must equal QUEUE_TUNING.reconcile.maxBatchSize in
+# shared/src/queue_tuning.ts, which also holds the in-invocation concurrency
+# and the wall/CPU/memory budget it is checked against; a test fails if the two drift.
 [[queues.consumers]]
 queue = "reconcile-queue"
-max_batch_size = 1
+max_batch_size = 10
 max_batch_timeout = 1
 max_retries = 3
 max_concurrency = 10

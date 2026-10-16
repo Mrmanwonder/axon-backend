@@ -5,6 +5,10 @@
 // a binding still type-checks; the guards at each call site (`if (env.X)`,
 // `if (!key) throw ...`) are what actually enforce presence at runtime.
 export interface Env {
+  // AXO-225: "1" turns on the durable work journal (public.work_*). Off unless set;
+  // enable only after the 20261012180000 migration is applied in production.
+  WORK_JOURNAL?: string;
+
   // Upload rollout defaults disabled; originals never exceed batch rollout.
   UPLOAD_BATCH_PERCENT?: string;
   UPLOAD_ORIGINALS_PERCENT?: string;
@@ -29,6 +33,16 @@ export interface Env {
   FIRECRAWL_API_KEY?: string;
   // Where the sweep worker posts spend alerts (AXO-124). Unset: alerts wait in cost_alert.
   ALERT_WEBHOOK_URL?: string;
+  // AXO-263 weekly parent digest (sweep worker). All three are required before anything is sent;
+  // while any is unset the weekly run does nothing and logs that it is not configured.
+  // API key of the transactional email provider (a secret) and the verified sender address.
+  RESEND_API_KEY?: string;
+  DIGEST_FROM_ADDRESS?: string;
+  // The explicit on-switch: the weekly run does nothing unless this is exactly "true". Set in
+  // workers/sweep/wrangler.toml (default "false"), so turning sending on is a reviewed commit.
+  DIGEST_SEND_ENABLED?: string;
+  // The app's https origin, used only to build the Settings link in the email footer.
+  DIGEST_APP_URL?: string;
   // Optional Tavily project identifier for usage attribution.
   TAVILY_PROJECT?: string;
   // Internal authentication and service binding for the verified tutor.

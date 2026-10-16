@@ -2,6 +2,7 @@ import { pipelineWrite } from "@mastery/shared/pipeline_write.js";
 import { mustData, mustMaybe } from "@mastery/shared/db.js";
 import { callModel } from "@mastery/shared/model-client.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
+import { QUEUE_TUNING } from "@mastery/shared/queue_tuning.js";
 import { adjudicationBlocksCommit } from "@mastery/shared/labels.js";
 import { imageRef } from "@mastery/shared/r2.js";
 import { SYSTEM, instruction, SCHEMA, validate } from "@mastery/shared/prompts/adjudicate.v1.js";
@@ -16,7 +17,7 @@ const CROPS = 6;
 const RANK: Record<string, number> = { unreadable: 0, unsure: 1, confident: 2 };
 
 const handler = consumeQueue<AdjudicateMessage>(
-  async ({ env, sb, msg, attempt, beat }) => {
+  async ({ env, sb, signal, msg, attempt, beat }) => {
     const runId = msg.run_id;
     const run = await mustMaybe<any>(sb.from("extraction_run")
       .select("id, paper_id, student_id, status, reconcile_delta, route_override").eq("id", runId).maybeSingle(), "adjudicate run read");
@@ -48,6 +49,7 @@ const handler = consumeQueue<AdjudicateMessage>(
     }
 
     const { parsed } = await callModel({
+      signal,
       env,
       sb,
       stage: "adjudicate",
@@ -131,7 +133,8 @@ const handler = consumeQueue<AdjudicateMessage>(
     await pipelineWrite(sb, msg.run_id, "adjudicate", {
       reason: "The marks on this paper do not add up to the total written on it. Check the questions below.",
     });
-  }
+  },
+  { concurrency: QUEUE_TUNING.adjudicate.concurrency },
 );
 
 export default { queue: handler } satisfies ExportedHandler<Env, AdjudicateMessage>;

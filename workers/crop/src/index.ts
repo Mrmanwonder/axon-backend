@@ -31,7 +31,7 @@
 
 import { mustRpc } from "@mastery/shared/db.js";
 import { pipelineWrite } from "@mastery/shared/pipeline_write.js";
-import { consumeQueue } from "@mastery/shared/worker.js";
+import { consumeQueue, shouldFanOut } from "@mastery/shared/worker.js";
 import { objectKey } from "@mastery/shared/r2.js";
 import { pageDimensions } from "@mastery/shared/page.js";
 import { bandForRegion, cutRegion, imageDimensions, type Box, type PageSpan, type RgbaImage } from "@mastery/shared/crop.js";
@@ -76,10 +76,14 @@ interface CropPlan {
   band: Box;
 }
 
-async function finish(env: Env, sb: any, runId: string, pageId: string, status: string, detail: Record<string, unknown>) {
+async function finish(env: Env, sb: any, runId: string, pageId: string, status: string, detail: Record<string, unknown>, redelivered: boolean) {
   await pipelineWrite(sb, runId, "crop", { page_id: pageId, patch: { crop_status: status } });
   const advance = await mustRpc(sb.rpc("advance_after_crop", { p_run_id: runId }), "advance_after_crop") as any;
-  if (advance) {
+  // Crop pages run concurrently (max_concurrency 10), so several can finish
+  // together. Exactly one sees `advanced: true`; the others get the re-issued
+  // region list, which only a redelivery acts on (AXO-211, `shouldFanOut`).
+  // Otherwise every region would be read by the content stage twice.
+  if (shouldFanOut(advance, redelivered)) {
     const regionIds: string[] = advance.enqueue_content ?? [];
     if (regionIds.length) {
       if (!env.CONTENT_QUEUE) throw new Error("Content queue is not configured");
@@ -130,7 +134,7 @@ async function writeCrops(
 }
 
 const handler = consumeQueue<CropMessage>(
-  async ({ env, sb, msg, beat }) => {
+  async ({ env, sb, msg, redelivered, beat }) => {
     const runId = msg.run_id;
     const pageId = msg.page_id;
 
@@ -144,7 +148,7 @@ const handler = consumeQueue<CropMessage>(
     // Re-entry, the same way structure handles it (§3.2): a second pass over an
     // already-cropped page must still advance the run rather than dead-ending it.
     if (["done", "failed", "skipped"].includes(page.crop_status)) {
-      return await finish(env, sb, runId, pageId, page.crop_status, { skipped: "already " + page.crop_status });
+      return await finish(env, sb, runId, pageId, page.crop_status, { skipped: "already " + page.crop_status }, redelivered);
     }
 
     const { data: run } = await sb.from("extraction_run").select("status").eq("id", runId).single();
@@ -161,13 +165,13 @@ const handler = consumeQueue<CropMessage>(
       // is belt and braces — but a crop cut against guessed dimensions would
       // land in the wrong place on the paper, and a wrong crop is worse than
       // no crop (§8.5).
-      return await finish(env, sb, runId, pageId, "skipped", { skipped: "no page dimensions" });
+      return await finish(env, sb, runId, pageId, "skipped", { skipped: "no page dimensions" }, redelivered);
     }
     if (!page.r2_key) {
-      return await finish(env, sb, runId, pageId, "skipped", { skipped: "no page image" });
+      return await finish(env, sb, runId, pageId, "skipped", { skipped: "no page image" }, redelivered);
     }
     if (dims.width * dims.height > MAX_PIXELS) {
-      return await finish(env, sb, runId, pageId, "skipped", { skipped: "page too large to decode", pixels: dims.width * dims.height });
+      return await finish(env, sb, runId, pageId, "skipped", { skipped: "page too large to decode", pixels: dims.width * dims.height }, redelivered);
     }
 
     const { data: regions } = await sb
@@ -187,7 +191,7 @@ const handler = consumeQueue<CropMessage>(
     const budgeted = plans.slice(0, CROP_BUDGET);
 
     if (!budgeted.length) {
-      return await finish(env, sb, runId, pageId, "skipped", { skipped: "nothing to cut on this page", multi_page: multiPage });
+      return await finish(env, sb, runId, pageId, "skipped", { skipped: "nothing to cut on this page", multi_page: multiPage }, redelivered);
     }
 
     const bucketFor = (name: string | null) => (name === "originals" ? env.ORIGINALS : env.DERIVED);
@@ -195,24 +199,24 @@ const handler = consumeQueue<CropMessage>(
     // ── the page ─────────────────────────────────────────────────────────────
     const pageObject = await bucketFor(page.r2_bucket)?.get(page.r2_key);
     if (!pageObject) {
-      return await finish(env, sb, runId, pageId, "skipped", { skipped: "page image not found in R2" });
+      return await finish(env, sb, runId, pageId, "skipped", { skipped: "page image not found in R2" }, redelivered);
     }
     const pageBytes = new Uint8Array(await pageObject.arrayBuffer());
     const encodedDims = imageDimensions(pageBytes);
     if (!encodedDims) {
-      return await finish(env, sb, runId, pageId, "skipped", { skipped: "could not read encoded image dimensions" });
+      return await finish(env, sb, runId, pageId, "skipped", { skipped: "could not read encoded image dimensions" }, redelivered);
     }
     const encodedPixels = encodedDims.width * encodedDims.height;
     if (encodedPixels > MAX_PIXELS) {
       return await finish(env, sb, runId, pageId, "skipped", {
         skipped: "page too large to decode",
         pixels: encodedPixels,
-      });
+      }, redelivered);
     }
     if (encodedDims.width !== dims.width || encodedDims.height !== dims.height) {
       const mismatch = `${encodedDims.width}x${encodedDims.height} encoded vs ${dims.width}x${dims.height} recorded`;
       console.error("crop: page image does not match its recorded dimensions", pageId, mismatch);
-      return await finish(env, sb, runId, pageId, "skipped", { skipped: "dimension mismatch", detail: mismatch });
+      return await finish(env, sb, runId, pageId, "skipped", { skipped: "dimension mismatch", detail: mismatch }, redelivered);
     }
 
     let decoded: RgbaImage | null = await decodeImage(pageBytes);
@@ -222,7 +226,7 @@ const handler = consumeQueue<CropMessage>(
     if (decoded.width !== dims.width || decoded.height !== dims.height) {
       const mismatch = `${decoded.width}x${decoded.height} decoded vs ${dims.width}x${dims.height} recorded`;
       console.error("crop: decoded page does not match its recorded dimensions", pageId, mismatch);
-      return await finish(env, sb, runId, pageId, "skipped", { skipped: "dimension mismatch", detail: mismatch });
+      return await finish(env, sb, runId, pageId, "skipped", { skipped: "dimension mismatch", detail: mismatch }, redelivered);
     }
 
     const cropKeys = await writeCrops(env, decoded, budgeted, (region) => objectKey({
@@ -301,14 +305,14 @@ const handler = consumeQueue<CropMessage>(
       with_mask: maskKeys.size,
       multi_page: multiPage,
       over_budget: Math.max(0, plans.length - CROP_BUDGET),
-    });
+    }, redelivered);
   },
-  async ({ env, sb, msg }, error) => {
+  async ({ env, sb, msg, redelivered }, error) => {
     // The whole point of the stage's design: even total failure just means
     // content reads full pages, which is what it does today.
     console.error("mastery-crop permanent failure", msg.page_id, String((error as any)?.stack ?? error));
     if (msg.page_id) {
-      await finish(env, sb, msg.run_id, msg.page_id, "failed", { failed: true });
+      await finish(env, sb, msg.run_id, msg.page_id, "failed", { failed: true }, redelivered);
     }
   }
 );

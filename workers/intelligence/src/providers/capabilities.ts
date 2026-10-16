@@ -3,8 +3,9 @@ import type { AIProvider } from "./types";
 import type { RetrievalService } from "../intelligence/retrieval/types";
 import { parseSchema } from "../schemas";
 import { readBoundedJsonBody } from "../shared/bounded-json";
+import { NO_TRAINING_PROVIDER_IDS } from "./gemini";
 
-export type ProviderCapability = "structured_output" | "thinking" | "timeout_enforcement" | "zero_data_retention" | "image_input" | "pdf_input" | "function_calling" | "native_search" | "code_execution";
+export type ProviderCapability = "structured_output" | "thinking" | "timeout_enforcement" | "zero_data_retention" | "no_training" | "image_input" | "pdf_input" | "function_calling" | "native_search" | "code_execution";
 export interface CapabilityProbeResult { capability: ProviderCapability; passed: boolean; details: Record<string, unknown> }
 
 export interface ReleaseCapabilityArtifact {
@@ -35,7 +36,9 @@ interface TutorProviderProbe {
 
 export async function probeTutorProvider(provider: AIProvider, model: string): Promise<TutorProviderProbe> {
   const results: CapabilityProbeResult[] = [
+    // Kept honest: only a ZDR key passes. The paid tier keeps data for a bounded, declared period.
     { capability: "zero_data_retention", passed: provider.id === "gemini-zdr", details: { providerId: provider.id, attestation: "configuration" } },
+    { capability: "no_training", passed: NO_TRAINING_PROVIDER_IDS.includes(provider.id), details: { providerId: provider.id, attestation: "configuration" } },
     { capability: "timeout_enforcement", passed: true, details: { mechanism: "AbortSignal.timeout via shared model client" } },
     { capability: "image_input", passed: false, details: { reason: "Tutor adapter intentionally accepts text only; documents use the strict vision route." } },
     { capability: "pdf_input", passed: false, details: { reason: "Tutor adapter intentionally accepts text only; documents use the strict vision route." } },
@@ -43,10 +46,10 @@ export async function probeTutorProvider(provider: AIProvider, model: string): P
     { capability: "native_search", passed: false, details: { reason: "Current facts use the authority-filtered Tavily adapter." } },
     { capability: "code_execution", passed: false, details: { reason: "Code execution is not allowed in the tutor route." } }
   ];
-  if (provider.id !== "gemini-zdr") {
+  if (!NO_TRAINING_PROVIDER_IDS.includes(provider.id)) {
     results.push(
-      { capability: "structured_output", passed: false, details: { reason: "Live probe blocked until ZDR is attested." } },
-      { capability: "thinking", passed: false, details: { reason: "Live probe blocked until ZDR is attested." } }
+      { capability: "structured_output", passed: false, details: { reason: "Live probe blocked until the key's privacy mode is attested." } },
+      { capability: "thinking", passed: false, details: { reason: "Live probe blocked until the key's privacy mode is attested." } }
     );
     return { results };
   }
@@ -144,7 +147,7 @@ export async function probeReleaseCapabilities(input: {
     probeVision(input.visionService, input.visionPrivacyAttested)
   ]);
   const tutor = tutorProbe.results;
-  const requiredTutorCapabilities = new Set<ProviderCapability>(["zero_data_retention", "timeout_enforcement", "structured_output", "thinking"]);
+  const requiredTutorCapabilities = new Set<ProviderCapability>(["no_training", "timeout_enforcement", "structured_output", "thinking"]);
   const geminiPassed = [...requiredTutorCapabilities].every((capability) => tutor.some((result) => result.capability === capability && result.passed));
   return {
     artifact: {

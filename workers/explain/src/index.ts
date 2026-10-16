@@ -1,6 +1,8 @@
 import { callModel } from "@mastery/shared/model-client.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
+import { finishSkippedExplanation } from "@mastery/shared/explanation_status.js";
 import { consumeQueue } from "@mastery/shared/worker.js";
+import { QUEUE_TUNING } from "@mastery/shared/queue_tuning.js";
 import { mustOk, mustOne, mustMaybe, mustData, mustAffectRows, mustRpc } from "@mastery/shared/db.js";
 import { clearsTheFloor } from "@mastery/shared/quality_floor.js";
 import { providerKeyForBoard, providerKeyForProgramme } from "@mastery/shared/provider_identity.js";
@@ -23,7 +25,11 @@ import type { Env } from "@mastery/shared/env.js";
 import { runExplainEvalCase, type EvalExplainMessage } from "@mastery/shared/eval/explain-run.js";
 import { tagRegion, failTopicTag, type TopicTagMessage } from "@mastery/shared/topic_tag.js";
 import { runTopicTagEvalCase, type EvalTopicTagMessage } from "@mastery/shared/eval/topic-tag-run.js";
-import { runSchemeCheck, failSchemeCheck, type SchemeCheckMessage } from "@mastery/shared/scheme_check.js";
+import { runSchemeCheckEvalCase, type EvalSchemeCheckMessage } from "@mastery/shared/eval/scheme-check-run.js";
+import {
+  runSchemeCheck, failSchemeCheck, runSchemeCheckQuestion, failSchemeCheckQuestion,
+  type SchemeCheckMessage, type SchemeCheckQuestionMessage,
+} from "@mastery/shared/scheme_check.js";
 
 interface PipelineExplainMessage {
   run_id: string;
@@ -38,17 +44,21 @@ interface PipelineExplainMessage {
 // explain_status.
 // A scheme_check message checks one whole unmarked Cambridge paper (owner
 // decision, 6 Oct 2026); it writes paper_check/region_check only.
-type ExplainMessage = PipelineExplainMessage | EvalExplainMessage | TopicTagMessage | EvalTopicTagMessage | SchemeCheckMessage;
+type ExplainMessage = PipelineExplainMessage | EvalExplainMessage | TopicTagMessage | EvalTopicTagMessage | EvalSchemeCheckMessage | SchemeCheckMessage | SchemeCheckQuestionMessage;
 
 // Tier 2 is used only after exact assessment identity + exact question-label
 // resolution against an authorized stored official scheme. Any unresolved Tier
 // 2 paper falls back to Tier 1 without scheme claims rather than fabricating one.
 const handler = consumeQueue<ExplainMessage>(
-  async ({ env, sb, msg, attempt, beat }) => {
+  async ({ env, sb, signal, msg, attempt, beat }) => {
     if ("eval" in msg) return { detail: await runExplainEvalCase({ env, sb, message: msg.eval }) };
     if ("eval_topic_tag" in msg) return { detail: await runTopicTagEvalCase({ env, sb, message: msg.eval_topic_tag }) };
+    if ("eval_scheme_check" in msg) return { detail: await runSchemeCheckEvalCase({ env, sb, message: msg.eval_scheme_check }) };
     if ("scheme_check" in msg) {
       return { detail: await runSchemeCheck({ env, sb, runId: msg.scheme_check.run_id, attempt }) };
+    }
+    if ("scheme_check_q" in msg) {
+      return { detail: await runSchemeCheckQuestion({ env, sb, msg: msg.scheme_check_q, attempt }) };
     }
     if ("topic_tag" in msg) {
       return { detail: await tagRegion({ env, sb, regionId: msg.topic_tag.region_id, documentId: msg.topic_tag.document_id, attempt }) };
@@ -79,8 +89,7 @@ const handler = consumeQueue<ExplainMessage>(
     const awarded = Number(region.marks_awarded);
     const available = Number(region.marks_available);
     if (!Number.isFinite(awarded) || !Number.isFinite(available) || awarded >= available) {
-      await mustOk(sb.from("question_region").update({ explain_status: "skipped" }).eq("id", regionId), "explain_status=skipped");
-      await mustRpc(sb.rpc("advance_after_explain", { p_run_id: runId }), "advance_after_explain");
+      await finishSkippedExplanation(sb, regionId, runId, "no_marks_lost");
       return { detail: { skipped: "no marks lost" } };
     }
 
@@ -208,6 +217,7 @@ const handler = consumeQueue<ExplainMessage>(
       ? validateTier2(value, providerKey)
       : validateTier1(value, providerKey);
     const { parsed, model, promptVersion, webSources } = await callModel({
+      signal,
       env,
       sb,
       stage: "explain",
@@ -276,12 +286,11 @@ const handler = consumeQueue<ExplainMessage>(
 
     // The model said it could not explain this from what it was given. Honour
     // that instead of storing whatever prose came with the refusal: the region
-    // is marked skipped, the run advances, and the card renders nothing. An
-    // empty slot is honest; an explanation the model itself disowned is not.
+    // is marked skipped with a durable reason and the run advances. The UI
+    // admits the missing explanation; no disowned prose becomes a diagnosis.
     if (!parsed.can_explain) {
       console.info("model declined to explain", regionId);
-      await mustOk(sb.from("question_region").update({ explain_status: "skipped" }).eq("id", regionId), "explain_status=skipped (can_explain false)");
-      await mustRpc(sb.rpc("advance_after_explain", { p_run_id: runId }), "advance_after_explain");
+      await finishSkippedExplanation(sb, regionId, runId, "insufficient_evidence");
       return { detail: { skipped: "model could not explain from the evidence given" } };
     }
 
@@ -353,9 +362,10 @@ const handler = consumeQueue<ExplainMessage>(
   // swallowed, and the message acknowledged anyway, stranding the region.
   async ({ sb, msg }, error) => {
     // A failed eval message has no region to fail; the eval case result records its own failure.
-    if ("eval" in msg || "eval_topic_tag" in msg) return;
+    if ("eval" in msg || "eval_topic_tag" in msg || "eval_scheme_check" in msg) return;
     if ("topic_tag" in msg) { await failTopicTag(sb, msg, error); return; }
     if ("scheme_check" in msg) { await failSchemeCheck(sb, msg, error); return; }
+    if ("scheme_check_q" in msg) { await failSchemeCheckQuestion(sb, msg, error); return; }
     await mustOk(
       sb.from("question_region")
         .update({ explain_status: "failed", explain_failure_reason: failureCodeFor("explain", error) })
@@ -363,7 +373,8 @@ const handler = consumeQueue<ExplainMessage>(
       "explain_status=failed",
     );
     await mustRpc(sb.rpc("advance_after_explain", { p_run_id: msg.run_id }), "advance_after_explain");
-  }
+  },
+  { concurrency: QUEUE_TUNING.explain.concurrency },
 );
 
 export default { queue: handler } satisfies ExportedHandler<Env, ExplainMessage>;

@@ -1,6 +1,6 @@
 import { parseSchema, CorrectionEventSchema, TutorRequestSchema } from "./schemas";
 import { parsePurgeRequest, purgeTutorDataForPapers } from "./intelligence/security/purge";
-import { GeminiProvider } from "./providers/gemini";
+import { GeminiProvider, geminiPrivacyMode, NO_TRAINING_PROVIDER_IDS } from "./providers/gemini";
 import { TavilyRetrievalService } from "./providers/tavily";
 import { FallbackRetrievalService, FirecrawlRetrievalService } from "./providers/firecrawl";
 import { TutorOrchestrator } from "./intelligence/tutor/orchestrator";
@@ -78,7 +78,7 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
   if (registryRoute(request.method, url.pathname)) await initializeRegistries(env);
   if (request.method === "POST" && url.pathname === "/v1/tutor") {
     const input = parseSchema(TutorRequestSchema, await readBoundedJson(request));
-    const provider = new GeminiProvider(env, String(env.GEMINI_PRIVACY_MODE) === "zdr" ? "zdr" : "unverified");
+    const provider = new GeminiProvider(env, geminiPrivacyMode(env.GEMINI_PRIVACY_MODE));
     // One engine at a time: Tavily first, Firecrawl only when Tavily fails or
     // finds nothing usable (owner, 6 Oct 2026).
     const engines = [
@@ -126,7 +126,7 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
       }
     });
     const response = await orchestrator.respond(input);
-    if (env.AXON_SHADOW_MODEL && String(env.GEMINI_PRIVACY_MODE) === "zdr") {
+    if (env.AXON_SHADOW_MODEL && provider.privacyMode !== "unverified") {
       ctx.waitUntil(runShadowTutor({
         db: env.DB, liveTraceId: response.traceId, request: input, provider, model: env.AXON_SHADOW_MODEL,
         candidateConfigRevision: env.AXON_SHADOW_CONFIG_REVISION ?? `shadow:${env.AXON_SHADOW_MODEL}`,
@@ -192,7 +192,7 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     return json({ patterns: await readInsightPatterns(env.DB, studentId, env.AXON_PSEUDONYM_KEY) });
   }
   if (request.method === "POST" && url.pathname === "/v1/admin/capabilities/probe") {
-    const provider = new GeminiProvider(env, String(env.GEMINI_PRIVACY_MODE) === "zdr" ? "zdr" : "unverified");
+    const provider = new GeminiProvider(env, geminiPrivacyMode(env.GEMINI_PRIVACY_MODE));
     // Certification must exercise the live search and extract endpoints, not a
     // previously cached result that merely proves an older deployment worked.
     const retrieval = env.TAVILY_API_KEY ? new TavilyRetrievalService(env.TAVILY_API_KEY, env.TAVILY_API_BASE, undefined, 5_000) : undefined;
@@ -248,11 +248,12 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     return json({ providers: rows.results });
   }
   if (request.method === "GET" && url.pathname === "/v1/admin/readiness") {
+    const geminiProviderId = new GeminiProvider(env, geminiPrivacyMode(env.GEMINI_PRIVACY_MODE)).id;
     const [promptCount, openProviders, structuredProbe, thinkingProbe, retrievalProbe, visionProbe, visionServiceReady] = await Promise.all([
       env.DB.prepare("SELECT COUNT(*) AS count FROM prompt_artifact").first<{ count: number }>(),
       env.DB.prepare("SELECT COUNT(*) AS count FROM provider_health WHERE state = 'OPEN'").first<{ count: number }>(),
-      env.DB.prepare("SELECT model, passed FROM capability_probe WHERE provider = 'gemini-zdr' AND capability = 'structured_output' AND deployment_sha = ? AND config_revision = ? ORDER BY probed_at DESC LIMIT 1").bind(env.AXON_DEPLOYMENT_SHA, env.AXON_CONFIG_REVISION).first<{ model: string; passed: number }>(),
-      env.DB.prepare("SELECT model, passed FROM capability_probe WHERE provider = 'gemini-zdr' AND capability = 'thinking' AND deployment_sha = ? AND config_revision = ? ORDER BY probed_at DESC LIMIT 1").bind(env.AXON_DEPLOYMENT_SHA, env.AXON_CONFIG_REVISION).first<{ model: string; passed: number }>(),
+      env.DB.prepare("SELECT model, passed FROM capability_probe WHERE provider = ? AND capability = 'structured_output' AND deployment_sha = ? AND config_revision = ? ORDER BY probed_at DESC LIMIT 1").bind(geminiProviderId, env.AXON_DEPLOYMENT_SHA, env.AXON_CONFIG_REVISION).first<{ model: string; passed: number }>(),
+      env.DB.prepare("SELECT model, passed FROM capability_probe WHERE provider = ? AND capability = 'thinking' AND deployment_sha = ? AND config_revision = ? ORDER BY probed_at DESC LIMIT 1").bind(geminiProviderId, env.AXON_DEPLOYMENT_SHA, env.AXON_CONFIG_REVISION).first<{ model: string; passed: number }>(),
       env.DB.prepare("SELECT passed FROM capability_probe WHERE provider = 'tavily' AND capability = 'native_search' AND deployment_sha = ? AND config_revision = ? ORDER BY probed_at DESC LIMIT 1").bind(env.AXON_DEPLOYMENT_SHA, env.AXON_CONFIG_REVISION).first<{ passed: number }>(),
       env.DB.prepare("SELECT passed FROM capability_probe WHERE provider = 'axon-document-vision' AND capability = 'image_input' AND deployment_sha = ? AND config_revision = ? ORDER BY probed_at DESC LIMIT 1").bind(env.AXON_DEPLOYMENT_SHA, env.AXON_CONFIG_REVISION).first<{ passed: number }>(),
       String(env.AXON_VISION_PRIVACY_MODE) === "zdr"
@@ -261,7 +262,7 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     ]);
     const rates = configuredModelRates(env.GEMINI_INPUT_USD_PER_MILLION, env.GEMINI_OUTPUT_USD_PER_MILLION);
     const checks = {
-      geminiZdr: String(env.GEMINI_PRIVACY_MODE) === "zdr",
+      geminiNoTraining: NO_TRAINING_PROVIDER_IDS.includes(geminiProviderId),
       visionZdr: String(env.AXON_VISION_PRIVACY_MODE) === "zdr" && visionServiceReady,
       retrievalConfigured: Boolean(env.TAVILY_API_KEY || env.FIRECRAWL_API_KEY),
       retrievalProbePassed: retrievalProbe?.passed === 1,

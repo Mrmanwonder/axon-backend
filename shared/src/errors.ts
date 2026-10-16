@@ -109,11 +109,18 @@ export function classifyDbError(error: unknown, context: string): Error {
     return new ConfigurationError("db_permission", message);
   }
   if (PERMANENT_PG_PREFIXES.some((p) => code.startsWith(p))) {
-    return new PermanentError("db_rejected", message);
+    // The SQLSTATE travels with the error so a caller that does know what a
+    // collision means (see `isUniqueViolation`) can act on it.
+    return Object.assign(new PermanentError("db_rejected", message), { pgCode: code });
   }
   // No code at all is the shape of a fetch that never reached Postgres.
   if (!code) return new RetryableError("db_unreachable", message);
   return new RetryableError("db_unclassified", message);
+}
+
+/** True for a classified database error that was a unique violation (SQLSTATE 23505). */
+export function isUniqueViolation(error: unknown): boolean {
+  return (error as { pgCode?: string } | null)?.pgCode === "23505";
 }
 
 /**

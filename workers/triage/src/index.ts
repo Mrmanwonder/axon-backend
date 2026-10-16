@@ -4,6 +4,7 @@ import { pipelineWrite } from "@mastery/shared/pipeline_write.js";
 import { callModel } from "@mastery/shared/model-client.js";
 import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
+import { QUEUE_TUNING } from "@mastery/shared/queue_tuning.js";
 import { imageRef } from "@mastery/shared/r2.js";
 import { SYSTEM, instruction, SCHEMA, validate, REJECTION_REASON, qualityFailureMessage, type QualitySignals } from "@mastery/shared/prompts/triage.v1.js";
 import { CAPTURE } from "@mastery/shared/contract.js";
@@ -51,7 +52,7 @@ export async function enqueueStructure(env: Env, sb: any, runId: string, paperId
 }
 
 const handler = consumeQueue<TriageMessage>(
-  async ({ env, sb, msg, attempt, beat }) => {
+  async ({ env, sb, signal, msg, attempt, beat }) => {
     const runId = msg.run_id;
     const run = await mustMaybe<any>(sb.from("extraction_run")
       .select("id, paper_id, student_id, status, route_override").eq("id", runId).maybeSingle(), "triage run read");
@@ -107,6 +108,7 @@ const handler = consumeQueue<TriageMessage>(
     const onThumbs = sampledPages.filter((p: Page) => !!p.thumb_key).length;
 
     const ask = (imgs: typeof images) => callModel({
+      signal,
       env,
       sb,
       stage: "triage",
@@ -230,7 +232,8 @@ const handler = consumeQueue<TriageMessage>(
     }
     console.error("mastery-triage permanent failure", runId, String((error as any)?.stack ?? error));
     await failRun(sb, runId, "We ran into a problem reading this paper. Nothing was lost — please try again.", failureCodeFor("triage", error));
-  }
+  },
+  { concurrency: QUEUE_TUNING.triage.concurrency },
 );
 
 export default { queue: handler } satisfies ExportedHandler<Env, TriageMessage>;

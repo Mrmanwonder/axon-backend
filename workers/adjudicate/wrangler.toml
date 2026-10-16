@@ -15,9 +15,14 @@ bucket_name = "axon-derived"
 binding = "SELF_QUEUE"
 queue = "adjudicate-queue"
 
+# AXO-211: one invocation takes a batch and handles it concurrently, each
+# message acked or retried on its own (shared/src/worker.ts consumeQueue).
+# max_batch_size must equal QUEUE_TUNING.adjudicate.maxBatchSize in
+# shared/src/queue_tuning.ts, which also holds the in-invocation concurrency
+# and the wall/CPU/memory budget it is checked against; a test fails if the two drift.
 [[queues.consumers]]
 queue = "adjudicate-queue"
-max_batch_size = 1
+max_batch_size = 5
 max_batch_timeout = 1
 max_retries = 3
 max_concurrency = 5

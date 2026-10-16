@@ -42,7 +42,7 @@ A future production release must add the private service binding only as part of
 **Internal stage (AXO-126, 2026-10-02).** `axon-intelligence` is now deployed from `workers/intelligence/wrangler.tutor.jsonc`, a Tutor-only profile with no document-vision binding and no paper queue, and `mastery-api` and `mastery-sweep` bind to it. This is not a release. Three things keep it internal:
 
 - `/tutor` asks the database, as the signed-in guardian, whether `tutor_enabled` is on (`guardian_feature_flag`, default off). Anything other than an explicit `true` is refused, and an unreadable flag fails closed.
-- `GEMINI_PRIVACY_MODE` stays `unverified`, so a Tutor request fails closed with `NO_COMPLIANT_PROVIDER` until the owner attests Google zero-data-retention for the key in use. That attestation is the owner's to make; nothing here sets it.
+- `GEMINI_PRIVACY_MODE` is `paid_no_training` (owner decision, 7 Oct 2026; AXO-126). The key is on the Google AI Studio paid tier: Google does not train on the data and keeps it for a bounded period, which the Privacy Policy declares. It is not zero retention, and the capability probe's `zero_data_retention` check still fails for it; release readiness needs `no_training`. `zdr` remains a separate attestation the owner makes only with a written Google arrangement. Any other value fails closed with `NO_COMPLIANT_PROVIDER`.
 - The remaining release gates (AXO-13 certification, probes, rollback evidence) are unchanged.
 
 Deletion parity: deleting a paper, or erasing a student, queues `tutor_purge`; the sweep worker calls `POST /v1/admin/purge` on `axon-intelligence` (admin token), which deletes the paper's `ai_trace` rows and the claim and evidence rows under them. Tutor provenance is keyed by paper only, so a question asked with no paper carries no student link.
@@ -62,7 +62,7 @@ mastery-api (/tutor)
 axon-intelligence (/v1/tutor)
     |-- D1: metadata/provenance audit
     |-- KV: bounded public retrieval cache
-    |-- Gemini ZDR route: private student reasoning
+    |-- Gemini paid tier (no training, declared retention): private student reasoning
     |-- Tavily: public-only current/source retrieval
     |-- document-vision: private service binding for document pipeline only
     v

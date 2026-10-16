@@ -229,3 +229,84 @@ test("a heartbeat failure is a database failure, not something to run on blind",
   assert.equal(handlerRan, false, "a run whose heartbeat is not landing must not be swept mid-work");
   assert.deepEqual(calls, ["retry"]);
 });
+
+// ── AXO-225: a lease held by another worker is a wait, not a failure ──────
+
+function busyHarness(msgBody: Record<string, unknown>) {
+  const sent: Array<{ body: any; delay?: number }> = [];
+  const state = { acked: 0, retried: 0, permanent: 0 };
+  const message = {
+    body: { run_id: "r1", ...msgBody } as any,
+    attempts: 1,
+    ack: () => { state.acked++; },
+    retry: () => { state.retried++; },
+  };
+  const sb = { rpc: async () => ({ data: null, error: null }) } as any;
+  const env = { SELF_QUEUE: { send: async (body: any, opts?: { delaySeconds?: number }) => { sent.push({ body, delay: opts?.delaySeconds }); } } } as any;
+  const run = () => processQueueMessage(message as any, sb, env,
+    async () => { throw new RetryableError("work_busy", "held", 200); },
+    async () => { state.permanent++; });
+  return { sent, state, run };
+}
+
+test("a busy lease waits it out without spending the retry budget", async () => {
+  const h = busyHarness({ _retries: 4 });
+  await h.run();
+  assert.equal(h.state.acked, 1);
+  assert.equal(h.state.permanent, 0);
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.sent[0].body._retries, 4); // unchanged
+  assert.equal(h.sent[0].body._busy, 1);
+  assert.equal(h.sent[0].delay, 205); // the lease's own retry-after, plus a margin
+});
+
+test("busy waits are bounded; past the bound it is an ordinary retry", async () => {
+  const h = busyHarness({ _busy: 6, _retries: 0 });
+  await h.run();
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.sent[0].body._retries, 1);
+  assert.equal(h.sent[0].body._busy, 6);
+});
+
+test("a message that waited out a lease counts as redelivered", async () => {
+  let seen: boolean | undefined;
+  const message = { body: { run_id: "r1", _busy: 1 } as any, attempts: 1, ack: () => {}, retry: () => {} };
+  await processQueueMessage(message as any, { rpc: async () => ({ data: null, error: null }) } as any, {} as any,
+    async (ctx) => { seen = ctx.redelivered; });
+  assert.equal(seen, true);
+});
+
+import { withDeadline } from "../worker.js";
+test("deadline aborts cancellable work before retry handling begins", async () => {
+  const controller = new AbortController();
+  const events: string[] = [];
+  const work = new Promise<void>((_, reject) => {
+    controller.signal.addEventListener("abort", () => { events.push("abort"); reject(controller.signal.reason); });
+  });
+  await assert.rejects(withDeadline(work, 5, "test", error => controller.abort(error)), { name: "HandlerTimeout" });
+  events.push("retry");
+  assert.deepEqual(events, ["abort", "retry"]);
+});
+test("a successful deadline clears its timer without aborting", async () => {
+  const controller = new AbortController();
+  assert.equal(await withDeadline(Promise.resolve("done"), 5, "test", error => controller.abort(error)), "done");
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(controller.signal.aborted, false);
+});
+
+import { HANDLE_TIMEOUT_MS } from "../worker.js";
+test("queue timeout aborts delivery I/O before durably re-enqueueing, and rejects late writes", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const events: string[] = [];
+  let started!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  let late!: () => void;
+  const handlerWait = new Promise<void>(resolve => { late = resolve; });
+  const createClient = (signal: AbortSignal) => ({ rpc: async () => { signal.throwIfAborted(); events.push("write"); return { data: null, error: null }; } }) as never;
+  const run = processQueueMessage({ body: {}, attempts: 1, ack: () => events.push("ack"), retry: () => events.push("retry") }, createClient,
+    { SELF_QUEUE: { send: async () => { events.push("send"); } } } as never,
+    async ctx => { ctx.signal.addEventListener("abort", () => events.push("abort")); started(); await handlerWait; await ctx.sb.rpc("late-write"); });
+  await ready; t.mock.timers.tick(HANDLE_TIMEOUT_MS + 1); await run;
+  late(); await Promise.resolve(); await Promise.resolve();
+  assert.deepEqual(events, ["abort", "send", "ack"]);
+});
