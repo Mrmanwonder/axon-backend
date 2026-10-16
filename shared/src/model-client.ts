@@ -109,6 +109,7 @@ export interface JsonSchema {
 }
 
 export interface CallModelOptions<T> {
+  signal?: AbortSignal;
   env: Env;
   sb: SupabaseClient;
   stage: string;
@@ -177,6 +178,7 @@ const INLINE_TRIES = 2;
 const FLEX_TIMEOUT_MS = 15 * 60_000;
 
 export async function callModel<T>(opts: CallModelOptions<T>): Promise<CallModelResult<T>> {
+  opts.signal?.throwIfAborted();
   if (!opts.checkpoint || !opts.paperId || !opts.studentId || !journalEnabled(opts.env)) {
     return callModelOnce(opts);
   }
@@ -223,6 +225,7 @@ async function callModelCheckpointed<T>(
     } catch (cause) {
       // Nothing has been paid yet. A journal outage (or a deploy that ran ahead
       // of its migration) must not stop papers being read: pay without it.
+      opts.signal?.throwIfAborted();
       console.error("work journal unavailable; calling the model without a checkpoint", opts.stage, String(cause).slice(0, 200));
       return callModelOnce(opts);
     }
@@ -265,6 +268,7 @@ async function callModelCheckpointed<T>(
       throw error;
     }
 
+    opts.signal?.throwIfAborted();
     const saved = await saveWork(opts.sb, begin.work_id, begin.lease_token, (raw ?? result.parsed) as Record<string, unknown>, {
       requestedModel: result.requestedModel,
       model: result.model,
@@ -293,6 +297,7 @@ async function callModelCheckpointed<T>(
 }
 
 async function callModelOnce<T>(opts: CallModelOptions<T>): Promise<CallModelResult<T>> {
+  opts.signal?.throwIfAborted();
   const route = applyOverride(await getRoute(opts.sb, opts.stage), opts.routeOverride);
   let target: ProviderTarget;
   try {
@@ -369,15 +374,20 @@ async function callModelOnce<T>(opts: CallModelOptions<T>): Promise<CallModelRes
   const request = async (body: Record<string, unknown>): Promise<any> => {
     let res: Response | undefined;
     for (let tryNo = 1; ; tryNo++) {
+      opts.signal?.throwIfAborted();
       let caught: ModelError | null = null;
       try {
         res = await fetch(target.url, {
           method: "POST",
           headers: target.headers,
           body: JSON.stringify(body),
-          signal: AbortSignal.timeout(opts.timeoutMs ?? (opts.serviceTier === "flex" ? FLEX_TIMEOUT_MS : 90_000)),
+          signal: AbortSignal.any([
+            ...(opts.signal ? [opts.signal] : []),
+            AbortSignal.timeout(opts.timeoutMs ?? (opts.serviceTier === "flex" ? FLEX_TIMEOUT_MS : 90_000)),
+          ]),
         });
       } catch (cause) {
+        opts.signal?.throwIfAborted();
         const timedOut = cause instanceof DOMException && cause.name === "TimeoutError";
         caught = new ModelError(
           timedOut ? "timeout" : "network",
@@ -387,7 +397,11 @@ async function callModelOnce<T>(opts: CallModelOptions<T>): Promise<CallModelRes
         );
       }
 
-      if (!caught && res!.ok) return await res!.json();
+      if (!caught && res!.ok) {
+        const data = await res!.json();
+        opts.signal?.throwIfAborted();
+        return data;
+      }
 
       const rawBody = caught ? "" : await res!.text();
       const err = caught ?? classify(res!.status, rawBody);
