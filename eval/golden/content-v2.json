@@ -1,0 +1,272 @@
+{
+ "golden_set_version": "content-synthetic-v2",
+ "stage": "content",
+ "labels": "DRAFT: drafted by Claude, need a person's confirmation before they are truth",
+ "source": "synthetic page descriptions; images to be rendered from them before a live run",
+ "cases": [
+  {
+   "id": "0b79a1b1-cf1d-5e57-b62b-22f00cb3f6a4",
+   "key": "tree-two-stage-values",
+   "stage": "content",
+   "prompt_file": "shared/src/prompts/content.v2.ts",
+   "page_description": "Question 2(a), 3 marks. Printed: a two-stage tree diagram about a bus. First stage printed labels 'Monday' then 'Late' and 'On time'; second stage printed 'Tuesday', with 'Late' and 'On time' after each first branch. Student wrote in pen on the branches: 0.3 on Monday Late, 0.7 on Monday On time, 0.45 on Tuesday Late after Late, 0.55 on Tuesday On time after Late, 0.1 on Tuesday Late after On time, 0.9 on Tuesday On time after On time. Teacher wrote 3 in the margin.",
+   "expected": {
+    "region_type": "diagram",
+    "student_answer_lines": [
+     "Monday Late: 0.3",
+     "On time: 0.7",
+     "Tuesday after Late, Late: 0.45",
+     "Tuesday after Late, On time: 0.55",
+     "Tuesday after On time, Late: 0.1",
+     "Tuesday after On time, On time: 0.9"
+    ],
+    "every_value_has_box": true,
+    "is_latex_array": false
+   },
+   "traps": [
+    "v1 returned null here: the student sees 'Not read'",
+    "never describe the tree or say whether the probabilities sum to 1"
+   ],
+   "notes": null,
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "eda5e366-7ef1-5c56-a2c5-bf691393725f",
+   "key": "tree-fraction-values",
+   "stage": "content",
+   "prompt_file": "shared/src/prompts/content.v2.ts",
+   "page_description": "Question 5(i), 2 marks. Printed: one-stage tree for drawing a counter from a bag, branches labelled 'Red' and 'Blue'. Student wrote 3/8 on Red and 5/8 on Blue.",
+   "expected": {
+    "region_type": "diagram",
+    "student_answer_lines": [
+     "Red: \\tfrac{3}{8}",
+     "Blue: \\tfrac{5}{8}"
+    ],
+    "every_value_has_box": true,
+    "is_latex_array": false
+   },
+   "traps": [
+    "fractions stay fractions in LaTeX, not 0.375"
+   ],
+   "notes": null,
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "76b31a5c-4fd3-59fb-8b88-bffc8a001449",
+   "key": "tree-drawn-no-values",
+   "stage": "content",
+   "prompt_file": "shared/src/prompts/content.v2.ts",
+   "page_description": "Question 2(a), 3 marks. Student drew a tree diagram freehand with four branches and wrote no numbers or words on it. Teacher wrote 0 in the margin.",
+   "expected": {
+    "region_type": "diagram",
+    "student_answer_lines": null,
+    "every_value_has_box": true,
+    "is_latex_array": false
+   },
+   "traps": [
+    "student_answer stays null: nothing was written as text",
+    "never describe the branches"
+   ],
+   "notes": null,
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "2c6ccbd8-f620-5a59-afc9-197a2ffb42ed",
+   "key": "box-plot-written-summary",
+   "stage": "content",
+   "prompt_file": "shared/src/prompts/content.v2.ts",
+   "page_description": "Question 3(b), 3 marks. Printed: a grid with a horizontal scale 'Time (minutes)' from 0 to 40. Student drew a box-and-whisker plot on the grid and wrote beside it: 'LQ = 14', 'median = 19', 'UQ = 26'. Nothing else is written.",
+   "expected": {
+    "region_type": "diagram",
+    "student_answer_lines": [
+     "LQ = 14",
+     "median = 19",
+     "UQ = 26"
+    ],
+    "every_value_has_box": true,
+    "is_latex_array": false
+   },
+   "traps": [
+    "the whisker ends are not written as text: never read them off the grid",
+    "do not add min or max values"
+   ],
+   "notes": null,
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "749748bf-421d-5466-b05e-91a4712a8f94",
+   "key": "box-plot-drawn-only",
+   "stage": "content",
+   "prompt_file": "shared/src/prompts/content.v2.ts",
+   "page_description": "Question 3(b), 3 marks. Printed grid 'Mass (kg)' 0 to 60. Student drew a box-and-whisker plot with no numbers or words written anywhere.",
+   "expected": {
+    "region_type": "diagram",
+    "student_answer_lines": null,
+    "every_value_has_box": true,
+    "is_latex_array": false
+   },
+   "traps": [
+    "reading 12, 20, 31 off where the box edges fall is a measurement, not a transcription"
+   ],
+   "notes": null,
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "364a1898-7383-56b7-8751-b61f004a45cb",
+   "key": "histogram-written-fd",
+   "stage": "content",
+   "prompt_file": "shared/src/prompts/content.v2.ts",
+   "page_description": "Question 4(a), 4 marks. Printed: axes 'Height (cm)' and 'Frequency density'. Student drew four bars and wrote above them, left to right: 'fd = 0.8', 'fd = 2.4', 'fd = 1.5', 'fd = 0.3'. Under the grid the student wrote the working line '12 / 5 = 2.4'.",
+   "expected": {
+    "region_type": "diagram",
+    "student_answer_lines": [
+     "fd = 0.8",
+     "fd = 2.4",
+     "fd = 1.5",
+     "fd = 0.3",
+     "\\tfrac{12}{5} = 2.4"
+    ],
+    "every_value_has_box": true,
+    "is_latex_array": false
+   },
+   "traps": [
+    "bar heights are never read off the drawing",
+    "the working line under the grid is the student's text and is transcribed"
+   ],
+   "notes": null,
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "6652e34c-b75d-5075-a6b7-73b44a1d43d2",
+   "key": "histogram-drawn-only",
+   "stage": "content",
+   "prompt_file": "shared/src/prompts/content.v2.ts",
+   "page_description": "Question 4(a), 4 marks. Printed axes with a scale. Student drew five bars of different heights; nothing is written.",
+   "expected": {
+    "region_type": "diagram",
+    "student_answer_lines": null,
+    "every_value_has_box": true,
+    "is_latex_array": false
+   },
+   "traps": [
+    "no value may be read off the bar heights"
+   ],
+   "notes": null,
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "17dc27da-58d9-53d5-82b3-ab755af0930f",
+   "key": "labelled-axes-printed-only",
+   "stage": "content",
+   "prompt_file": "shared/src/prompts/content.v2.ts",
+   "page_description": "Question 6(c), 2 marks. Student sketched a curve on printed axes labelled 'x' and 'y'. The only text on the diagram is printed. The student wrote '(0, 4)' beside where the curve meets the y-axis.",
+   "expected": {
+    "region_type": "diagram",
+    "student_answer_lines": [
+     "(0, 4)"
+    ],
+    "every_value_has_box": true,
+    "is_latex_array": false
+   },
+   "traps": [
+    "printed axis labels are not the student's text",
+    "the intercept is transcribed because the student wrote it, not because it is on the curve"
+   ],
+   "notes": null,
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "e303dbfd-daf9-5720-bb74-df4a87a2cf53",
+   "key": "table-probability-distribution",
+   "stage": "content",
+   "prompt_file": "shared/src/prompts/content.v2.ts",
+   "page_description": "Question 1(b), 3 marks. Printed table with first row 'x | 0 | 1 | 2 | 3' and second row 'P(X = x)' with four empty cells. Student filled the cells with 1/10, 3/10, 2/5, 1/5.",
+   "expected": {
+    "region_type": "table",
+    "student_answer_lines": [
+     "\\begin{array}{|c|c|c|c|c|} \\hline x & 0 & 1 & 2 & 3 \\\\ \\hline P(X = x) & \\tfrac{1}{10} & \\tfrac{3}{10} & \\tfrac{2}{5} & \\tfrac{1}{5} \\\\ \\hline \\end{array}"
+    ],
+    "every_value_has_box": true,
+    "is_latex_array": true
+   },
+   "traps": [
+    "a table is not a diagram",
+    "printed header cells are copied as printed"
+   ],
+   "notes": null,
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "194a675f-2b54-5809-91ab-7acaa6752c2e",
+   "key": "table-cell-left-blank",
+   "stage": "content",
+   "prompt_file": "shared/src/prompts/content.v2.ts",
+   "page_description": "Question 2(a), 2 marks. Printed frequency table 'Score | 1 | 2 | 3' with a 'Frequency' row. Student wrote 4 and 9 in the first two cells and left the third empty.",
+   "expected": {
+    "region_type": "table",
+    "student_answer_lines": [
+     "\\begin{array}{|c|c|c|c|} \\hline Score & 1 & 2 & 3 \\\\ \\hline Frequency & 4 & 9 &  \\\\ \\hline \\end{array}"
+    ],
+    "every_value_has_box": true,
+    "is_latex_array": true
+   },
+   "traps": [
+    "an empty cell stays empty; never fill it from the total"
+   ],
+   "notes": null,
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "a299c5e6-1404-5c8f-ad74-2f6d77bdd3f6",
+   "key": "table-unreadable-cell",
+   "stage": "content",
+   "prompt_file": "shared/src/prompts/content.v2.ts",
+   "page_description": "Question 2(a), 2 marks. Same printed table as table-cell-left-blank. Student wrote 4, then a heavily smudged digit, then 7.",
+   "expected": {
+    "region_type": "table",
+    "student_answer_lines": [
+     "\\begin{array}{|c|c|c|c|} \\hline Score & 1 & 2 & 3 \\\\ \\hline Frequency & 4 &  & 7 \\\\ \\hline \\end{array}"
+    ],
+    "every_value_has_box": true,
+    "is_latex_array": true
+   },
+   "traps": [
+    "the smudged cell is left empty and recognition_confidence lowered, never guessed"
+   ],
+   "notes": null,
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "915716bd-cd04-5237-937a-89010c0b1b01",
+   "key": "control-prose-unchanged",
+   "stage": "content",
+   "prompt_file": "shared/src/prompts/content.v2.ts",
+   "page_description": "Question 7, 2 marks. Printed question asks for a reason. Student wrote one sentence: 'Because the events are independent.' No diagram.",
+   "expected": {
+    "region_type": "prose",
+    "student_answer_lines": [
+     "Because the events are independent."
+    ],
+    "every_value_has_box": true,
+    "is_latex_array": false
+   },
+   "traps": [
+    "v2 must not change how prose is read"
+   ],
+   "notes": null,
+   "requires_image": true,
+   "needs_human_label": true
+  }
+ ]
+}

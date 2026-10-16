@@ -60,6 +60,24 @@ export const STRUCTURE_SCHEMA = {
   },
 } as const;
 
+/**
+ * structure.v2: v1 plus the page number printed on the page, with its box.
+ *
+ * Cambridge prints a lone page number at the top centre of every page. The
+ * structure pass sometimes took it for a question number. Asking for it as its
+ * own field gives the model somewhere to put it other than a region, and gives
+ * the worker the two facts it needs to refuse it deterministically: the number
+ * and where it sits (see `pageFurnitureLabel` in structure_plan.ts).
+ */
+export const STRUCTURE_SCHEMA_V2 = {
+  ...STRUCTURE_SCHEMA,
+  required: [...STRUCTURE_SCHEMA.required, "printed_page_number"],
+  properties: {
+    ...STRUCTURE_SCHEMA.properties,
+    printed_page_number: valueWithBox("string"),
+  },
+} as const;
+
 export const CONTENT_SCHEMA = {
   type: "object",
   additionalProperties: false,

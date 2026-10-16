@@ -1,0 +1,224 @@
+{
+ "golden_set_version": "structure-synthetic-v2",
+ "stage": "structure",
+ "labels": "DRAFT: drafted by Claude, need a person's confirmation before they are truth",
+ "source": "synthetic page descriptions; images to be rendered from them before a live run",
+ "cases": [
+  {
+   "id": "f07aef5f-a5c6-53a4-9171-2e6fcdce202f",
+   "key": "lone-page-number-top-centre",
+   "stage": "structure",
+   "prompt_file": "shared/src/prompts/structure.v2.ts",
+   "page_description": "Printed page 6 of a fictional paper 'XX/00/Z/Z/99'. Lone '6' at the top centre. Question 4 is printed at the left margin a little below, with parts (a) and (b) and handwritten answers. Footer: a copyright line and the fictional paper code.",
+   "expected": {
+    "printed_page_number": "6",
+    "regions": [
+     {
+      "accept": [
+       "4",
+       "4(a)"
+      ],
+      "continues_from_previous": false,
+      "structure_confidence": null
+     },
+     {
+      "accept": [
+       "(b)",
+       "4(b)"
+      ],
+      "continues_from_previous": false,
+      "structure_confidence": null
+     }
+    ],
+    "forbidden_labels": [
+     "6"
+    ]
+   },
+   "traps": [
+    "the page number is not question 6"
+   ],
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "6e4f1dc0-da86-56aa-b836-598aaad79443",
+   "key": "continued-part-top-of-page",
+   "stage": "structure",
+   "prompt_file": "shared/src/prompts/structure.v2.ts",
+   "page_description": "Printed page 7. Lone '7' at the top centre. Directly under it at the left margin, a printed '(b)' whose question number (3) was on page 6, followed by a handwritten answer. Then question 4 starts lower down.",
+   "expected": {
+    "printed_page_number": "7",
+    "regions": [
+     {
+      "accept": [
+       "(b)",
+       null
+      ],
+      "continues_from_previous": false,
+      "structure_confidence": null
+     },
+     {
+      "accept": [
+       "4"
+      ],
+      "continues_from_previous": false,
+      "structure_confidence": null
+     }
+    ],
+    "forbidden_labels": [
+     "7",
+     "7(b)",
+     "7b"
+    ]
+   },
+   "traps": [
+    "never put the page number in front of a continued part label"
+   ],
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "588552a2-f496-5626-9b28-94f1573f2226",
+   "key": "continuation-no-label",
+   "stage": "structure",
+   "prompt_file": "shared/src/prompts/structure.v2.ts",
+   "page_description": "Printed page 9. Lone '9' at the top centre. The top third of the page is handwriting with no printed number, continuing an answer from page 8. Question 5 is printed below it.",
+   "expected": {
+    "printed_page_number": "9",
+    "regions": [
+     {
+      "accept": [
+       null
+      ],
+      "continues_from_previous": true,
+      "structure_confidence": null
+     },
+     {
+      "accept": [
+       "5"
+      ],
+      "continues_from_previous": false,
+      "structure_confidence": null
+     }
+    ],
+    "forbidden_labels": [
+     "9"
+    ]
+   },
+   "traps": [],
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "5fe43537-c00b-5371-9516-e6b484258a24",
+   "key": "footer-furniture",
+   "stage": "structure",
+   "prompt_file": "shared/src/prompts/structure.v2.ts",
+   "page_description": "Printed page 11. Lone '11' at the top centre. Question 6 at the left margin. Footer: a copyright line, the fictional paper code 'XX/00/Z/Z/99' and '[Turn over' at the bottom right.",
+   "expected": {
+    "printed_page_number": "11",
+    "regions": [
+     {
+      "accept": [
+       "6"
+      ],
+      "continues_from_previous": false,
+      "structure_confidence": null
+     }
+    ],
+    "forbidden_labels": [
+     "11",
+     "99",
+     "00"
+    ]
+   },
+   "traps": [
+    "nothing in the footer starts or numbers a region"
+   ],
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "7ae7bb49-0d5c-5232-904b-a9cb52606712",
+   "key": "genuine-question-equals-page",
+   "stage": "structure",
+   "prompt_file": "shared/src/prompts/structure.v2.ts",
+   "page_description": "Printed page 6. Lone '6' at the top centre. Question 6 is printed at the LEFT margin about a fifth of the way down, with a handwritten answer.",
+   "expected": {
+    "printed_page_number": "6",
+    "regions": [
+     {
+      "accept": [
+       "6"
+      ],
+      "continues_from_previous": false,
+      "structure_confidence": null
+     }
+    ],
+    "forbidden_labels": []
+   },
+   "traps": [
+    "a real question 6 on page 6, at the left margin, must keep its number"
+   ],
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "f3083719-8905-50d7-a90a-0217382c106c",
+   "key": "page-number-in-footer",
+   "stage": "structure",
+   "prompt_file": "shared/src/prompts/structure.v2.ts",
+   "page_description": "Printed page 12, page number printed alone at the bottom centre. Question 8 at the left margin at the top of the page.",
+   "expected": {
+    "printed_page_number": "12",
+    "regions": [
+     {
+      "accept": [
+       "8"
+      ],
+      "continues_from_previous": false,
+      "structure_confidence": null
+     }
+    ],
+    "forbidden_labels": [
+     "12"
+    ]
+   },
+   "traps": [],
+   "requires_image": true,
+   "needs_human_label": true
+  },
+  {
+   "id": "cfd5a503-1954-5df5-b928-e2ac2cf5ce71",
+   "key": "no-printed-page-number",
+   "stage": "structure",
+   "prompt_file": "shared/src/prompts/structure.v2.ts",
+   "page_description": "A school test with no printed page numbers. Handwritten question numbers '1.' and '2.' at the left margin.",
+   "expected": {
+    "printed_page_number": null,
+    "regions": [
+     {
+      "accept": [
+       "1"
+      ],
+      "continues_from_previous": false,
+      "structure_confidence": null
+     },
+     {
+      "accept": [
+       "2"
+      ],
+      "continues_from_previous": false,
+      "structure_confidence": null
+     }
+    ],
+    "forbidden_labels": []
+   },
+   "traps": [
+    "printed_page_number is null when none is printed; never inferred from upload order"
+   ],
+   "requires_image": true,
+   "needs_human_label": true
+  }
+ ]
+}

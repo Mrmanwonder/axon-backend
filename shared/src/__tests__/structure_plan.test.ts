@@ -11,11 +11,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  pageFurnitureLabel,
   planPage,
   regionsWrittenByPage,
   structureFailureReason,
   uniqueLabelKey,
-  looksLikePageNumber,
 } from "../structure_plan.js";
 import { ModelError } from "../model-client.js";
 import type { StructureRegion } from "../prompts/structure.v1.js";
@@ -125,26 +125,66 @@ test("only a model failure is reported as an unreadable page", () => {
   assert.match(db, /Your page is kept/);
 });
 
-test("a printed page number is not taken as a question number (owner, 6 Oct 2026)", () => {
-  // "6" centred in the header of page 6, read as question 6 after the scan cut
-  // the left margin off. The region stays; its label is withheld for review.
-  const header: StructureRegion = {
-    candidate_number: "6",
-    number_box: { x: 490, y: 20, w: 20, h: 15 } as never,
-    box: { x: 30, y: 60, w: 900, h: 300 } as never,
-    continues_from_previous: false,
-    structure_confidence: "high",
-  };
-  const [planned] = plan(6, [header]);
-  assert.equal(planned.row.question_label, null);
-  assert.equal(planned.withheld_label, "6");
+// Page furniture (structure.v2). Synthetic boxes on the model's 0-1000 grid: a
+// Cambridge-style page prints a lone page number at the top centre.
+const printed = (value: string, box = { x: 490, y: 20, w: 20, h: 18 }) => ({ value, box: box as never, page_index: 0 });
+const labelled = (label: string, numberBox: { x: number; y: number; w: number; h: number }, y = 60): StructureRegion => ({
+  candidate_number: label,
+  number_box: numberBox as never,
+  box: { x: 30, y, w: 900, h: 200 } as never,
+  continues_from_previous: false,
+  structure_confidence: "high",
+});
 
-  // The same number in the left margin is a question number.
-  const [margin] = plan(6, [{ ...header, number_box: { x: 40, y: 80, w: 20, h: 15 } as never }]);
-  assert.equal(margin.row.question_label, "6");
+test("pageFurnitureLabel: the printed page number at the top centre is not a question number", () => {
+  assert.equal(pageFurnitureLabel(labelled("6", { x: 490, y: 20, w: 20, h: 18 }), printed("6")), true);
+  // Footer band too.
+  assert.equal(pageFurnitureLabel(labelled("6", { x: 488, y: 960, w: 24, h: 18 }), printed("6", { x: 488, y: 960, w: 24, h: 18 })), true);
+});
 
-  // A part label in the header band is never mistaken for a page number.
-  assert.equal(looksLikePageNumber("6(a)", { x: 980, y: 30, w: 40, h: 30 }, W, H), false);
-  // Footer, centred.
-  assert.equal(looksLikePageNumber("12", { x: 980, y: 2700, w: 40, h: 30 }, W, H), true);
+test("pageFurnitureLabel: a genuine question 6 on printed page 6, at the left margin, is kept", () => {
+  assert.equal(pageFurnitureLabel(labelled("6", { x: 60, y: 90, w: 20, h: 20 }), printed("6")), false);
+  // Same number, but nowhere near the header or footer.
+  assert.equal(pageFurnitureLabel(labelled("6", { x: 480, y: 500, w: 20, h: 20 }), printed("6")), false);
+});
+
+test("pageFurnitureLabel: the page number read into a continued part label is refused only when the boxes overlap", () => {
+  // "6(b)" whose number box swallowed the page-number glyph.
+  assert.equal(pageFurnitureLabel(labelled("6(b)", { x: 60, y: 15, w: 460, h: 60 }), printed("6")), true);
+  // "6(b)" printed at the left margin, away from the page number: not refused here.
+  assert.equal(pageFurnitureLabel(labelled("6(b)", { x: 60, y: 300, w: 40, h: 20 }), printed("6")), false);
+});
+
+test("pageFurnitureLabel: says nothing without a printed page number, or when the numbers differ", () => {
+  assert.equal(pageFurnitureLabel(labelled("6", { x: 490, y: 20, w: 20, h: 18 }), null), false);
+  assert.equal(pageFurnitureLabel(labelled("6", { x: 490, y: 20, w: 20, h: 18 }), undefined), false);
+  assert.equal(pageFurnitureLabel(labelled("3", { x: 490, y: 20, w: 20, h: 18 }), printed("6")), false);
+  assert.equal(pageFurnitureLabel(labelled("6", { x: 490, y: 20, w: 20, h: 18 }), printed("vi")), false);
+  assert.equal(pageFurnitureLabel(labelled("(b)", { x: 60, y: 20, w: 30, h: 20 }), printed("6")), false);
+});
+
+test("planPage withholds a page-number label and sends the region to review, keeping the region", () => {
+  const out = planPage({
+    regions: [labelled("6", { x: 490, y: 20, w: 20, h: 18 }), labelled("4", { x: 60, y: 400, w: 20, h: 20 }, 400)],
+    page: 6,
+    width: W,
+    height: H,
+    runId: "run",
+    paperId: "paper",
+    studentId: "student",
+    nextIndex: 0,
+    takenLabels: new Set(),
+    printedPageNumber: printed("6"),
+  });
+  assert.equal(out.length, 2);
+  assert.equal(out[0]!.row.question_label, null);
+  assert.equal(out[0]!.row.needs_review, true);
+  assert.equal(out[0]!.withheld_label, "6");
+  assert.equal(out[1]!.row.question_label, "4");
+  assert.equal(out[1]!.row.needs_review, undefined);
+});
+
+test("planPage without a printed page number behaves as before", () => {
+  const out = plan(6, [labelled("6", { x: 490, y: 20, w: 20, h: 18 })]);
+  assert.equal(out[0]!.row.question_label, "6");
 });
