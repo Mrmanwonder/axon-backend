@@ -52,7 +52,7 @@ export async function enqueueStructure(env: Env, sb: any, runId: string, paperId
 }
 
 const handler = consumeQueue<TriageMessage>(
-  async ({ env, sb, msg, attempt, beat }) => {
+  async ({ env, sb, signal, msg, attempt, beat }) => {
     const runId = msg.run_id;
     const run = await mustMaybe<any>(sb.from("extraction_run")
       .select("id, paper_id, student_id, status, route_override").eq("id", runId).maybeSingle(), "triage run read");
@@ -108,6 +108,7 @@ const handler = consumeQueue<TriageMessage>(
     const onThumbs = sampledPages.filter((p: Page) => !!p.thumb_key).length;
 
     const ask = (imgs: typeof images) => callModel({
+      signal,
       env,
       sb,
       stage: "triage",

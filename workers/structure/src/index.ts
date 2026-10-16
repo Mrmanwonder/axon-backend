@@ -14,6 +14,7 @@ import { loadStructurePage } from "@mastery/shared/structure-page.js";
 import { ConfigurationError, isUniqueViolation } from "@mastery/shared/errors.js";
 import type { Env } from "@mastery/shared/env.js";
 import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
+import { digestHex, markWorkApplied } from "@mastery/shared/checkpoint.js";
 
 interface StructureMessage {
   run_id: string;
@@ -104,7 +105,7 @@ const STRUCTURE_WRITE_ATTEMPTS = 10;
 const planningTurns = new KeyedMutex();
 
 const handler = consumeQueue<StructureMessage>(
-  async ({ env, sb, msg, attempt, redelivered, beat }) => {
+  async ({ env, sb, signal, msg, attempt, redelivered, beat }) => {
     const runId = msg.run_id;
     const pageId = msg.page_id;
     const page = await loadStructurePage(sb, pageId);
@@ -138,10 +139,26 @@ const handler = consumeQueue<StructureMessage>(
       images.push(await imageRef(env, "derived", page.mask_key, "low"));
     }
 
-    const { parsed } = await callModel({
+    // AXO-225: a page is the same work in every run that sends the same stored
+    // objects. Keyed on the R2 object keys (a retake gets new ones) and the
+    // server etag; the device sha256 is client-reported, so it is part of the
+    // key, never all of it. No stored page key, no checkpoint.
+    const checkpoint = page.r2_key
+      ? {
+          unitKey: `structure:page:${page.page_number}`,
+          imageDigest: await digestHex([
+            images.map((i) => i?.key ?? null),
+            page.r2_bucket, page.r2_key, page.etag, page.sha256, page.preprocess_version, page.mask_key, page.layer_fallback,
+          ]),
+        }
+      : undefined;
+
+    const { parsed, workId } = await callModel({
+      signal,
       env,
       sb,
       stage: "structure",
+      checkpoint,
       system: SYSTEM,
       instruction: instruction(page.page_number, pageCount ?? 1),
       images,
@@ -157,6 +174,7 @@ const handler = consumeQueue<StructureMessage>(
     if (!parsed.is_graded_exam_paper) {
       if (!await pipelineWrite(sb, runId, "structure", { page_id: pageId, patch: { structure_status: "unreadable" },
         unreadable_reason: parsed.not_a_paper_reason ?? "This page does not look like part of a marked exam paper." })) return { detail: { skipped: "stale structure result" } };
+      await markWorkApplied(sb, workId);
       const advance2 = await mustRpc(sb.rpc("advance_after_structure", { p_run_id: runId }), "advance_after_structure");
       await enqueueFromAdvance(env, runId, advance2 ?? {}, redelivered);
       return { detail: { unreadable: true } };
@@ -281,6 +299,7 @@ const handler = consumeQueue<StructureMessage>(
       break;
     }
     if (!applied) return { detail: { skipped: "stale structure result" } };
+    await markWorkApplied(sb, workId);
     const advance = await mustRpc(sb.rpc("advance_after_structure", { p_run_id: runId }), "advance_after_structure") as any;
     await enqueueFromAdvance(env, runId, advance ?? {}, redelivered);
 

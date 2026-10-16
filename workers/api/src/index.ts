@@ -1,3 +1,4 @@
+import { JsonBodyError } from "@mastery/shared/http-body.js";
 import { REJECTION_REASON as TRIAGE_REJECTION_REASON } from "@mastery/shared/prompts/triage.v1.js";
 import { CORS, corsFor, withCors, json, failure, clientFor, readJson, serviceClient } from "@mastery/shared/http.js";
 import { presignPut, headObject, sealUpload, signAssetUrl, verifyAssetSignature, objectKey, stagingKey, deleteObject, BUCKET_FOR, type BucketKind } from "@mastery/shared/r2.js";
@@ -75,6 +76,7 @@ export default {
           return respond(failure("not found", 404));
       }
     } catch (cause) {
+      if (cause instanceof JsonBodyError) return respond(failure(cause.message, cause.status));
       console.error("mastery-api unhandled error", String(cause));
       return respond(failure("Something went wrong on our end. Nothing was lost — try again.", 500));
     }
@@ -150,7 +152,7 @@ async function tutor(req: Request, env: Env): Promise<Response> {
   if (Number.isFinite(contentLength) && contentLength > 100_000) {
     return failure("That tutor request is too large.", 413);
   }
-  const body = await readJson<any>(req);
+  const body = await readJson<any>(req, 100_000);
   if (typeof body?.studentId !== "string" || !body.studentId || typeof body.message !== "string" || !body.message.trim() || body.message.length > 20_000) {
     return failure("Choose a student and write a question.");
   }
