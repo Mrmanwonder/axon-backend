@@ -8,36 +8,12 @@ import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
 import { loadPaperEvidence, type TutorEvidence } from "./tutor_evidence.js";
 import { loadSchemeGrounding, loadSyllabusGrounding, type GroundingEvidence } from "./tutor_grounding.js";
 import { CallbackRejected, configuredProvider, statusForRefusal } from "./guardian_verification.js";
+import { IO_CONCURRENCY, mapLimit } from "@mastery/shared/promises.js";
+export { IO_CONCURRENCY, mapLimit };
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const MAX_OBJECTS = 60;
-export const IO_CONCURRENCY = 8;
 const PAGE_PAIR_CONCURRENCY = Math.max(1, Math.floor(IO_CONCURRENCY / 2));
-
-/**
- * Execute independent work with an explicit maximum number of in-flight
- * operations. Results preserve input order, while failures reject the whole
- * operation instead of being silently converted into success.
- */
-export async function mapLimit<T, R>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  if (!items.length) return [];
-  if (!Number.isInteger(limit) || limit < 1) throw new Error("Concurrency limit must be a positive integer.");
-  const out = new Array<R>(items.length);
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (true) {
-      const index = cursor++;
-      if (index >= items.length) return;
-      out[index] = await fn(items[index]!, index);
-    }
-  });
-  await Promise.all(workers);
-  return out;
-}
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {

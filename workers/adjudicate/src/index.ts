@@ -5,6 +5,7 @@ import { consumeQueue } from "@mastery/shared/worker.js";
 import { QUEUE_TUNING } from "@mastery/shared/queue_tuning.js";
 import { adjudicationBlocksCommit } from "@mastery/shared/labels.js";
 import { imageRef } from "@mastery/shared/r2.js";
+import { mapLimit, IO_CONCURRENCY } from "@mastery/shared/promises.js";
 import { SYSTEM, instruction, SCHEMA, validate } from "@mastery/shared/prompts/adjudicate.v1.js";
 import type { Env } from "@mastery/shared/env.js";
 
@@ -38,8 +39,13 @@ const handler = consumeQueue<AdjudicateMessage>(
     }
 
     const suspects = [...regions].sort((a: any, b: any) => (RANK[a.confidence_tier] ?? 3) - (RANK[b.confidence_tier] ?? 3)).slice(0, CROPS);
+    const suspectImagesPromise = mapLimit(
+      suspects.filter((r: any) => r.crop_key),
+      IO_CONCURRENCY,
+      (r: any) => imageRef(env, "derived", r.crop_key, "high")
+    );
     const [suspectImages, coverPageRow] = await Promise.all([
-      Promise.all(suspects.filter((r: any) => r.crop_key).map((r: any) => imageRef(env, "derived", r.crop_key, "high"))),
+      suspectImagesPromise,
       mustMaybe<any>(sb.from("paper_page").select("r2_bucket, r2_key").eq("paper_id", run.paper_id).order("page_number").limit(1).maybeSingle(), "adjudicate cover page read"),
     ]);
     const images = [...suspectImages];
