@@ -8,3 +8,7 @@ dist/
 npm-debug.log*
 worker-configuration.d.ts
 workers/intelligence/certification/evidence/
+
+# agent scratch and state
+.jules/
+commit_message.txt
