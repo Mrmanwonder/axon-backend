@@ -6,6 +6,7 @@ import { failureCodeFor } from "@mastery/shared/failure_codes.js";
 import { consumeQueue, failRun } from "@mastery/shared/worker.js";
 import { QUEUE_TUNING } from "@mastery/shared/queue_tuning.js";
 import { imageRef } from "@mastery/shared/r2.js";
+import { mapLimit, IO_CONCURRENCY } from "@mastery/shared/promises.js";
 import { SYSTEM, instruction, SCHEMA, validate, REJECTION_REASON, qualityFailureMessage, type QualitySignals } from "@mastery/shared/prompts/triage.v1.js";
 import { CAPTURE } from "@mastery/shared/contract.js";
 import { resolveAssessmentIdentity } from "@mastery/shared/assessment.js";
@@ -100,11 +101,9 @@ const handler = consumeQueue<TriageMessage>(
     // triage refusing to read them would turn a latency fix into an outage for
     // the existing library. A thumbnail always lives in `derived` regardless of
     // where the page itself went.
-    const images = await Promise.all(
-      sampledPages.map((p: Page) => (p.thumb_key
-        ? imageRef(env, "derived", p.thumb_key, "low")
-        : imageRef(env, (p.r2_bucket as any) ?? "derived", p.r2_key, "low")))
-    );
+    const images = await mapLimit(sampledPages, IO_CONCURRENCY, (p: Page) => (p.thumb_key
+      ? imageRef(env, "derived", p.thumb_key, "low")
+      : imageRef(env, (p.r2_bucket as any) ?? "derived", p.r2_key, "low")));
     const onThumbs = sampledPages.filter((p: Page) => !!p.thumb_key).length;
 
     const ask = (imgs: typeof images) => callModel({
@@ -134,9 +133,7 @@ const handler = consumeQueue<TriageMessage>(
     // pages themselves, at full detail. Same prompt, same question: only the
     // resolution changes, and only the second answer stands.
     if (UNMARKED.has(parsed.classification) && onThumbs > 0) {
-      const full = await Promise.all(
-        sampledPages.map((p: Page) => imageRef(env, (p.r2_bucket as any) ?? "derived", p.r2_key, "high"))
-      );
+      const full = await mapLimit(sampledPages, IO_CONCURRENCY, (p: Page) => imageRef(env, (p.r2_bucket as any) ?? "derived", p.r2_key, "high"));
       ({ parsed } = await ask(full));
       secondLook = true;
     }

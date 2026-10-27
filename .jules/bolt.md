@@ -5,3 +5,6 @@
 ## 2024-05-18 - R2 Bulk Deletion over Promise.all
 **Learning:** Cloudflare Workers subrequest limits and network overhead make concurrent individual R2 deletions via `Promise.all(keys.map(key => bucket.delete(key)))` an anti-pattern. R2 natively supports array bulk deletion `bucket.delete(keys)` for up to 1000 items, dramatically reducing connection latency.
 **Action:** When performing multi-key removals from R2 buckets in Workers, always prefer `bucket.delete([...keys])`. Ensure the array size is capped (e.g., via pagination limit) below R2's 1000-key limit.
+## $(date +%Y-%m-%d) - Concurrency in Cloudflare Workers
+**Learning:** Bounding concurrency is essential when dealing with Cloudflare's strict resource limits and isolate environment. Unbounded `Promise.all` over I/O requests (like R2 `imageRef` or `headObject`) can cause N+1 latency bottlenecks and exhaustion of concurrent connections.
+**Action:** Always prefer utilizing the custom `mapLimit` utility with a defined concurrency threshold (like `IO_CONCURRENCY`) to parallelize I/O safely rather than unbounded `Promise.all` when mapping over variable-sized arrays.
