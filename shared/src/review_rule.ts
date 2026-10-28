@@ -6,7 +6,7 @@
  * function, so the gate measures exactly what the worker will do.
  */
 
-import { assess, askReasons, downgradeRecognition, type AskReason, type AssessSignals, type ConfidenceTier, type Recognition } from "./confidence.js";
+import { assess, askReasons, type AskReason, type AssessSignals, type ConfidenceTier, type Recognition } from "./confidence.js";
 import { placementInput, placementVerdicts } from "./placement.js";
 
 export function recognitionFor(value: unknown): Recognition {
@@ -30,7 +30,12 @@ export interface RegionRow {
 export interface JudgeOptions {
   /** Shown unmarked (see `paperShownUnmarked`). */
   paperUnmarked: boolean;
-  /** Page numbers whose marking was read through the layer fallback. */
+  /**
+   * Page numbers where the device's colour hint did not find marking it could separate by
+   * colour (`paper_page.layer_fallback`). Recorded on the region, never used to lower
+   * confidence: a teacher's ink can be any colour, so a page marked in blue or black is not
+   * less trustworthy than one marked in red (AXO-161). Reconciliation stays the check.
+   */
   fallbackPages: Set<number>;
   /** Each region's own working, evaluated (shared/src/arithmetic.ts); input order. */
   arithmetic: Array<boolean | "unknown">;
@@ -39,7 +44,7 @@ export interface JudgeOptions {
 export interface RegionVerdict {
   id: string;
   tier: ConfidenceTier;
-  signals: AssessSignals & { ask: AskReason[]; placed_label: string | null };
+  signals: AssessSignals & { ask: AskReason[]; placed_label: string | null; ink_hint_unavailable?: true };
   needs_review: boolean;
   ask: AskReason[];
   placedLabel: string | null;
@@ -55,7 +60,8 @@ export function judgeRegions(rows: RegionRow[], opts: JudgeOptions): RegionVerdi
     const read: Recognition = region.confidence_tier === "unreadable"
       ? "low"
       : recognitionFor(region.confidence_signals?.recognition_confidence);
-    const recognition = touchesFallbackPage ? downgradeRecognition(read) : read;
+    // The model's own recognition stands. The colour hint is a hint (AXO-161).
+    const recognition = read;
     const unreadable = region.confidence_tier === "unreadable" || region.extract_status === "failed";
     const place = placement[i];
 
@@ -79,7 +85,7 @@ export function judgeRegions(rows: RegionRow[], opts: JudgeOptions): RegionVerdi
     return {
       id: region.id,
       tier,
-      signals: { ...signals, ask, placed_label: place.placedLabel },
+      signals: { ...signals, ask, placed_label: place.placedLabel, ...(touchesFallbackPage ? { ink_hint_unavailable: true as const } : {}) },
       needs_review: ask.length > 0,
       ask,
       placedLabel: place.placedLabel,
