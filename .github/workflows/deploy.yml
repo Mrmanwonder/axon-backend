@@ -22,6 +22,7 @@ jobs:
       - run: npm run check:contract-parity
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CROSS_REPO_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
 
   # A prompt edit moves answers as much as a model change does: it needs a linked passing eval run
   # (AXO-41/44/125). Full history so the base branch's manifest is readable.
