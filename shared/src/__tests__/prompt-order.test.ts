@@ -4,6 +4,8 @@ import { callModel } from "../model-client.js";
 import { SYSTEM as TRIAGE } from "../prompts/triage.v1.js";
 import { SYSTEM as STRUCTURE } from "../prompts/structure.v1.js";
 import { SYSTEM as CONTENT } from "../prompts/content.v1.js";
+import { SYSTEM as STRUCTURE_V2 } from "../prompts/structure.v2.js";
+import { SYSTEM as CONTENT_V2 } from "../prompts/content.v2.js";
 import { SYSTEM as ADJUDICATE } from "../prompts/adjudicate.v1.js";
 import { SYSTEM as EXPLAIN_T1 } from "../prompts/explain_tier1.v2.js";
 import { SYSTEM as EXPLAIN_T2 } from "../prompts/explain_tier2.v1.js";
@@ -12,7 +14,7 @@ import { SYSTEM as EXPLAIN_T2 } from "../prompts/explain_tier2.v1.js";
 // first and everything that is specific to this paper comes last. Pin that shape.
 
 test("every stage's system prompt is a static string, not built from per-paper data", () => {
-  for (const system of [TRIAGE, STRUCTURE, CONTENT, ADJUDICATE, EXPLAIN_T1, EXPLAIN_T2]) {
+  for (const system of [TRIAGE, STRUCTURE, CONTENT, STRUCTURE_V2, CONTENT_V2, ADJUDICATE, EXPLAIN_T1, EXPLAIN_T2]) {
     assert.equal(typeof system, "string");
     assert.ok(system.length > 200, "a system prompt this short is not carrying the stage's instructions");
     // A per-paper value can never appear in a module-level constant, but a template
