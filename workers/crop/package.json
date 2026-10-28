@@ -7,7 +7,8 @@
     "typecheck": "tsc --noEmit",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "smoke": "node smoke.mjs"
+    "smoke": "node smoke.mjs",
+    "test": "vitest run"
   },
   "dependencies": {
     "@jsquash/jpeg": "^1.6.0",

@@ -86,6 +86,14 @@ const handler = consumeQueue<ExplainMessage>(
       return { detail: { skipped: "not confirmed" } };
     }
 
+    // A missing mark is unknown, not zero (hard rule 4, AXO-300). `Number(null)` is 0, which
+    // used to explain a question with no teacher mark as "every mark lost". Nothing is lost that
+    // nobody recorded, so there is nothing to explain.
+    if (region.marks_awarded === null || region.marks_awarded === undefined
+        || region.marks_available === null || region.marks_available === undefined) {
+      await finishSkippedExplanation(sb, regionId, runId, "insufficient_evidence");
+      return { detail: { skipped: "no teacher mark to explain" } };
+    }
     const awarded = Number(region.marks_awarded);
     const available = Number(region.marks_available);
     if (!Number.isFinite(awarded) || !Number.isFinite(available) || awarded >= available) {
