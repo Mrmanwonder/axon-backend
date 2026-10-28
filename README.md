@@ -53,14 +53,13 @@ docs/                   AXON_FIX_BRIEF.md, security notes, and why this repo exi
 ```bash
 npm install
 npm run typecheck                # every workspace
-npm test                         # shared/ plus api, content, document-vision, intelligence
+npm test                         # shared/ and every worker
 npm run dry-run                  # bundle-check every worker without deploying
 npm run check:contract-parity    # contract.ts against Axon-Site
 ```
 
-Workers without their own tests yet: triage, structure, crop, reconcile, adjudicate,
-explain, sweep. Their logic mostly lives in `shared/`, which is tested, but their
-entrypoints are only bundle-checked.
+Every worker has a suite in `workers/<name>/test/` (AXO-296). The fake Supabase client they
+share is `shared/src/__tests__/support/fake-db.ts`.
 
 To work on one worker: `cd workers/<name> && npm run dev` (or `wrangler dev`).
 
