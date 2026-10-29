@@ -217,3 +217,16 @@ test("scheme check finds a bare part's section by its placed label", () => {
   assert.equal(messages[1].scheme_check_q.label, "3(c)");
   assert.equal(messages[1].scheme_check_q.section, "3(a) ... 3(c) scheme rows");
 });
+
+test("judge: a page marked in a colour the device could not separate is not trusted less (AXO-161)", () => {
+  const rows = [row({ id: "a", question_label: "1", page: 1 }), row({ id: "b", question_label: "2", page: 2, order_index: 1 })];
+  const opts = { paperUnmarked: false, arithmetic: [true, true] as Array<boolean | "unknown"> };
+  const plain = judgeRegions(rows, { ...opts, fallbackPages: new Set() });
+  const hinted = judgeRegions(rows, { ...opts, fallbackPages: new Set([2]) });
+  // Same tier, same ask, same review decision: the colour hint never lowers confidence.
+  assert.deepEqual(hinted.map((v) => [v.tier, v.needs_review, v.ask]), plain.map((v) => [v.tier, v.needs_review, v.ask]));
+  assert.equal(hinted[1].signals.recognition, plain[1].signals.recognition);
+  // The fact is kept on the region it touched, and only that one.
+  assert.equal(hinted[1].signals.ink_hint_unavailable, true);
+  assert.equal(hinted[0].signals.ink_hint_unavailable, undefined);
+});

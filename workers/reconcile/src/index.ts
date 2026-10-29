@@ -89,10 +89,10 @@ const handler = consumeQueue<ReconcileMessage>(
       return "unknown" as const;
     });
 
-    // Which specific pages used the non-red-ink / student-wrote-red fallback —
-    // not just whether the paper has any (AXON_FIX_BRIEF.md §6.3). A region
-    // whose own pages never touched that fallback has no reason to be
-    // downgraded for a page elsewhere in the booklet.
+    // Pages where the device colour hint could not separate the teacher's marking by colour
+    // (paper_page.layer_fallback). AXO-161: this is recorded on each region it touches as
+    // `ink_hint_unavailable`, and never lowers confidence. A teacher's ink can be any colour;
+    // the model reads the marks from the crop either way, and reconciliation stays the check.
     const fallbackPages = await mustData<any[]>(sb
       .from("paper_page")
       .select("page_number")

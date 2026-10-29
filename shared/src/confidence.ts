@@ -9,10 +9,10 @@
 //     using reconcile()'s own suspect ranking — only the region(s) actually
 //     implicated in the discrepancy fail this signal; a clean question on a
 //     paper with one bad total can still reach confident.
-//   - a layer-fallback page no longer vetoes the tier outright. The caller
-//     downgrades that region's `recognition` by one step instead (see
-//     workers/reconcile/src/index.ts), scoped to the pages the region's own
-//     spans actually touch.
+//   - a layer-fallback page no longer vetoes the tier, and since AXO-161 it no
+//     longer lowers `recognition` either: the device colour hint is a hint, a
+//     teacher's ink can be any colour, and reconciliation stays the check. The
+//     page is recorded on the region as `ink_hint_unavailable` (review_rule.ts).
 
 export type ConfidenceTier = "confident" | "unsure" | "unreadable";
 export type Recognition = "high" | "medium" | "low" | null;
@@ -99,8 +99,8 @@ export function assess(input: AssessInput): AssessResult {
   return { tier: "confident", signals };
 }
 
-/** One step down the recognition ladder — used to fold a page-scoped
-    layer-fallback into the recognition signal instead of a paper-wide veto. */
+/** One step down the recognition ladder. No longer applied for the ink-colour
+    fallback (AXO-161); kept for callers and tests that step recognition down. */
 export function downgradeRecognition(recognition: Recognition): Recognition {
   if (recognition === "high") return "medium";
   if (recognition === "medium") return "low";
