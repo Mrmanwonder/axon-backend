@@ -9,6 +9,7 @@ import { loadPaperEvidence, type TutorEvidence } from "./tutor_evidence.js";
 import { loadSchemeGrounding, loadSyllabusGrounding, type GroundingEvidence } from "./tutor_grounding.js";
 import { CallbackRejected, configuredProvider, statusForRefusal } from "./guardian_verification.js";
 import { IO_CONCURRENCY, mapLimit } from "@mastery/shared/promises.js";
+import { fetchLinkedFile, LinkRefused } from "@mastery/shared/link_fetch.js";
 export { IO_CONCURRENCY, mapLimit };
 
 const MAX_BYTES = 25 * 1024 * 1024;
@@ -45,6 +46,8 @@ export default {
           return respond(await tutor(req, env));
         case "/page-asset-urls":
           return respond(await pageAssetUrls(req, env));
+        case "/link-fetch":
+          return respond(await linkFetch(req, env));
         default:
           if (path.startsWith("/guardian-verification/callback/")) {
             return await guardianVerificationCallback(req, env, path.slice("/guardian-verification/callback/".length));
@@ -476,6 +479,36 @@ async function paperRetry(req: Request, env: Env): Promise<Response> {
 export function ownedObjectKey(key: unknown, studentId: string, paperId: string): key is string {
   return typeof key === "string" && key.startsWith(`${studentId}/${paperId}/`)
     && !/(?:^|\/)\.{1,2}(?:\/|$)/.test(key) && !key.includes("%") && !key.includes("\\");
+}
+
+/**
+ * AXO-295: fetch a pasted link and hand the file back, so the device imports it like any other.
+ * Signed-in callers only: this is a fetcher for a student's own paper, not an open proxy. Every
+ * rule about what may be fetched lives in shared/src/link_fetch.ts.
+ */
+export async function linkFetch(req: Request, env: Env, fetchImpl: typeof fetch = fetch): Promise<Response> {
+  const user = clientFor(req, env);
+  if (!user) return failure("Sign in first.", 401);
+  const { data, error } = await user.auth.getUser();
+  if (error || !data.user) return failure("Sign in first.", 401);
+  const body = await readJson<any>(req);
+  if (typeof body?.url !== "string" || body.url.length > 2048) return failure("Paste the link first.");
+  try {
+    const file = await fetchLinkedFile(body.url, { fetchImpl });
+    return new Response(file.bytes, {
+      status: 200,
+      headers: {
+        "Content-Type": file.type,
+        "Content-Length": String(file.bytes.byteLength),
+        "X-Axon-Filename": encodeURIComponent(file.name),
+        "Access-Control-Expose-Headers": "X-Axon-Filename",
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch (cause) {
+    if (cause instanceof LinkRefused) return failure(cause.message, cause.status, { code: cause.code });
+    throw cause;
+  }
 }
 
 async function uploadPolicy(req: Request, env: Env): Promise<Response> {
