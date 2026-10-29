@@ -416,17 +416,22 @@ async function paperRetry(req: Request, env: Env): Promise<Response> {
   // A retry must use the exact already-stored paper, never client-supplied object
   // keys. Verify every page still exists before starting a fresh run.
   for (const page of storedPages as any[]) {
-    const bucket: BucketKind = page.r2_bucket === "originals" ? "originals" : "derived";
     if (!page.r2_key.startsWith(`${paper.student_id}/${paper.id}/`)) {
       return json({ retry: "not_retryable", reason: "stored_pages_unavailable" }, 409);
     }
-    let head: Awaited<ReturnType<typeof sealUpload>>;
-    try {
-      head = await headObject(env, bucket, page.r2_key);
-    } catch {
-      return json({ retry: "temporarily_unavailable", reason: "storage_check_failed" }, 503);
+  }
+
+  // Bounded concurrency optimization (⚡ Bolt)
+  try {
+    const heads = await mapLimit(storedPages as any[], IO_CONCURRENCY, async (page) => {
+      const bucket: BucketKind = page.r2_bucket === "originals" ? "originals" : "derived";
+      return await headObject(env, bucket, page.r2_key);
+    });
+    if (heads.some((head) => !head)) {
+      return json({ retry: "not_retryable", reason: "stored_pages_unavailable" }, 409);
     }
-    if (!head) return json({ retry: "not_retryable", reason: "stored_pages_unavailable" }, 409);
+  } catch {
+    return json({ retry: "temporarily_unavailable", reason: "storage_check_failed" }, 503);
   }
 
   const { data, error } = await user.rpc("submit_paper", {
@@ -612,24 +617,36 @@ async function uploadIntent(req: Request, env: Env): Promise<Response> {
   }
 
   const admin = serviceClient(env);
+
+  // Synchronous checks first (⚡ Bolt)
   for (const item of prepared.filter(p => p.object.kind === "raw" && p.object.page_revision)) {
     const supplied = item.object.page_key;
-    if (supplied) {
-      const { data: pageIntent, error } = await admin.from("upload")
-        .select("r2_key,asset_kind,page_number,page_revision").eq("paper_id", body.paper_id).eq("student_id", body.student_id)
-        .eq("r2_bucket", "derived").eq("r2_key", supplied).eq("confirmed", true)
-        .maybeSingle();
-      const captureMatches = pageIntent && (pageIntent.asset_kind === "page" && pageIntent.page_number === item.object.page_number && pageIntent.page_revision === item.object.page_revision ||
-        pageIntent.asset_kind == null && item.object.page_revision === "legacy-" + item.object.page_number &&
-        supplied.startsWith(body.student_id + "/" + body.paper_id + "/page/p" + item.object.page_number + "-"));
-      if (error || !captureMatches) return failure("Original does not match a confirmed page.", 409);
-      item.pageKey = supplied;
-    } else {
+    if (!supplied) {
       const paired = prepared.find(p => p.object.kind === "page" && p.object.page_number === item.object.page_number &&
         p.object.page_revision === item.object.page_revision);
       if (!paired) return failure("Original needs its page upload binding.", 409);
       item.pageKey = paired.key;
     }
+  }
+
+  // Bounded concurrency DB optimization (⚡ Bolt)
+  const itemsToCheck = prepared.filter(p => p.object.kind === "raw" && p.object.page_revision && p.object.page_key);
+  const checkResults = await mapLimit(itemsToCheck, IO_CONCURRENCY, async (item) => {
+    const supplied = item.object.page_key!;
+    const { data: pageIntent, error } = await admin.from("upload")
+      .select("r2_key,asset_kind,page_number,page_revision").eq("paper_id", body.paper_id).eq("student_id", body.student_id)
+      .eq("r2_bucket", "derived").eq("r2_key", supplied).eq("confirmed", true)
+      .maybeSingle();
+    const captureMatches = pageIntent && (pageIntent.asset_kind === "page" && pageIntent.page_number === item.object.page_number && pageIntent.page_revision === item.object.page_revision ||
+      pageIntent.asset_kind == null && item.object.page_revision === "legacy-" + item.object.page_number &&
+      supplied.startsWith(body.student_id + "/" + body.paper_id + "/page/p" + item.object.page_number + "-"));
+
+    return { item, ok: !error && !!captureMatches, supplied };
+  });
+
+  for (const { item, ok, supplied } of checkResults) {
+    if (!ok) return failure("Original does not match a confirmed page.", 409);
+    item.pageKey = supplied;
   }
   let signedUrls: string[];
   try {
