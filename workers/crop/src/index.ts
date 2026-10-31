@@ -38,6 +38,7 @@ import { bandForRegion, cutRegion, imageDimensions, type Box, type PageSpan, typ
 import { decodeImage, encodeWebp } from "./codecs.js";
 import type { Env } from "@mastery/shared/env.js";
 import { chunkedSendBatch } from "@mastery/shared/chunked_send.js";
+import { mapLimit, IO_CONCURRENCY } from "@mastery/shared/promises.js";
 
 interface CropMessage {
   run_id: string;
@@ -55,10 +56,6 @@ interface CropMessage {
  * which is the same fallback every other unhandled case gets.
  */
 const CROP_BUDGET = 60;
-
-/** R2 writes in flight at once. Enough to hide latency, few enough that a
-    forty-question page does not open forty sockets at the same moment. */
-const WRITE_CONCURRENCY = 8;
 
 /** Above this a page is skipped rather than decoded. 2400x3200 is 7.7M; this
     leaves room for an unusually shaped page without letting a pathological one
@@ -114,22 +111,20 @@ async function writeCrops(
   const bucket = env.DERIVED;
   if (!bucket) throw new Error("crop: DERIVED bucket is not bound");
 
-  for (let i = 0; i < plans.length; i += WRITE_CONCURRENCY) {
-    const chunk = plans.slice(i, i + WRITE_CONCURRENCY);
-    await Promise.all(chunk.map(async (plan) => {
-      try {
-        const cut = cutRegion(image, plan.band);
-        const bytes = await encodeWebp(cut);
-        const key = keyFor(plan.region);
-        await bucket.put(key, bytes, { httpMetadata: { contentType: "image/webp" } });
-        written.set(plan.region.id, key);
-      } catch (cause) {
-        // Logged, never swallowed, and never fatal: this region simply keeps
-        // the full-page path. §10 — every catch logs and surfaces.
-        console.error("crop: region failed", plan.region.id, String(cause));
-      }
-    }));
-  }
+  await mapLimit(plans, IO_CONCURRENCY, async (plan) => {
+    try {
+      const cut = cutRegion(image, plan.band);
+      const bytes = await encodeWebp(cut);
+      const key = keyFor(plan.region);
+      await bucket.put(key, bytes, { httpMetadata: { contentType: "image/webp" } });
+      written.set(plan.region.id, key);
+    } catch (cause) {
+      // Logged, never swallowed, and never fatal: this region simply keeps
+      // the full-page path. §10 — every catch logs and surfaces.
+      console.error("crop: region failed", plan.region.id, String(cause));
+    }
+  });
+
   return written;
 }
 
