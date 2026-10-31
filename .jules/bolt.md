@@ -10,3 +10,6 @@
 ## 2024-05-15 - [Test command fixes]
 **Learning:** Some test scripts output 'not found' or similar issues. The test command requires full workspace setup.
 **Action:** Use specific test command `npm run typecheck && npm run test && npm run dry-run && npm run check:contract-parity` as per guidelines.
+## 2026-10-31 - [Bounded Concurrency over Promise Chunking]
+**Learning:** When refactoring for bounded concurrency in the axon-backend project, manually chunked `Promise.all` loops suffer from chunk boundary stalls (waiting for the slowest item in a batch before starting the next).
+**Action:** Instead, always use `mapLimit` (with `IO_CONCURRENCY`) to maintain a continuous, exact concurrency limit and maximize I/O throughput.
